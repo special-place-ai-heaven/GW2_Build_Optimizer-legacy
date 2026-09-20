@@ -719,6 +719,11 @@ fn decl_simulate_rotation() -> FunctionDeclaration {
                 "duration_seconds": {
                     "type": "integer",
                     "description": "Optional simulation duration (default 30 seconds)"
+                },
+                "trait_ids": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "description": "Optional list of equipped trait IDs for vs-target modifier extraction"
                 }
             },
             "required": ["skill_ids"]
@@ -1853,7 +1858,22 @@ fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
     };
     let mut full = stats::base_stats();
     full += &gear_stats;
-    let params = rotation_sim_params(&full, ctx.profession_name, ctx.balance_ctx);
+    let trait_ids: Vec<u32> = args
+        .get("trait_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_u64().map(|n| n as u32))
+                .collect()
+        })
+        .unwrap_or_default();
+    let params = rotation_sim_params(
+        &full,
+        ctx.profession_name,
+        ctx.balance_ctx,
+        ctx.db,
+        &trait_ids,
+    );
 
     // The model hands over a flat id list. Weapon skills belong to a set —
     // two weapons cannot both be in hand — so group them the way the engine
@@ -1965,11 +1985,15 @@ fn calculate_full_set_stats(
 
 /// Prefix-only combat inputs for the LLM rotation tool. Trait mods stay at
 /// default — the tool sees a named prefix, not a validated trait line.
+/// Vs-target / per-stack percents still come from `extract_damage_modifiers`
+/// (same list `prepare_validated_rotation` clones into SimParams).
 /// Weapon strength stays 1100 until W068 publishes `REFERENCE_WEAPON_STRENGTH`.
 fn rotation_sim_params(
     full: &stats::StatBlock,
     profession: &str,
     ctx: &BalanceContext,
+    db: &GameDb,
+    trait_ids: &[u32],
 ) -> crate::rotation::simulator::SimParams {
     let derived = stats::compute_derived(full, profession);
     let mods = DamageModifiers::default();
@@ -1998,7 +2022,21 @@ fn rotation_sim_params(
         armor: derived.armor,
         mode,
         intent: None,
-        deferred_target: Vec::new(),
+        deferred_target: combat::extract_damage_modifiers(
+            trait_ids,
+            None,
+            &[],
+            None,
+            &db.traits,
+            &db.items,
+            ctx,
+        )
+        .deferred_target,
+        weaver: trait_ids.iter().any(|id| {
+            db.traits
+                .get(id)
+                .is_some_and(|t| t.specialization == crate::rotation::attunement::WEAVER_SPEC_ID)
+        }),
     }
 }
 
@@ -3220,7 +3258,7 @@ mod tests {
         let with = crate::rotation::simulator::simulate_with(
             &skills,
             10_000,
-            &rotation_sim_params(&full, "Guardian", &balance_ctx),
+            &rotation_sim_params(&full, "Guardian", &balance_ctx, &db, &[]),
             crate::rotation::combat_model::EnemyDummy::open(),
         );
         assert_ne!(
@@ -3233,6 +3271,105 @@ mod tests {
             with.strike_dps.round(),
             "tool must call simulate_with on resolved stats, not simulate()/basic: {result}"
         );
+    }
+
+    #[test]
+    fn rotation_sim_params_threads_extracted_deferred_target() {
+        let mut db = db_with_itemstats(vec![]);
+        db.traits.insert(
+            9001,
+            GW2Trait {
+                id: 9001,
+                name: "Kent Vs Target".into(),
+                icon: None,
+                description: None,
+                specialization: 0,
+                tier: 0,
+                order: 0,
+                slot: "Minor".into(),
+                facts: vec![Fact::Percent {
+                    text: Some("Strike Damage vs. Vulnerability".into()),
+                    icon: None,
+                    percent: Some(10.0),
+                }],
+                traited_facts: vec![],
+                skills: vec![],
+            },
+        );
+        let balance_ctx = BalanceContext::new(gw2_core::types::GameMode::PvE);
+        let full = stats::base_stats();
+        let params = rotation_sim_params(&full, "Guardian", &balance_ctx, &db, &[9001]);
+        let extracted = combat::extract_damage_modifiers(
+            &[9001],
+            None,
+            &[],
+            None,
+            &db.traits,
+            &db.items,
+            &balance_ctx,
+        );
+        assert!(
+            !params.deferred_target.is_empty(),
+            "vs-target fact must reach SimParams.deferred_target"
+        );
+        assert_eq!(
+            params.deferred_target.len(),
+            extracted.deferred_target.len(),
+            "rotation preview must clone the extracted deferred_target list"
+        );
+        assert_eq!(
+            params.deferred_target[0].percent,
+            extracted.deferred_target[0].percent
+        );
+        assert!(
+            !params.weaver,
+            "Guardian fixture trait is spec 0, not Weaver"
+        );
+    }
+
+    #[test]
+    fn rotation_sim_params_sets_weaver_from_trait_spec() {
+        let mut db = db_with_itemstats(vec![]);
+        db.traits.insert(
+            2177,
+            GW2Trait {
+                id: 2177,
+                name: "Weaver's Prowess".into(),
+                icon: None,
+                description: None,
+                specialization: crate::rotation::attunement::WEAVER_SPEC_ID,
+                tier: 1,
+                order: 0,
+                slot: "Major".into(),
+                facts: vec![],
+                traited_facts: vec![],
+                skills: vec![],
+            },
+        );
+        let balance_ctx = BalanceContext::new(gw2_core::types::GameMode::PvE);
+        let full = stats::base_stats();
+        let weaver = rotation_sim_params(&full, "Elementalist", &balance_ctx, &db, &[2177]);
+        assert!(weaver.weaver);
+        db.traits.insert(
+            2178,
+            GW2Trait {
+                id: 2178,
+                name: "Willbender trait".into(),
+                icon: None,
+                description: None,
+                specialization: 65,
+                tier: 1,
+                order: 0,
+                slot: "Major".into(),
+                facts: vec![],
+                traited_facts: vec![],
+                skills: vec![],
+            },
+        );
+        let willbender = rotation_sim_params(&full, "Guardian", &balance_ctx, &db, &[2178]);
+        assert!(!willbender.weaver, "spec 65 is Willbender, not Weaver");
+        let core = rotation_sim_params(&full, "Elementalist", &balance_ctx, &db, &[]);
+        assert!(!core.weaver);
     }
 
     /// The reference replaces tool rounds, so it has to carry what those

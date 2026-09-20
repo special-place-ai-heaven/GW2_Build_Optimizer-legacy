@@ -1345,6 +1345,7 @@ pub fn prepare_validated_rotation(
         mode: mode.clone(),
         intent: None,
         deferred_target: mods.deferred_target.clone(),
+        weaver: equipped_spec_ids.contains(&rotation::attunement::WEAVER_SPEC_ID),
     };
 
     Some(PreparedRotation {
@@ -4821,5 +4822,64 @@ mod tests {
             for_mode_with_ctx, 2,
             "PvE leftover and PvP leftover must both pass ctx.game_mode, got {for_mode_with_ctx}"
         );
+    }
+
+    /// CONN-01-01: flattened conditional strike is divided out of `strike_mult`
+    /// when a matching resolved OnHealthThreshold effect is active (Scholar 24836).
+    /// WvW Scholar-vs-bare integration is skipped: this module has no WvW fixtures.
+    #[test]
+    fn wvw_params_divides_out_resolved_conditional() {
+        let mut params = rotation::simulator::SimParams::basic(1111.0, 222.0, 333.0);
+        params.strike_mult = 1.045;
+        params.condition_mult = 1.2;
+        let clause = combat::ConditionalClause {
+            source_id: 24836,
+            value: 0.045,
+            above: true,
+            percent: 90.0,
+        };
+        let mut scholar = rotation::reaper_fixture::record(
+            crate::data::normalized_effects::SourceType::Rune,
+            24836,
+            "Superior Rune of the Scholar",
+            crate::data::normalized_effects::EffectCategory::TriggeredEffect,
+            0.05,
+            crate::data::normalized_effects::TriggerRule::OnHealthThreshold,
+        );
+        scholar.health_threshold = Some(crate::data::normalized_effects::HealthThreshold {
+            above: true,
+            percent: crate::data::quality::FactualValue::Resolved(90.0),
+        });
+        let effects = [&scholar];
+        let out = wvw_params_without_executed_conditionals(&params, &[clause], &effects);
+        assert!(
+            (out.strike_mult - 1.0).abs() < 1e-6,
+            "strike_mult after divide-out: {}",
+            out.strike_mult
+        );
+        assert_eq!(out.power, params.power);
+        assert_eq!(out.condition_mult, params.condition_mult);
+        assert_eq!(out.weapon_strength, params.weapon_strength);
+    }
+
+    #[test]
+    fn wvw_params_unchanged_without_conditional_clauses() {
+        let mut params = rotation::simulator::SimParams::basic(1111.0, 222.0, 333.0);
+        params.strike_mult = 1.045;
+        params.condition_mult = 1.2;
+        let out = wvw_params_without_executed_conditionals(&params, &[], &[]);
+        assert!((out.strike_mult - 1.045).abs() < 1e-6);
+        assert_eq!(out.power, params.power);
+        assert_eq!(out.condition_damage, params.condition_damage);
+        assert_eq!(out.weapon_strength, params.weapon_strength);
+        assert_eq!(out.condition_mult, params.condition_mult);
+        assert_eq!(out.condition_duration_mult, params.condition_duration_mult);
+        assert_eq!(out.boon_duration_mult, params.boon_duration_mult);
+        assert_eq!(out.healing_mult, params.healing_mult);
+        assert_eq!(out.max_health, params.max_health);
+        assert_eq!(out.armor, params.armor);
+        assert_eq!(out.mode, params.mode);
+        assert!(out.intent.is_none());
+        assert!(out.deferred_target.is_empty());
     }
 }

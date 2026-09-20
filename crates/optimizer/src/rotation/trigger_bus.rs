@@ -9,6 +9,7 @@
 //! Attunement authority is AttunementState (rotation/attunement.rs); one bus.
 //! Trait-skill registry rides the bus as consumers — no one-off casts.
 
+#[cfg(test)]
 use std::collections::VecDeque;
 
 /// E0 bus events. Shared by `simulator` and `wvw_timeline`.
@@ -32,9 +33,11 @@ pub struct BusEmission {
     pub at_ms: u32,
 }
 
-/// Shared trigger bus: emit sites push; consumers drain or peek.
+/// Shared trigger bus: emit increments per-event counters.
+/// Event payloads are recorded only under `cfg(test)` (`drain` / `pending`).
 #[derive(Debug, Default, Clone)]
 pub struct TriggerBus {
+    #[cfg(test)]
     queue: VecDeque<BusEmission>,
     /// Cumulative emit counts (never cleared by drain).
     pub totals: [u32; 6],
@@ -55,15 +58,32 @@ impl TriggerBus {
             BusEvent::OnCloneCreated => 5,
         };
         self.totals[idx] = self.totals[idx].saturating_add(1);
+        #[cfg(test)]
         self.queue.push_back(BusEmission { event, at_ms });
+        #[cfg(not(test))]
+        let _ = at_ms;
     }
 
     pub fn drain(&mut self) -> Vec<BusEmission> {
-        self.queue.drain(..).collect()
+        #[cfg(test)]
+        {
+            self.queue.drain(..).collect()
+        }
+        #[cfg(not(test))]
+        {
+            Vec::new()
+        }
     }
 
     pub fn pending(&self) -> impl Iterator<Item = &BusEmission> {
-        self.queue.iter()
+        #[cfg(test)]
+        {
+            self.queue.iter()
+        }
+        #[cfg(not(test))]
+        {
+            std::iter::empty()
+        }
     }
 
     pub fn count(&self, event: BusEvent) -> u32 {

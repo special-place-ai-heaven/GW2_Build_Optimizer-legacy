@@ -86,6 +86,11 @@ impl AttunementState {
         self
     }
 
+    /// Shared constructor for both sim surfaces (flow + WvW timeline).
+    pub fn for_build(is_weaver: bool) -> Self {
+        Self::new().with_weaver(is_weaver)
+    }
+
     /// While-attuned check: true iff `current` is `element`.
     pub fn is(&self, element: Element) -> bool {
         self.current == element
@@ -107,6 +112,20 @@ impl AttunementState {
         self.current = to;
         Some((from, to))
     }
+}
+
+/// GW2 API elite specialization id for Weaver (Elementalist). Not 65 (Willbender).
+pub const WEAVER_SPEC_ID: u32 = 56;
+
+/// Weaver spec id, or a Weaver-labeled source/skill name (`Weaver`,
+/// `Weaver's Prowess`, `Weave Self`). Skill ids are not spec ids.
+pub fn is_weaver_source(id: u32, name: &str) -> bool {
+    id == WEAVER_SPEC_ID || is_weaver_name(name)
+}
+
+pub fn is_weaver_name(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    n == "weave self" || n.starts_with("weaver")
 }
 
 /// Mutate AttunementState from a profession attune skill and emit
@@ -172,5 +191,23 @@ mod kent_tests {
         assert!(apply_attunement_skill(&mut state, &mut bus, 0, "Fire Attunement").is_none());
         assert_eq!(bus.count(BusEvent::OnAttunementSwap), 0);
         assert!(state.is(Element::Fire));
+    }
+
+    #[test]
+    fn for_build_enables_weaver_secondary() {
+        let mut weaver = AttunementState::for_build(true);
+        let mut core = AttunementState::for_build(false);
+        assert!(weaver.weaver);
+        assert!(!core.weaver);
+        assert_eq!(WEAVER_SPEC_ID, 56);
+        assert!(is_weaver_source(WEAVER_SPEC_ID, "Trait"));
+        assert!(!is_weaver_source(65, "Willbender"));
+        assert!(is_weaver_name("Weaver's Prowess"));
+        assert!(is_weaver_name("Weave Self"));
+        assert!(!is_weaver_name("Water Attunement"));
+        weaver.swap(Element::Water);
+        core.swap(Element::Water);
+        assert_eq!(weaver.secondary, Some(Element::Fire));
+        assert_eq!(core.secondary, None);
     }
 }

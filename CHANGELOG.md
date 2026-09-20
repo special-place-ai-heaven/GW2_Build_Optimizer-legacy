@@ -2,6 +2,19 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## 1.14.36 - 2026-09-20
+
+Full-code-review remediation FCR-20260920T081033Z-3eafccc: 20 findings closed. SCHEMA CHANGE = N.
+
+- Sim: condition tick at shared expiry keeps Vulnerability/deferred modifiers (tick-only inclusive query; strikes stay exclusive).
+- WvW: skill/op condition applies respect the stack cap; foe prerequisites match aliases and case; auto-dodge grants Evade against a strike due on the dodge tick.
+- Sim: aliased and ApplyBuff-shaped foe conditions now appear in `condition_uptime`.
+- Weaver secondary attunement enabled via `SimParams.weaver` (API spec 56); flow sim performs one setup attunement swap per run.
+- Choya `simulate_rotation` threads vs-target trait modifiers (`trait_ids`).
+- Deferred vs-target percents: PvE/competitive pair collapse, deferred-only upgrade text parsed once, per-sigil dedupe.
+- Perf: TriggerBus payloads test-only; trigger_procs skip paths allocation-free with tracing off; interned condition names, single-pass soft-control weight, no per-apply String.
+- clippy: `never_loop` in validation.rs fixed; workspace clippy clean.
+
 ## 1.14.35 - 2026-09-15
 
 Choya plates always include both weapon sets. SCHEMA CHANGE = N.

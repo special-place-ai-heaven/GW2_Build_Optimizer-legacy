@@ -79,11 +79,12 @@ pub struct ConditionalClause {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TargetGate {
     /// Named foe condition must be present ("vs. Vulnerability").
-    Condition(String),
+    /// Interned at parse (`named_condition_in_text` returns a `'static` canonical).
+    Condition(&'static str),
     /// Foe is hard-disabled ("vs. disabled foes").
     Disabled,
     /// Scales with foe stacks of `condition`, capped at `max` (PerFoeStack).
-    PerStack { condition: String, max: u32 },
+    PerStack { condition: &'static str, max: u32 },
 }
 
 /// Damage axis a deferred target modifier multiplies at resolve.
@@ -732,6 +733,43 @@ pub fn extract_damage_modifiers(
             absorb_pair(dst.entry(key).or_default(), vals, competitive);
         }
     }
+
+    fn absorb_deferred(
+        dst: &mut Vec<DeferredTargetModifier>,
+        src: Vec<DeferredTargetModifier>,
+        competitive: bool,
+    ) {
+        let mut groups: Vec<(TargetGate, TargetModAxis, Vec<f64>)> = Vec::new();
+        for d in src {
+            if let Some((_, _, percents)) = groups
+                .iter_mut()
+                .find(|(g, a, _)| *g == d.gate && *a == d.axis)
+            {
+                percents.push(d.percent);
+            } else {
+                groups.push((d.gate, d.axis, vec![d.percent]));
+            }
+        }
+        for (gate, axis, percents) in groups {
+            if percents.len() == 2 {
+                dst.push(DeferredTargetModifier {
+                    gate,
+                    percent: if competitive {
+                        percents[0].min(percents[1])
+                    } else {
+                        percents[0].max(percents[1])
+                    },
+                    axis,
+                });
+            } else {
+                dst.extend(percents.into_iter().map(|percent| DeferredTargetModifier {
+                    gate: gate.clone(),
+                    percent,
+                    axis,
+                }));
+            }
+        }
+    }
     fn absorb_mode_pairs(dst: &mut DamageModifiers, src: DamageModifiers, competitive: bool) {
         absorb_pair(&mut dst.strike_pct, src.strike_pct, competitive);
         absorb_pair(&mut dst.strike_add_pct, src.strike_add_pct, competitive);
@@ -777,7 +815,7 @@ pub fn extract_damage_modifiers(
         );
         dst.unparsed.extend(src.unparsed);
         dst.conditional_strike.extend(src.conditional_strike);
-        dst.deferred_target.extend(src.deferred_target);
+        absorb_deferred(&mut dst.deferred_target, src.deferred_target, competitive);
     }
 
     let mut mods = DamageModifiers::default();
@@ -1144,7 +1182,7 @@ pub(crate) fn parse_deferred_target_modifier(
     if t.contains("per stack") || t.contains("for each stack") || t.contains("per foe stack") {
         if let Some(condition) = named_condition_in_text(&t) {
             let max = crate::data::boon_condition_formulas::conditions()
-                .max_stacks(&condition)
+                .max_stacks(condition)
                 .unwrap_or(25);
             return Some(DeferredTargetModifier {
                 gate: TargetGate::PerStack { condition, max },
@@ -1204,7 +1242,7 @@ fn deferred_target_axis(hay: &str) -> Option<TargetModAxis> {
     None
 }
 
-fn named_condition_in_text(hay: &str) -> Option<String> {
+fn named_condition_in_text(hay: &str) -> Option<&'static str> {
     // Adjective / alias forms first so "vulnerable" maps to Vulnerability.
     const ALIASES: &[(&str, &str)] = &[
         ("vulnerable", "Vulnerability"),
@@ -1234,7 +1272,7 @@ fn named_condition_in_text(hay: &str) -> Option<String> {
     ];
     for (needle, canonical) in ALIASES {
         if hay.contains(needle) {
-            return Some((*canonical).to_string());
+            return Some(*canonical);
         }
     }
     None
@@ -1253,21 +1291,28 @@ pub fn deferred_target_multiplier(
         if !axis_matches(spec.axis, axis) {
             continue;
         }
-        let holds = match &spec.gate {
-            TargetGate::Condition(name) => target.stacks_of(name, now_ms) > 0,
-            TargetGate::Disabled => target.is_disabled(now_ms),
-            TargetGate::PerStack { condition, max } => {
-                target.stacks_of(condition, now_ms).min(*max) > 0
-            }
-        };
-        if !holds {
-            continue;
-        }
         let stacks = match &spec.gate {
-            TargetGate::PerStack { condition, max } => {
-                target.stacks_of(condition, now_ms).min(*max) as f64
+            TargetGate::Condition(name) => {
+                if target.stacks_of(name, now_ms) > 0 {
+                    1.0
+                } else {
+                    continue;
+                }
             }
-            _ => 1.0,
+            TargetGate::Disabled => {
+                if target.is_disabled(now_ms) {
+                    1.0
+                } else {
+                    continue;
+                }
+            }
+            TargetGate::PerStack { condition, max } => {
+                let n = target.stacks_of(condition, now_ms).min(*max);
+                if n == 0 {
+                    continue;
+                }
+                n as f64
+            }
         };
         mult *= 1.0 + stacks * spec.percent / 100.0;
     }
@@ -1378,6 +1423,7 @@ pub(crate) fn parse_percent_clauses(mods: &mut DamageModifiers, text: &str) -> b
         }
         if let Some(deferred) = parse_deferred_target_modifier(hay, clause.value) {
             mods.deferred_target.push(deferred);
+            any = true;
             continue;
         }
         if percent_is_vs_target(&clause.after) {
@@ -1655,6 +1701,7 @@ pub(crate) fn item_buff_description(item: &Item) -> Option<&str> {
 
 /// Parse known sigil damage modifiers from item data.
 fn parse_sigil_modifier(mods: &mut DamageModifiers, sigil: &Item, ctx: &BalanceContext) {
+    let before = mods.deferred_target.len();
     if let Some(buff) = item_buff_description(sigil) {
         apply_upgrade_text(mods, buff);
         if !mods.strike_pct.is_empty()
@@ -1684,6 +1731,13 @@ fn parse_sigil_modifier(mods: &mut DamageModifiers, sigil: &Item, ctx: &BalanceC
             .push(if competitive { 0.04 } else { 0.06 });
     } else if let Some(desc) = sigil.description.as_deref() {
         apply_upgrade_text(mods, desc);
+    }
+
+    let tail: Vec<_> = mods.deferred_target.drain(before..).collect();
+    for d in tail {
+        if !mods.deferred_target[before..].contains(&d) {
+            mods.deferred_target.push(d);
+        }
     }
 }
 
@@ -3586,5 +3640,448 @@ mod tests {
                 .abs()
                 < 1e-9
         );
+    }
+
+    #[test]
+    fn deferred_target_mode_pair_collapses_like_absorb_pair() {
+        let cache: HashMap<u32, Trait> = [(
+            9002u32,
+            percent_trait(
+                9002,
+                "Vs Vulnerability Split",
+                &[
+                    ("Strike Damage vs. Vulnerability", 10.0),
+                    ("Strike Damage vs. Vulnerability", 5.0),
+                ],
+            ),
+        )]
+        .into_iter()
+        .collect();
+        let items = HashMap::new();
+
+        let pve = extract_damage_modifiers(
+            &[9002],
+            None,
+            &[],
+            None,
+            &cache,
+            &items,
+            &BalanceContext::pve(),
+        );
+        assert_eq!(pve.deferred_target.len(), 1, "{:?}", pve.deferred_target);
+        assert!((pve.deferred_target[0].percent - 10.0).abs() < 1e-9);
+        assert_eq!(pve.deferred_target[0].axis, TargetModAxis::Strike);
+
+        let wvw = extract_damage_modifiers(
+            &[9002],
+            None,
+            &[],
+            None,
+            &cache,
+            &items,
+            &BalanceContext::wvw(),
+        );
+        assert_eq!(wvw.deferred_target.len(), 1, "{:?}", wvw.deferred_target);
+        assert!((wvw.deferred_target[0].percent - 5.0).abs() < 1e-9);
+
+        use crate::rotation::combat_model::{EnemyDummy, TargetState};
+        let vuln =
+            TargetState::from_seed(EnemyDummy::open()).with_condition_stacks("Vulnerability", 1);
+        assert!(
+            (deferred_target_multiplier(&pve.deferred_target, &vuln, 0, TargetModAxis::Strike)
+                - 1.10)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (deferred_target_multiplier(&wvw.deferred_target, &vuln, 0, TargetModAxis::Strike)
+                - 1.05)
+                .abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn deferred_only_upgrade_text_is_captured_once() {
+        let text = "+10% Strike Damage vs. Vulnerability";
+        let mut parsed = DamageModifiers::default();
+        assert!(
+            parse_percent_clauses(&mut parsed, text),
+            "deferred-only capture must count as parsed"
+        );
+        assert_eq!(parsed.deferred_target.len(), 1);
+        assert!(parsed.strike_pct.is_empty());
+
+        let mut via_upgrade = DamageModifiers::default();
+        apply_upgrade_text(&mut via_upgrade, text);
+        assert_eq!(via_upgrade.deferred_target.len(), 1);
+        assert!(via_upgrade.strike_pct.is_empty());
+
+        let sigil = Item {
+            id: 88881,
+            name: "Unknown Sigil of Testing".into(),
+            item_type: "UpgradeComponent".into(),
+            rarity: "Exotic".into(),
+            level: 80,
+            description: Some(text.into()),
+            icon: None,
+            vendor_value: None,
+            chat_link: None,
+            default_skin: None,
+            flags: vec![],
+            game_types: vec![],
+            restrictions: vec![],
+            details: Some(gw2_api::models::ItemDetails {
+                detail_type: Some("Sigil".into()),
+                weight_class: None,
+                defense: None,
+                damage_type: None,
+                min_power: None,
+                max_power: None,
+                suffix: None,
+                bonuses: vec![],
+                infusion_upgrade_flags: vec![],
+                infusion_slots: vec![],
+                attribute_adjustment: None,
+                infix_upgrade: Some(gw2_api::models::InfixUpgrade {
+                    id: None,
+                    attributes: vec![],
+                    buff: Some(gw2_api::models::InfixBuff {
+                        skill_id: None,
+                        description: Some(text.into()),
+                    }),
+                }),
+                suffix_item_id: None,
+                secondary_suffix_item_id: None,
+                stat_choices: vec![],
+            }),
+        };
+        let mut mods = DamageModifiers::default();
+        parse_sigil_modifier(&mut mods, &sigil, &BalanceContext::pve());
+        assert_eq!(
+            mods.deferred_target.len(),
+            1,
+            "buff+description must not double-apply: {:?}",
+            mods.deferred_target
+        );
+        assert!(mods.strike_pct.is_empty());
+        assert!(mods.condition_pct.is_empty());
+    }
+
+    #[test]
+    fn sigil_infix_deferred_still_parses_standing_description() {
+        fn make_sigil(buff: Option<&str>, description: Option<&str>) -> Item {
+            Item {
+                id: 88882,
+                name: "Unknown Sigil of Testing".into(),
+                item_type: "UpgradeComponent".into(),
+                rarity: "Exotic".into(),
+                level: 80,
+                description: description.map(str::to_string),
+                icon: None,
+                vendor_value: None,
+                chat_link: None,
+                default_skin: None,
+                flags: vec![],
+                game_types: vec![],
+                restrictions: vec![],
+                details: buff.map(|text| gw2_api::models::ItemDetails {
+                    detail_type: Some("Sigil".into()),
+                    weight_class: None,
+                    defense: None,
+                    damage_type: None,
+                    min_power: None,
+                    max_power: None,
+                    suffix: None,
+                    bonuses: vec![],
+                    infusion_upgrade_flags: vec![],
+                    infusion_slots: vec![],
+                    attribute_adjustment: None,
+                    infix_upgrade: Some(gw2_api::models::InfixUpgrade {
+                        id: None,
+                        attributes: vec![],
+                        buff: Some(gw2_api::models::InfixBuff {
+                            skill_id: None,
+                            description: Some(text.into()),
+                        }),
+                    }),
+                    suffix_item_id: None,
+                    secondary_suffix_item_id: None,
+                    stat_choices: vec![],
+                }),
+            }
+        }
+
+        let mut combo = DamageModifiers::default();
+        parse_sigil_modifier(
+            &mut combo,
+            &make_sigil(
+                Some("+10% Strike Damage vs. Vulnerability"),
+                Some("+5% Strike Damage"),
+            ),
+            &BalanceContext::pve(),
+        );
+        assert_eq!(
+            combo.deferred_target.len(),
+            1,
+            "infix vs-target must stay a single deferred entry: {:?}",
+            combo.deferred_target
+        );
+        assert!((combo.deferred_target[0].percent - 10.0).abs() < 1e-9);
+        assert_eq!(combo.deferred_target[0].axis, TargetModAxis::Strike);
+
+        let mut desc_only = DamageModifiers::default();
+        parse_sigil_modifier(
+            &mut desc_only,
+            &make_sigil(None, Some("+5% Strike Damage")),
+            &BalanceContext::pve(),
+        );
+        assert_eq!(
+            combo.strike_pct, desc_only.strike_pct,
+            "standing description percent must still apply after infix deferred parse"
+        );
+        assert_eq!(combo.strike_pct, vec![0.05]);
+        assert!(desc_only.deferred_target.is_empty());
+    }
+
+    #[test]
+    fn trait_and_sigil_same_deferred_clause_stack() {
+        let clause = "+10% Strike Damage vs. Vulnerability";
+        let trait_id = 9003u32;
+        let sigil_id = 88883u32;
+        let cache: HashMap<u32, Trait> = [(
+            trait_id,
+            percent_trait(
+                trait_id,
+                "Vs Vulnerability",
+                &[("Strike Damage vs. Vulnerability", 10.0)],
+            ),
+        )]
+        .into_iter()
+        .collect();
+
+        let sigil = Item {
+            id: sigil_id,
+            name: "Unknown Sigil of Testing".into(),
+            item_type: "UpgradeComponent".into(),
+            rarity: "Exotic".into(),
+            level: 80,
+            description: Some(clause.into()),
+            icon: None,
+            vendor_value: None,
+            chat_link: None,
+            default_skin: None,
+            flags: vec![],
+            game_types: vec![],
+            restrictions: vec![],
+            details: Some(gw2_api::models::ItemDetails {
+                detail_type: Some("Sigil".into()),
+                weight_class: None,
+                defense: None,
+                damage_type: None,
+                min_power: None,
+                max_power: None,
+                suffix: None,
+                bonuses: vec![],
+                infusion_upgrade_flags: vec![],
+                infusion_slots: vec![],
+                attribute_adjustment: None,
+                infix_upgrade: Some(gw2_api::models::InfixUpgrade {
+                    id: None,
+                    attributes: vec![],
+                    buff: Some(gw2_api::models::InfixBuff {
+                        skill_id: None,
+                        description: Some(clause.into()),
+                    }),
+                }),
+                suffix_item_id: None,
+                secondary_suffix_item_id: None,
+                stat_choices: vec![],
+            }),
+        };
+        let items: HashMap<u32, Item> = [(sigil_id, sigil)].into_iter().collect();
+
+        let both = extract_damage_modifiers(
+            &[trait_id],
+            None,
+            &[sigil_id],
+            None,
+            &cache,
+            &items,
+            &BalanceContext::pve(),
+        );
+        assert_eq!(
+            both.deferred_target.len(),
+            2,
+            "trait + sigil must stack, not globally dedupe: {:?}",
+            both.deferred_target
+        );
+
+        use crate::rotation::combat_model::{EnemyDummy, TargetState};
+        let vuln =
+            TargetState::from_seed(EnemyDummy::open()).with_condition_stacks("Vulnerability", 1);
+        assert!(
+            (deferred_target_multiplier(&both.deferred_target, &vuln, 0, TargetModAxis::Strike)
+                - 1.21)
+                .abs()
+                < 1e-9
+        );
+
+        let sigil_only = extract_damage_modifiers(
+            &[],
+            None,
+            &[sigil_id],
+            None,
+            &HashMap::new(),
+            &items,
+            &BalanceContext::pve(),
+        );
+        assert_eq!(
+            sigil_only.deferred_target.len(),
+            1,
+            "identical infix+description on one sigil must stay one entry: {:?}",
+            sigil_only.deferred_target
+        );
+        assert!(
+            (deferred_target_multiplier(
+                &sigil_only.deferred_target,
+                &vuln,
+                0,
+                TargetModAxis::Strike
+            ) - 1.10)
+                .abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn rune_90hp_strike_tags_one_conditional_clause() {
+        let rune_id: u32 = 24800;
+        let rune = Item {
+            id: rune_id,
+            name: "Superior Rune of the Scholar".into(),
+            item_type: "UpgradeComponent".into(),
+            rarity: "Exotic".into(),
+            level: 80,
+            description: None,
+            icon: None,
+            vendor_value: None,
+            chat_link: None,
+            default_skin: None,
+            flags: vec![],
+            game_types: vec![],
+            restrictions: vec![],
+            details: Some(gw2_api::models::ItemDetails {
+                detail_type: Some("Rune".into()),
+                weight_class: None,
+                defense: None,
+                damage_type: None,
+                min_power: None,
+                max_power: None,
+                suffix: Some("of the Scholar".into()),
+                bonuses: vec!["+10% strike damage while health is above 90%".into()],
+                infusion_upgrade_flags: vec![],
+                infusion_slots: vec![],
+                attribute_adjustment: None,
+                infix_upgrade: None,
+                suffix_item_id: None,
+                secondary_suffix_item_id: None,
+                stat_choices: vec![],
+            }),
+        };
+        let mut items_cache = HashMap::new();
+        items_cache.insert(rune_id, rune);
+        let mods = extract_damage_modifiers(
+            &[],
+            Some(rune_id),
+            &[],
+            None,
+            &HashMap::new(),
+            &items_cache,
+            &BalanceContext::pve(),
+        );
+        // 10% * scholar uptime 0.9 — same flattening the standing sheet uses.
+        assert_eq!(mods.strike_pct.len(), 1);
+        assert!((mods.strike_pct[0] - 0.09).abs() < 1e-9);
+        assert_eq!(mods.conditional_strike.len(), 1);
+        let clause = &mods.conditional_strike[0];
+        assert_eq!(clause.source_id, rune_id);
+        assert!((clause.value - 0.09).abs() < 1e-9);
+        assert!(clause.above);
+        assert!((clause.percent - 90.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn deferred_target_multiplier_alias_equals_canonical_with_overlap() {
+        use crate::rotation::combat_model::{EnemyDummy, TargetState};
+        let mut target = TargetState::from_seed(EnemyDummy::open());
+        target.apply_condition("Poison", 2, 3_000, 0, 25);
+        target.apply_condition("Poisoned", 3, 8_000, 0, 25);
+        assert_eq!(target.conditions.len(), 2);
+        assert_eq!(target.stacks_of("Poison", 0), 5);
+        assert_eq!(target.stacks_of("Poisoned", 0), 5);
+
+        let alias = DeferredTargetModifier {
+            gate: TargetGate::Condition("Poison"),
+            percent: 10.0,
+            axis: TargetModAxis::Strike,
+        };
+        let canon = DeferredTargetModifier {
+            gate: TargetGate::Condition("Poisoned"),
+            percent: 10.0,
+            axis: TargetModAxis::Strike,
+        };
+        let a = deferred_target_multiplier(
+            std::slice::from_ref(&alias),
+            &target,
+            0,
+            TargetModAxis::Strike,
+        );
+        let b = deferred_target_multiplier(
+            std::slice::from_ref(&canon),
+            &target,
+            0,
+            TargetModAxis::Strike,
+        );
+        assert!((a - b).abs() < 1e-12);
+        assert!((a - 1.10).abs() < 1e-9);
+
+        let per_alias = DeferredTargetModifier {
+            gate: TargetGate::PerStack {
+                condition: "Poison",
+                max: 25,
+            },
+            percent: 2.0,
+            axis: TargetModAxis::Condition,
+        };
+        let per_canon = DeferredTargetModifier {
+            gate: TargetGate::PerStack {
+                condition: "Poisoned",
+                max: 25,
+            },
+            percent: 2.0,
+            axis: TargetModAxis::Condition,
+        };
+        let pa = deferred_target_multiplier(
+            std::slice::from_ref(&per_alias),
+            &target,
+            0,
+            TargetModAxis::Condition,
+        );
+        let pb = deferred_target_multiplier(
+            std::slice::from_ref(&per_canon),
+            &target,
+            0,
+            TargetModAxis::Condition,
+        );
+        assert!((pa - pb).abs() < 1e-12);
+        assert!((pa - 1.10).abs() < 1e-9);
+
+        let parsed_alias = parse_deferred_target_modifier("strike damage vs. poison foes", 10.0)
+            .expect("poison alias parse");
+        let parsed_canon = parse_deferred_target_modifier("strike damage vs. poisoned foes", 10.0)
+            .expect("poisoned parse");
+        assert_eq!(parsed_alias.gate, TargetGate::Condition("Poisoned"));
+        assert_eq!(parsed_canon.gate, TargetGate::Condition("Poisoned"));
     }
 }

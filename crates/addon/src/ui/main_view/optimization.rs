@@ -666,6 +666,10 @@ pub(super) fn simulate_suggestion_rotation(
             mode,
             intent: None,
             deferred_target: Vec::new(),
+            weaver: suggestion
+                .specializations
+                .iter()
+                .any(|(label, _)| label.replace(" [E]", "").eq_ignore_ascii_case("Weaver")),
         },
         gw2_optimizer::rotation::combat_model::EnemyDummy::default(),
     );
@@ -2356,10 +2360,7 @@ mod tests {
         fill_holes_from_loadout(&mut chosen, &current);
         assert_eq!(
             chosen.weapons,
-            vec![
-                "Set 1: Greatsword".to_string(),
-                "Set 2: Staff".to_string()
-            ]
+            vec!["Set 1: Greatsword".to_string(), "Set 2: Staff".to_string()]
         );
         assert_eq!(chosen.relic, "Relic of Durability");
     }

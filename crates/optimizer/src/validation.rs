@@ -823,9 +823,7 @@ fn complementary_weapon_set(
         } else if info.flags.iter().any(|f| f == "Mainhand") {
             mains.push(name.as_str());
         }
-        if info.flags.iter().any(|f| f == "Offhand")
-            && !info.flags.iter().any(|f| f == "TwoHand")
-        {
+        if info.flags.iter().any(|f| f == "Offhand") && !info.flags.iter().any(|f| f == "TwoHand") {
             offs.push(name.as_str());
         }
     }
@@ -844,7 +842,7 @@ fn complementary_weapon_set(
         if m.eq_ignore_ascii_case(set1_main) {
             continue;
         }
-        for &o in &offs {
+        if let Some(&o) = offs.first() {
             return Some(ValidatedWeaponSet {
                 main_hand: Some(m.to_string()),
                 off_hand: Some(o.to_string()),
@@ -2270,10 +2268,7 @@ mod tests {
             flags: flags.iter().map(|s| (*s).to_string()).collect(),
             skills: vec![],
         };
-        weapons.insert(
-            "Sword".into(),
-            info(None, &["Mainhand", "Offhand"]),
-        );
+        weapons.insert("Sword".into(), info(None, &["Mainhand", "Offhand"]));
         weapons.insert("Axe".into(), info(None, &["Offhand"]));
         weapons.insert("Hammer".into(), info(None, &["TwoHand"]));
         weapons.insert("Greatsword".into(), info(Some(69), &["TwoHand"]));

@@ -31,7 +31,14 @@ use super::trigger_bus::{
 use super::{CoverKind, MobilityKind, RotationSkill, SkillEffect, SkillSlot};
 
 const TIMELINE_TICK_MS: u32 = 50;
+/// GW2 dodge evade frame (~750 ms). No prior evade-cover duration in this file.
+const DODGE_EVADE_MS: u32 = 750;
 pub const MIN_PROTECTED_WINDOW_MS: u32 = 2_000;
+
+#[cfg(test)]
+thread_local! {
+    static TRACE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
 /// How often the enemy can open on you again.
 ///
@@ -1020,7 +1027,7 @@ impl<'a> Timeline<'a> {
             trigger_bus: TriggerBus::new(),
             endurance: EndurancePool::new_full(),
             dodge_action: DodgeAction::new(),
-            attunement: AttunementState::new(),
+            attunement: AttunementState::for_build(params.weaver),
             illusion: IllusionState::new(),
             cast_skill_catalog: catalog_from_skills(skills),
             threshold_50_emitted: false,
@@ -2049,7 +2056,7 @@ impl<'a> Timeline<'a> {
             return;
         }
         self.incoming_conditions.push(TimedCondition {
-            name: condition,
+            name: super::combat_model::intern_foe_condition_name(&condition),
             stacks,
             expires_at_ms: self.at(duration_ms),
             next_tick_ms: self.at(1_000),
@@ -2191,6 +2198,11 @@ impl<'a> Timeline<'a> {
     }
 
     fn tick_conditions(&mut self) {
+        let incoming_mult = self.target.incoming_multiplier_at_tick(
+            self.now_ms,
+            &self.params.mode,
+            &self.params.deferred_target,
+        );
         let mut outgoing_damage = 0.0;
         let might = self.buff_stacks("Might") as f64;
         let condition_damage = self.params.condition_damage
@@ -2219,15 +2231,6 @@ impl<'a> Timeline<'a> {
             }
         }
         if outgoing_damage > 0.0 {
-            let incoming_mult = self
-                .target
-                .vulnerability_multiplier(self.now_ms, &self.params.mode)
-                * crate::combat::deferred_target_multiplier(
-                    &self.params.deferred_target,
-                    &self.target,
-                    self.now_ms,
-                    crate::combat::TargetModAxis::Condition,
-                );
             self.record_damage(outgoing_damage * incoming_mult, self.control_owned());
         }
 
@@ -2835,12 +2838,13 @@ impl<'a> Timeline<'a> {
         source_skill: Option<u32>,
         protected: bool,
     ) {
-        self.target.conditions.push(TimedFoeCondition {
-            name: name.into(),
-            stacks,
-            expires_at_ms: self.at(duration_ms),
-            next_tick_ms: self.at(1_000),
-        });
+        let cap = crate::rotation::simulator::condition_stack_cap(name, &self.params.mode) as u32;
+        let can_apply = stacks.min(cap.saturating_sub(self.target.stacks_of(name, self.now_ms)));
+        if can_apply == 0 {
+            return;
+        }
+        self.target
+            .apply_condition(name, stacks, duration_ms, self.now_ms, cap);
         self.status_trigger(
             TriggerRule::OnConditionApplied,
             name,
@@ -2914,6 +2918,8 @@ impl<'a> Timeline<'a> {
     /// Append one trace event when tracing is on; the 513th sets
     /// `trace_truncated` and is dropped.
     fn trace(&mut self, kind: TraceKind, source: &str, detail: impl Into<String>) {
+        #[cfg(test)]
+        TRACE_CALLS.with(|c| c.set(c.get().saturating_add(1)));
         if !self.trace_enabled {
             return;
         }
@@ -3103,32 +3109,34 @@ impl<'a> Timeline<'a> {
             .sum()
     }
 
-    /// Whether a record's prerequisite holds now; `Err` names the reason for
-    /// the `ProcSkippedPrerequisite` trace. Sprint 3 US1 evaluates the shroud
-    /// member; the foe members land with US2.
-    fn prerequisite_holds(&self, prerequisite: &Prerequisite) -> Result<(), String> {
+    /// Whether a record's prerequisite holds now; `Err` is formatted into the
+    /// `ProcSkippedPrerequisite` trace only when tracing is on.
+    fn prerequisite_holds(&self, prerequisite: &Prerequisite) -> Result<(), PrerequisiteFail> {
         if let Some(want) = prerequisite.in_shroud {
             if self.in_shroud.is_some() != want {
-                return Err(if want { "not in shroud" } else { "in shroud" }.into());
+                return Err(if want {
+                    PrerequisiteFail::NotInShroud
+                } else {
+                    PrerequisiteFail::InShroud
+                });
             }
         }
         if let Some(condition) = &prerequisite.foe_condition {
-            let carried =
-                self.target.conditions.iter().any(|c| {
-                    c.name.eq_ignore_ascii_case(condition) && c.expires_at_ms > self.now_ms
-                });
+            let carried = self.target.conditions.iter().any(|c| {
+                foe_condition_name_eq(&c.name, condition) && c.expires_at_ms > self.now_ms
+            });
             if !carried {
-                return Err(format!("foe not {condition}"));
+                return Err(PrerequisiteFail::FoeNotCondition);
             }
         }
         if let Some(gate) = &prerequisite.foe_health {
             // ponytail: an open dummy has no bar, so a foe-health gate never
             // holds there; the summary trace says so at the end.
             let Some(target) = self.profile.target_health.filter(|h| *h > 0.0) else {
-                return Err("foe health unknown".into());
+                return Err(PrerequisiteFail::FoeHealthUnknown);
             };
             let Some(&percent) = resolved(&gate.percent) else {
-                return Err("foe health gate unresolved".into());
+                return Err(PrerequisiteFail::FoeHealthUnresolved);
             };
             let ratio = self.enemy_hp() / target;
             let holds = if gate.above {
@@ -3137,18 +3145,15 @@ impl<'a> Timeline<'a> {
                 ratio < percent / 100.0
             };
             if !holds {
-                return Err(format!(
-                    "foe {} {percent:.0}%",
-                    if gate.above { "below" } else { "above" }
-                ));
+                return Err(PrerequisiteFail::FoeHealth);
             }
         }
         if let Some(want) = &prerequisite.attunement {
             let Some(element) = Element::parse(want) else {
-                return Err(format!("unknown attunement {want}"));
+                return Err(PrerequisiteFail::UnknownAttunement);
             };
             if !self.attunement.is(element) {
-                return Err(format!("not attuned to {want}"));
+                return Err(PrerequisiteFail::NotAttuned);
             }
         }
         Ok(())
@@ -3345,24 +3350,36 @@ impl<'a> Timeline<'a> {
                 || activating_skill_id == Some(proc_spec.source_id);
             let set_held = proc_spec.weapon_set == 0 || proc_spec.weapon_set == held_set;
             let scope_ok = self.scope_admits(&proc_spec.scope, activating_skill_id);
-            if same_trigger(&proc_spec.trigger, &trigger) && source_matches && set_held && scope_ok
+            if !same_trigger(&proc_spec.trigger, &trigger)
+                || !source_matches
+                || !set_held
+                || !scope_ok
             {
-                if let Err(reason) = proc_spec
-                    .prerequisite
-                    .as_ref()
-                    .map_or(Ok(()), |p| self.prerequisite_holds(p))
-                {
-                    if proc_spec.next_ready_ms <= self.now_ms {
-                        skipped_prerequisite.push((idx, proc_spec.source_name.clone(), reason));
+                continue;
+            }
+            if proc_spec.next_ready_ms > self.now_ms {
+                if self.trace_enabled {
+                    let prereq_ok = proc_spec
+                        .prerequisite
+                        .as_ref()
+                        .is_none_or(|p| self.prerequisite_holds(p).is_ok());
+                    if prereq_ok {
+                        on_cooldown.push(idx);
                     }
-                } else if proc_spec.next_ready_ms <= self.now_ms {
-                    ready.push(idx);
-                } else {
-                    on_cooldown.push(idx);
                 }
+                continue;
+            }
+            if let Err(reason) = proc_spec
+                .prerequisite
+                .as_ref()
+                .map_or(Ok(()), |p| self.prerequisite_holds(p))
+            {
+                skipped_prerequisite.push((idx, reason));
+            } else {
+                ready.push(idx);
             }
         }
-        for (idx, name, reason) in skipped_prerequisite {
+        for (idx, reason) in skipped_prerequisite {
             // A periodic record re-checks its prerequisite at its next
             // interval, not every tick (Shrouded Removal: every 3 s while in
             // shroud), so the refusal is one trace per period.
@@ -3372,6 +3389,15 @@ impl<'a> Timeline<'a> {
                     .now_ms
                     .saturating_add(spec.internal_cooldown_ms.max(TIMELINE_TICK_MS));
             }
+            if !self.trace_enabled {
+                continue;
+            }
+            let name = self.proc_specs[idx].source_name.clone();
+            let reason = self.proc_specs[idx]
+                .prerequisite
+                .as_ref()
+                .map(|p| reason.detail(p))
+                .unwrap_or_default();
             self.prerequisite_refused.insert(name.clone());
             // One trace per reason change, not one per hit: the refusal is a
             // state the reader needs once, until the record fires or the
@@ -3382,16 +3408,16 @@ impl<'a> Timeline<'a> {
                 self.trace(TraceKind::ProcSkippedPrerequisite, &name, reason);
             }
         }
-        for idx in on_cooldown {
-            let (name, ready_at) = (
-                self.proc_specs[idx].source_name.clone(),
-                self.proc_specs[idx].next_ready_ms,
-            );
-            self.trace(
-                TraceKind::ProcSkippedIcd,
-                &name,
-                format!("ready at {ready_at} ms"),
-            );
+        if self.trace_enabled {
+            for idx in on_cooldown {
+                let name = self.proc_specs[idx].source_name.clone();
+                let ready_at = self.proc_specs[idx].next_ready_ms;
+                self.trace(
+                    TraceKind::ProcSkippedIcd,
+                    &name,
+                    format!("ready at {ready_at} ms"),
+                );
+            }
         }
         let on_crit = matches!(trigger, TriggerRule::OnCrit);
         let cleansed_before = self.conditions_cleansed;
@@ -3889,6 +3915,16 @@ impl<'a> Timeline<'a> {
             .dodge_action
             .try_dodge(&mut self.endurance, &mut self.trigger_bus, self.now_ms)
         {
+            // ponytail: Evade only if an enemy event is already due (unconditional
+            // 750 ms on the t=0/50 opener dodges covers 450 ms burst events).
+            if self
+                .profile
+                .enemy_events
+                .front()
+                .is_some_and(|event| event.at_ms <= self.now_ms)
+            {
+                self.apply_defense(CoverKind::Evade, DODGE_EVADE_MS, 1, false);
+            }
             self.trace(TraceKind::Dodged, "dodge", "endurance spent");
             self.trigger_procs(TriggerRule::OnDodge, None, false, 1.0);
         }
@@ -4211,6 +4247,15 @@ fn strike_crit_factor_with_crit_damage(
     1.0 + chance * (crit_mult - 1.0)
 }
 
+/// Alias-safe compare of a stored foe-condition name against a prerequisite.
+fn foe_condition_name_eq(stored: &str, want: &str) -> bool {
+    stored.eq_ignore_ascii_case(want)
+        || crate::data::boon_condition_formulas::canonical_condition_name(stored)
+            .eq_ignore_ascii_case(
+                crate::data::boon_condition_formulas::canonical_condition_name(want),
+            )
+}
+
 /// A snapshot of what `prerequisite_holds` reads, so `update_conditionals`
 /// can evaluate foe prerequisites while it holds `&mut self.conditional_specs`.
 struct PrerequisiteView {
@@ -4230,14 +4275,14 @@ impl PrerequisiteView {
                 .conditions
                 .iter()
                 .filter(|c| c.expires_at_ms > timeline.now_ms)
-                .map(|c| c.name.clone())
+                .map(|c| c.name.to_string())
                 .collect(),
             foe_stacks: timeline
                 .target
                 .conditions
                 .iter()
                 .filter(|c| c.expires_at_ms > timeline.now_ms)
-                .map(|c| (c.name.clone(), c.stacks))
+                .map(|c| (c.name.to_string(), c.stacks))
                 .collect(),
             foe_ratio: timeline
                 .profile
@@ -4252,7 +4297,7 @@ impl PrerequisiteView {
     fn foe_stacks(&self, condition: &str) -> u32 {
         self.foe_stacks
             .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case(condition))
+            .filter(|(name, _)| foe_condition_name_eq(name, condition))
             .map(|(_, stacks)| *stacks)
             .sum()
     }
@@ -4268,7 +4313,7 @@ impl PrerequisiteView {
             if !self
                 .foe_conditions
                 .iter()
-                .any(|c| c.eq_ignore_ascii_case(condition))
+                .any(|c| foe_condition_name_eq(c, condition))
             {
                 return false;
             }
@@ -4295,6 +4340,52 @@ impl PrerequisiteView {
             }
         }
         true
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PrerequisiteFail {
+    NotInShroud,
+    InShroud,
+    FoeNotCondition,
+    FoeHealthUnknown,
+    FoeHealthUnresolved,
+    FoeHealth,
+    UnknownAttunement,
+    NotAttuned,
+}
+
+impl PrerequisiteFail {
+    fn detail(self, prerequisite: &Prerequisite) -> String {
+        match self {
+            Self::NotInShroud => "not in shroud".into(),
+            Self::InShroud => "in shroud".into(),
+            Self::FoeNotCondition => format!(
+                "foe not {}",
+                prerequisite.foe_condition.as_deref().unwrap_or("")
+            ),
+            Self::FoeHealthUnknown => "foe health unknown".into(),
+            Self::FoeHealthUnresolved => "foe health gate unresolved".into(),
+            Self::FoeHealth => {
+                let (above, percent) = prerequisite
+                    .foe_health
+                    .as_ref()
+                    .and_then(|gate| resolved(&gate.percent).map(|&percent| (gate.above, percent)))
+                    .unwrap_or((false, 0.0));
+                format!(
+                    "foe {} {percent:.0}%",
+                    if above { "below" } else { "above" }
+                )
+            }
+            Self::UnknownAttunement => format!(
+                "unknown attunement {}",
+                prerequisite.attunement.as_deref().unwrap_or("")
+            ),
+            Self::NotAttuned => format!(
+                "not attuned to {}",
+                prerequisite.attunement.as_deref().unwrap_or("")
+            ),
+        }
     }
 }
 
@@ -4923,6 +5014,62 @@ mod tests {
             ">=3 attunement traits must execute; got {executing}; {:?}",
             live_report.trait_fire_counts
         );
+    }
+
+    #[test]
+    fn fcr006_weaver_timeline_stashes_outgoing_primary() {
+        let mut water = skill(5493, SkillSlot::Profession, 0, 8_000, vec![]);
+        water.name = "Water Attunement".into();
+        let skills = [water];
+        let mut params = params();
+        params.weaver = true;
+        let mut tl = Timeline::new(
+            &skills,
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        assert!(tl.attunement.weaver);
+        let outgoing = tl.attunement.current;
+        let landed = apply_attunement_skill(
+            &mut tl.attunement,
+            &mut tl.trigger_bus,
+            0,
+            "Water Attunement",
+        );
+        assert_eq!(landed, Some(Element::Water));
+        assert_eq!(tl.attunement.secondary, Some(outgoing));
+    }
+
+    #[test]
+    fn fcr006_core_ele_timeline_secondary_stays_none() {
+        let mut water = skill(5493, SkillSlot::Profession, 0, 8_000, vec![]);
+        water.name = "Water Attunement".into();
+        let skills = [water];
+        let params = params();
+        let mut tl = Timeline::new(
+            &skills,
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        assert!(!tl.attunement.weaver);
+        apply_attunement_skill(
+            &mut tl.attunement,
+            &mut tl.trigger_bus,
+            0,
+            "Water Attunement",
+        );
+        assert_eq!(tl.attunement.current, Element::Water);
+        assert_eq!(tl.attunement.secondary, None);
     }
 
     /// E4 Kent: dodge 0->1 + emit; 4th spawn at cap no-op/no emit; heal-slot
@@ -6089,6 +6236,293 @@ mod tests {
             .sum();
         assert!((total - one_tick * 4.0).abs() < 0.001);
         assert!(timeline.target.conditions.is_empty());
+    }
+
+    #[test]
+    fn shared_expiry_vulnerability_applies_on_final_bleed_tick() {
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(5_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.target.conditions.push(TimedFoeCondition {
+            name: "Bleeding".into(),
+            stacks: 1,
+            expires_at_ms: 2_000,
+            next_tick_ms: 1_000,
+        });
+        timeline.target.conditions.push(TimedFoeCondition {
+            name: "Vulnerability".into(),
+            stacks: 25,
+            expires_at_ms: 2_000,
+            next_tick_ms: 1_000,
+        });
+        let one_tick = condition_tick_damage("Bleeding", params.condition_damage, &params.mode);
+        let incoming = 1.0
+            + 25.0
+                * crate::data::boon_condition_formulas::conditions()
+                    .vulnerability_incoming_pct_per_stack(&params.mode);
+        for second in 1..=2 {
+            timeline.now_ms = second * 1_000;
+            timeline.tick_conditions();
+        }
+        let total: f64 = timeline
+            .damage_events
+            .iter()
+            .map(|event| event.amount)
+            .sum();
+        assert!(
+            (total - one_tick * 2.0 * incoming).abs() < 0.001,
+            "1 bleed + 25 vuln expiring at 2000ms must pay 2*tick*incoming ({}) got {total}",
+            one_tick * 2.0 * incoming
+        );
+        assert!(timeline.target.conditions.is_empty());
+    }
+
+    #[test]
+    fn expired_vulnerability_does_not_buff_strike_landing_at_expiry() {
+        let params = params();
+        let land = |with_vuln: bool| {
+            let mut timeline = Timeline::new(
+                &[],
+                &params,
+                profile(5_000, vec![]),
+                open_enemy(false),
+                &[],
+                &[],
+                true,
+                Vec::new(),
+            );
+            if with_vuln {
+                timeline.target.conditions.push(TimedFoeCondition {
+                    name: "Vulnerability".into(),
+                    stacks: 25,
+                    expires_at_ms: 1_000,
+                    next_tick_ms: 1_000,
+                });
+            }
+            timeline.scheduled_hits.push(ScheduledHit {
+                at_ms: 1_000,
+                skill_id: 1,
+                dmg_multiplier: 1.0,
+            });
+            timeline.now_ms = 1_000;
+            timeline.land_scheduled_hits();
+            timeline
+                .damage_events
+                .iter()
+                .map(|event| event.amount)
+                .sum::<f64>()
+        };
+        let with_vuln = land(true);
+        let bare = land(false);
+        assert!(
+            (with_vuln - bare).abs() < 0.001,
+            "strike landing at Vulnerability.expires_at_ms must equal unbuffed strike: with_vuln={with_vuln} bare={bare}"
+        );
+        assert!(bare > 0.0);
+    }
+
+    #[test]
+    fn deferred_target_condition_vs_vulnerability_adds_ten_percent() {
+        let mut params = params();
+        let seed = |timeline: &mut Timeline| {
+            timeline.target.conditions.push(TimedFoeCondition {
+                name: "Bleeding".into(),
+                stacks: 1,
+                expires_at_ms: 4_000,
+                next_tick_ms: 1_000,
+            });
+            timeline.target.conditions.push(TimedFoeCondition {
+                name: "Vulnerability".into(),
+                stacks: 1,
+                expires_at_ms: 4_000,
+                next_tick_ms: 1_000,
+            });
+        };
+        let run = |timeline: &mut Timeline| {
+            for second in 1..=4 {
+                timeline.now_ms = second * 1_000;
+                timeline.tick_conditions();
+            }
+            timeline
+                .damage_events
+                .iter()
+                .map(|event| event.amount)
+                .sum::<f64>()
+        };
+        let mut baseline = Timeline::new(
+            &[],
+            &params,
+            profile(5_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        seed(&mut baseline);
+        let base_total = run(&mut baseline);
+        params.deferred_target = vec![crate::combat::DeferredTargetModifier {
+            gate: crate::combat::TargetGate::Condition("Vulnerability"),
+            percent: 10.0,
+            axis: crate::combat::TargetModAxis::Condition,
+        }];
+        let mut boosted = Timeline::new(
+            &[],
+            &params,
+            profile(5_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        seed(&mut boosted);
+        let boosted_total = run(&mut boosted);
+        assert!(base_total > 0.0);
+        assert!(
+            (boosted_total - base_total * 1.10).abs() < 0.001,
+            "+10% condition vs Vulnerability must raise condi 1.10x: base {base_total} boosted {boosted_total}"
+        );
+    }
+
+    #[test]
+    fn apply_outgoing_condition_respects_burning_stack_cap() {
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(2_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        let cap = crate::rotation::simulator::condition_stack_cap("Burning", &params.mode) as u32;
+        timeline.apply_outgoing_condition("Burning", cap + 1, 2_000, None, false);
+        assert_eq!(timeline.target.stacks_of("Burning", timeline.now_ms), cap);
+    }
+
+    #[test]
+    fn apply_outgoing_condition_chill_alias_satisfies_foe_prereq() {
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(2_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.apply_outgoing_condition("Chill", 1, 2_000, None, false);
+        let chill = Prerequisite {
+            foe_condition: Some("Chill".into()),
+            ..Default::default()
+        };
+        let chilled = Prerequisite {
+            foe_condition: Some("Chilled".into()),
+            ..Default::default()
+        };
+        assert!(
+            timeline.prerequisite_holds(&chill).is_ok(),
+            "alias 'Chill' must match stored canonical Chill"
+        );
+        assert!(
+            timeline.prerequisite_holds(&chilled).is_ok(),
+            "canonical 'Chilled' must match after apply_outgoing_condition('Chill')"
+        );
+        assert!(
+            timeline
+                .prerequisite_holds(&Prerequisite {
+                    foe_condition: Some("chilled".into()),
+                    ..Default::default()
+                })
+                .is_ok(),
+            "lowercase canonical 'chilled' must keep matching"
+        );
+        let view = PrerequisiteView::of(&timeline);
+        assert!(view.is_ok_with(&chill));
+        assert!(view.is_ok_with(&chilled));
+        assert!(view.foe_stacks("Chill") >= 1);
+        assert!(view.foe_stacks("Chilled") >= 1);
+    }
+
+    #[test]
+    fn dodge_evade_avoids_strike_on_dodge_tick() {
+        let params = params();
+        let strike = 1_000.0;
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(
+                100,
+                vec![EnemyEvent {
+                    at_ms: 0,
+                    kind: EnemyEventKind::Strike {
+                        damage: strike,
+                        unblockable: false,
+                    },
+                }],
+            ),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.run();
+        assert!(
+            timeline.avoided_damage > 0.0,
+            "strike on dodge tick must credit avoided_damage; got {}",
+            timeline.avoided_damage
+        );
+        assert_eq!(
+            timeline.incoming_damage, 0.0,
+            "evaded strike must not increment incoming_damage"
+        );
+    }
+
+    #[test]
+    fn kent_e0_causal_health_threshold_emits_on_threshold_once() {
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.player_health = params.max_health;
+        timeline.tick_health_threshold_bus();
+        assert_eq!(timeline.trigger_bus.count(BusEvent::OnThreshold), 0);
+        timeline.player_health = params.max_health * 0.50;
+        timeline.tick_health_threshold_bus();
+        assert_eq!(
+            timeline.trigger_bus.count(BusEvent::OnThreshold),
+            1,
+            "crossing 50% must emit OnThreshold once"
+        );
+        timeline.tick_health_threshold_bus();
+        timeline.player_health = params.max_health * 0.10;
+        timeline.tick_health_threshold_bus();
+        assert_eq!(
+            timeline.trigger_bus.count(BusEvent::OnThreshold),
+            1,
+            "OnThreshold must not re-emit after the first crossing"
+        );
     }
 
     #[test]
@@ -8056,6 +8490,69 @@ mod reaper_experiments {
         let report = timeline.report();
         assert_eq!(report.trace.len(), TRACE_CAP);
         assert!(report.trace_truncated);
+    }
+
+    #[test]
+    fn trigger_procs_icd_skip_does_not_format_when_trace_off() {
+        let params = SimParams::basic(2_000.0, 0.0, 1_100.0);
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            open_profile(2_000, vec![]),
+            still_enemy(),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.trace_enabled = false;
+        timeline.proc_specs.push(ProcSpec {
+            source_type: SourceType::Trait,
+            source_id: 1,
+            source_name: "IcdSkip".into(),
+            trigger: TriggerRule::OnHit,
+            category: EffectCategory::StrikeDamagePct,
+            value: 10.0,
+            duration_ms: 0,
+            internal_cooldown_ms: 10_000,
+            next_ready_ms: 10_000,
+            operation: None,
+            weapon_set: 0,
+            proc_chance: 1.0,
+            mass: 0.0,
+            scope: Default::default(),
+            prerequisite: Some(Prerequisite {
+                foe_condition: Some("Chilled".into()),
+                ..Default::default()
+            }),
+            scale_by: None,
+            healing_power_coefficient: 0.0,
+            cast_skill_id: None,
+            max_stacks: 0,
+        });
+        TRACE_CALLS.with(|c| c.set(0));
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert!(
+            timeline.trace.is_empty(),
+            "ICD-skip with tracing off must not push events"
+        );
+        assert_eq!(
+            TRACE_CALLS.with(|c| c.get()),
+            0,
+            "ICD-skip must not call trace when tracing is off"
+        );
+        assert!(timeline.prerequisite_refused.is_empty());
+        assert_eq!(timeline.proc_specs[0].next_ready_ms, 10_000);
+
+        // Same ICD spec, prereq dropped so the skip is actually traced.
+        timeline.proc_specs[0].prerequisite = None;
+        timeline.trace_enabled = true;
+        TRACE_CALLS.with(|c| c.set(0));
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert!(
+            TRACE_CALLS.with(|c| c.get()) > 0,
+            "counter must increment when tracing is on"
+        );
     }
 
     // Positive control

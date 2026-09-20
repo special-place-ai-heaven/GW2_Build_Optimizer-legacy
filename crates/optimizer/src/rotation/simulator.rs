@@ -206,6 +206,8 @@ pub struct SimParams {
     pub intent: Option<OptimizationWeights>,
     /// Target-conditional percents evaluated at land against live TargetState.
     pub deferred_target: Vec<crate::combat::DeferredTargetModifier>,
+    /// Elite spec 56 (Weaver): dual attunement stashes outgoing primary.
+    pub weaver: bool,
 }
 
 impl SimParams {
@@ -232,6 +234,7 @@ impl SimParams {
             mode: GameMode::PvE,
             intent: None,
             deferred_target: Vec::new(),
+            weaver: false,
         }
     }
 }
@@ -328,8 +331,9 @@ struct SimState {
     #[allow(dead_code)]
     dodge_action: super::trigger_bus::DodgeAction,
     /// E3: shared AttunementState with wvw_timeline (sole current writer).
-    #[allow(dead_code)]
     attunement: super::attunement::AttunementState,
+    /// One attune swap per flow-sim run (first-swap setup). After this, attunes never beat filler.
+    attunement_swapped: bool,
     /// E4: shared IllusionState with wvw_timeline (sole clone-count writer).
     #[allow(dead_code)]
     illusion: super::illusion::IllusionState,
@@ -403,7 +407,8 @@ impl SimState {
             trigger_bus: super::trigger_bus::TriggerBus::new(),
             endurance: super::trigger_bus::EndurancePool::new_full(),
             dodge_action: super::trigger_bus::DodgeAction::new(),
-            attunement: super::attunement::AttunementState::new(),
+            attunement: super::attunement::AttunementState::for_build(params.weaver),
+            attunement_swapped: false,
             illusion: super::illusion::IllusionState::new(),
             skills: skills.to_vec(),
             skill_states,
@@ -486,6 +491,7 @@ impl SimState {
         let mut best_idx = None;
         let mut best_dpct = 0.0f64;
         let mut filler_idx = None;
+        let mut attune_idx = None;
 
         for (i, skill) in self.skills.iter().enumerate() {
             if self.skill_states[i].cooldown_remaining_ms > 0 {
@@ -509,6 +515,13 @@ impl SimState {
                             filler_idx = Some(i);
                         }
                     }
+                }
+                continue;
+            }
+
+            if let Some(element) = super::attunement::Element::from_skill_name(&skill.name) {
+                if element != self.attunement.current && attune_idx.is_none() {
+                    attune_idx = Some(i);
                 }
                 continue;
             }
@@ -542,7 +555,12 @@ impl SimState {
             }
         }
 
-        // Use highest DPCT skill, or fall back to auto-attack filler
+        // One attune swap per run (setup). After that attunes never beat filler.
+        if !self.attunement_swapped {
+            if let Some(i) = attune_idx {
+                return Some(i);
+            }
+        }
         best_idx.or(filler_idx)
     }
 
@@ -623,6 +641,7 @@ impl SimState {
     }
 
     fn condition_slot(&mut self, name: &str) -> usize {
+        let name = crate::data::boon_condition_formulas::canonical_condition_name(name);
         if let Some(i) = self.condition_slots.iter().position(|c| c.name == name) {
             return i;
         }
@@ -708,12 +727,16 @@ impl SimState {
         *self.skill_casts.entry(skill_id).or_insert(0) += 1;
 
         // E3: profession attune skills mutate shared AttunementState + bus.
-        let _ = super::attunement::apply_attunement_skill(
+        if super::attunement::apply_attunement_skill(
             &mut self.attunement,
             &mut self.trigger_bus,
             self.current_time_ms,
             &skill_name,
-        );
+        )
+        .is_some()
+        {
+            self.attunement_swapped = true;
+        }
 
         for effect in &effects {
             match effect {
@@ -760,6 +783,7 @@ impl SimState {
                     // Non-damaging foe conditions (Vulnerability, Chilled, …):
                     // one shared TargetState ledger with WvW (Phase 3).
                     let cap = condition_stack_cap(buff, &self.params.mode);
+                    let _ = self.condition_slot(buff);
                     let duration =
                         (*duration_ms as f64 * self.params.condition_duration_mult).round() as u32;
                     self.target.apply_condition(
@@ -880,13 +904,7 @@ impl SimState {
     /// Soft control present this tick: half weight per distinct condition.
     /// Soft control lives on the shared foe TargetState ledger (Phase 3).
     fn soft_control_weight(&self) -> f64 {
-        let mut present = 0u8;
-        for (i, name) in SOFT_CONTROL.iter().enumerate() {
-            if self.target.stacks_of(name, self.current_time_ms) > 0 {
-                present |= 1 << i;
-            }
-        }
-        present.count_ones() as f64 * 0.5
+        soft_control_weight_on(&self.target, self.current_time_ms)
     }
 
     fn apply_combo_outcome(&mut self, outcome: ComboOutcome) {
@@ -1017,14 +1035,11 @@ impl SimState {
                 * crate::data::boon_condition_formulas::boons().might_condi_per_stack();
 
         let now = self.current_time_ms;
-        let vuln = self.target.vulnerability_multiplier(now, &self.params.mode);
-        let deferred = crate::combat::deferred_target_multiplier(
-            &self.params.deferred_target,
-            &self.target,
+        let incoming_mult = self.target.incoming_multiplier_at_tick(
             now,
-            crate::combat::TargetModAxis::Condition,
+            &self.params.mode,
+            &self.params.deferred_target,
         );
-        let incoming_mult = vuln * deferred;
 
         let mut tick_total = 0.0;
         for condition in &mut self.target.conditions {
@@ -1277,6 +1292,33 @@ const BOONS: [&str; 12] = [
 /// Non-damaging conditions that hamper the target: counted as control at
 /// half the weight of a hard disable while present.
 const SOFT_CONTROL: [&str; 5] = ["Chilled", "Crippled", "Weakness", "Slow", "Blinded"];
+
+/// One ledger pass: bit per distinct unexpired soft-control name, ×0.5.
+/// Same output as five `stacks_of` scans (exclusive expiry).
+fn soft_control_weight_on(target: &crate::rotation::combat_model::TargetState, now_ms: u32) -> f64 {
+    let mut present = 0u8;
+    for c in &target.conditions {
+        if c.stacks == 0 || c.expires_at_ms <= now_ms {
+            continue;
+        }
+        // One alias walk per live row — same as stacks_of folding the stored name.
+        let stored = crate::data::boon_condition_formulas::canonical_condition_name(&c.name);
+        for (i, name) in SOFT_CONTROL.iter().enumerate() {
+            let bit = 1u8 << i;
+            if present & bit != 0 {
+                continue;
+            }
+            if stored.eq_ignore_ascii_case(name) {
+                present |= bit;
+                break;
+            }
+        }
+        if present == 0b1_1111 {
+            break;
+        }
+    }
+    present.count_ones() as f64 * 0.5
+}
 
 fn is_boon(status: &str) -> bool {
     BOONS.iter().any(|b| b.eq_ignore_ascii_case(status))
@@ -2657,6 +2699,197 @@ mod tests {
         );
     }
 
+    #[test]
+    fn shared_expiry_vulnerability_applies_on_final_bleed_tick() {
+        let params = SimParams::basic(1_000.0, 1_000.0, 1_100.0);
+        let mut sim = SimState::new(
+            &[],
+            2_500,
+            TargetState::from_seed(EnemyDummy::open()),
+            params,
+        );
+        sim.target.conditions.push(TimedFoeCondition {
+            name: "Bleeding".into(),
+            stacks: 1,
+            expires_at_ms: 2_000,
+            next_tick_ms: CONDITION_TICK_INTERVAL_MS,
+        });
+        sim.target.conditions.push(TimedFoeCondition {
+            name: "Vulnerability".into(),
+            stacks: 25,
+            expires_at_ms: 2_000,
+            next_tick_ms: CONDITION_TICK_INTERVAL_MS,
+        });
+        while sim.current_time_ms < 2_500 {
+            sim.tick_conditions(1_000.0);
+            sim.current_time_ms += TICK_MS;
+        }
+        let tick = condition_tick_damage("Bleeding", 1_000.0, &GameMode::PvE);
+        let expected = 2.0 * tick * 1.25;
+        assert!(
+            (sim.total_condition_damage - expected).abs() < 1e-6,
+            "1 bleed + 25 vuln expiring at 2000ms must pay 2*tick*1.25={expected}, got {}",
+            sim.total_condition_damage
+        );
+    }
+
+    #[test]
+    fn applybuff_chilled_and_applycondition_poison_both_in_condition_uptime() {
+        let skills = [RotationSkill {
+            targets: 1,
+            categories: Vec::new(),
+            slot_name: None,
+            skill_id: 80,
+            name: "Alias Mix".into(),
+            slot: SkillSlot::Utility,
+            cast_time_ms: 500,
+            cooldown_ms: 30_000,
+            effects: vec![
+                SkillEffect::ApplyBuff {
+                    buff: "Chilled".into(),
+                    stacks: 1,
+                    duration_ms: 5_000,
+                },
+                SkillEffect::ApplyCondition {
+                    condition: "Poison".into(),
+                    stacks: 1,
+                    duration_ms: 5_000,
+                },
+            ],
+            next_chain: None,
+            is_stunbreak: false,
+            weapon_set: 0,
+        }];
+        let result = simulate(&skills, 8_000, 1_000.0, 1_000.0, 1_100.0);
+        assert!(
+            result.condition_uptime.contains_key("Chilled"),
+            "ApplyBuff Chilled must appear in condition_uptime, got {:?}",
+            result.condition_uptime.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            result.condition_uptime.contains_key("Poisoned"),
+            "ApplyCondition Poison must canonicalize to Poisoned, got {:?}",
+            result.condition_uptime.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !result.condition_uptime.contains_key("Poison"),
+            "aliased Poison must not remain as a raw uptime key"
+        );
+        assert!(*result.condition_uptime.get("Chilled").unwrap() > 0.0);
+        assert!(*result.condition_uptime.get("Poisoned").unwrap() > 0.0);
+    }
+
+    #[test]
+    fn deferred_target_strike_vs_vulnerability_adds_ten_percent() {
+        let skills = [auto_attack()];
+        let mut params = SimParams::basic(2_000.0, 0.0, 1_100.0);
+        let target =
+            TargetState::from_seed(EnemyDummy::open()).with_condition_stacks("Vulnerability", 10);
+        let baseline = simulate_with_target(&skills, 5_000, &params, target.clone());
+        params.deferred_target = vec![crate::combat::DeferredTargetModifier {
+            gate: crate::combat::TargetGate::Condition("Vulnerability"),
+            percent: 10.0,
+            axis: crate::combat::TargetModAxis::Strike,
+        }];
+        let boosted = simulate_with_target(&skills, 5_000, &params, target);
+        assert!(baseline.strike_dps > 0.0);
+        let ratio = boosted.strike_dps / baseline.strike_dps;
+        assert!(
+            (ratio - 1.10).abs() < 1e-6,
+            "+10% strike vs Vulnerability must raise strike 1.10x, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn soft_control_weight_single_pass_matches_per_name_scans() {
+        let mut t = TargetState::from_seed(EnemyDummy::open());
+        t.apply_condition("Chilled", 1, 5_000, 0, 5);
+        t.apply_condition("Chilled", 1, 8_000, 0, 5);
+        t.apply_condition("Burning", 3, 5_000, 0, 25);
+        t.apply_condition("Weakness", 1, 2_000, 0, 5);
+        t.apply_condition("Slow", 1, 1_000, 0, 5);
+        t.apply_condition("Blind", 1, 4_000, 0, 5);
+        for now in [0, 1_000, 1_500, 2_000, 5_000] {
+            let expected = {
+                let mut present = 0u8;
+                for (i, name) in super::SOFT_CONTROL.iter().enumerate() {
+                    if t.stacks_of(name, now) > 0 {
+                        present |= 1 << i;
+                    }
+                }
+                present.count_ones() as f64 * 0.5
+            };
+            assert_eq!(
+                super::soft_control_weight_on(&t, now),
+                expected,
+                "single-pass weight must match five stacks_of scans at {now}"
+            );
+        }
+        assert_eq!(super::soft_control_weight_on(&t, 1_500), 1.5);
+        assert_eq!(super::soft_control_weight_on(&t, 2_000), 1.0);
+
+        let mut raw = TargetState::from_seed(EnemyDummy::open());
+        raw.conditions.push(TimedFoeCondition {
+            name: "Blind".into(),
+            stacks: 1,
+            expires_at_ms: 4_000,
+            next_tick_ms: 1_000,
+        });
+        // Pre-FCR-010 stacks_of: canonicalize each stored row, then match.
+        // Live stacks_of (FCR-010) folds the query only — raw "Blind" would miss.
+        let raw_expected = {
+            let mut present = 0u8;
+            for (i, name) in super::SOFT_CONTROL.iter().enumerate() {
+                let want = crate::data::boon_condition_formulas::canonical_condition_name(name);
+                if raw.conditions.iter().any(|c| {
+                    c.stacks > 0
+                        && c.expires_at_ms > 0
+                        && crate::data::boon_condition_formulas::canonical_condition_name(&c.name)
+                            .eq_ignore_ascii_case(want)
+                }) {
+                    present |= 1 << i;
+                }
+            }
+            present.count_ones() as f64 * 0.5
+        };
+        assert_eq!(
+            super::soft_control_weight_on(&raw, 0),
+            raw_expected,
+            "raw alias row Blind must match five canonicalize-stored scans"
+        );
+        assert_eq!(raw_expected, 0.5);
+
+        let mut zero = TargetState::from_seed(EnemyDummy::open());
+        zero.conditions.push(TimedFoeCondition {
+            name: "Blind".into(),
+            stacks: 0,
+            expires_at_ms: 4_000,
+            next_tick_ms: 1_000,
+        });
+        let zero_expected = {
+            let mut present = 0u8;
+            for (i, name) in super::SOFT_CONTROL.iter().enumerate() {
+                let want = crate::data::boon_condition_formulas::canonical_condition_name(name);
+                if zero.conditions.iter().any(|c| {
+                    c.stacks > 0
+                        && c.expires_at_ms > 0
+                        && crate::data::boon_condition_formulas::canonical_condition_name(&c.name)
+                            .eq_ignore_ascii_case(want)
+                }) {
+                    present |= 1 << i;
+                }
+            }
+            present.count_ones() as f64 * 0.5
+        };
+        assert_eq!(
+            super::soft_control_weight_on(&zero, 0),
+            zero_expected,
+            "zero-stack Blind row must match old-scan oracle"
+        );
+        assert_eq!(zero_expected, 0.0);
+        assert_eq!(super::soft_control_weight_on(&zero, 0), 0.0);
+    }
+
     fn strike_skill() -> RotationSkill {
         RotationSkill {
             targets: 1,
@@ -3279,6 +3512,156 @@ mod tests {
         assert!(
             (b20 / b100 - 0.20).abs() < 0.12,
             "20% EV ~0.2x: {b20} vs {b100}"
+        );
+    }
+
+    fn attune_skill(skill_id: u32, name: &str) -> RotationSkill {
+        RotationSkill {
+            targets: 1,
+            categories: Vec::new(),
+            slot_name: Some("Profession_2".into()),
+            skill_id,
+            name: name.into(),
+            slot: SkillSlot::Profession,
+            cast_time_ms: 0,
+            cooldown_ms: 10_000,
+            effects: vec![],
+            next_chain: None,
+            is_stunbreak: false,
+            weapon_set: 0,
+        }
+    }
+
+    #[test]
+    fn fcr006_weaver_simstate_stashes_outgoing_primary() {
+        use super::super::attunement::{apply_attunement_skill, Element};
+        use super::super::trigger_bus::BusEvent;
+
+        let skills = vec![attune_skill(5493, "Water Attunement")];
+        let mut params = SimParams::basic(2_000.0, 0.0, 1_100.0);
+        params.weaver = true;
+        let mut sim = SimState::new(
+            &skills,
+            5_000,
+            TargetState::from_seed(EnemyDummy::open()),
+            params,
+        );
+        assert!(sim.attunement.weaver);
+        let outgoing = sim.attunement.current;
+        let landed = apply_attunement_skill(
+            &mut sim.attunement,
+            &mut sim.trigger_bus,
+            0,
+            "Water Attunement",
+        );
+        assert_eq!(landed, Some(Element::Water));
+        assert_eq!(sim.attunement.secondary, Some(outgoing));
+        assert_eq!(sim.trigger_bus.count(BusEvent::OnAttunementSwap), 1);
+    }
+
+    #[test]
+    fn fcr006_core_ele_simstate_secondary_stays_none() {
+        use super::super::attunement::{apply_attunement_skill, Element};
+
+        let skills = vec![attune_skill(5493, "Water Attunement")];
+        let mut sim = SimState::new(
+            &skills,
+            5_000,
+            TargetState::from_seed(EnemyDummy::open()),
+            SimParams::basic(2_000.0, 0.0, 1_100.0),
+        );
+        assert!(!sim.attunement.weaver);
+        apply_attunement_skill(
+            &mut sim.attunement,
+            &mut sim.trigger_bus,
+            0,
+            "Water Attunement",
+        );
+        assert_eq!(sim.attunement.current, Element::Water);
+        assert_eq!(sim.attunement.secondary, None);
+    }
+
+    #[test]
+    fn fcr006_weaver_field_enables_core_attune_names() {
+        let skills = vec![
+            attune_skill(5492, "Fire Attunement"),
+            attune_skill(5493, "Water Attunement"),
+        ];
+        assert!(skills
+            .iter()
+            .all(|s| !super::super::attunement::is_weaver_name(&s.name)));
+        let mut params = SimParams::basic(2_000.0, 0.0, 1_100.0);
+        params.weaver = true;
+        let sim = SimState::new(
+            &skills,
+            1_000,
+            TargetState::from_seed(EnemyDummy::open()),
+            params,
+        );
+        assert!(
+            sim.attunement.weaver,
+            "SimParams.weaver must enable Weaver with only core attune names"
+        );
+    }
+
+    #[test]
+    fn fcr007_flow_sim_selects_attunement_swap() {
+        use super::super::attunement::Element;
+        use super::super::trigger_bus::BusEvent;
+
+        let skills = vec![auto_attack(), attune_skill(5493, "Water Attunement")];
+        let mut sim = SimState::new(
+            &skills,
+            10_000,
+            TargetState::from_seed(EnemyDummy::open()),
+            SimParams::basic(2_000.0, 0.0, 1_100.0),
+        );
+        sim.run();
+        let swaps = sim.trigger_bus.count(BusEvent::OnAttunementSwap);
+        assert!(
+            swaps >= 1,
+            "flow must cast an attune swap; OnAttunementSwap={swaps}"
+        );
+        assert_ne!(
+            sim.attunement.current,
+            Element::Fire,
+            "attune pick must leave Fire"
+        );
+        assert!(
+            sim.skill_casts.get(&5493).copied().unwrap_or(0) >= 1,
+            "Water Attunement must appear in the cast log"
+        );
+    }
+
+    #[test]
+    fn fcr007_flow_sim_attune_swaps_once_then_autos() {
+        use super::super::trigger_bus::BusEvent;
+
+        let attunes = vec![
+            attune_skill(5492, "Fire Attunement"),
+            attune_skill(5493, "Water Attunement"),
+            attune_skill(5494, "Air Attunement"),
+            attune_skill(5495, "Earth Attunement"),
+        ];
+        let mut with = vec![auto_attack()];
+        with.extend(attunes);
+        let without = vec![auto_attack()];
+        let params = SimParams::basic(2_000.0, 0.0, 1_100.0);
+        let dummy = TargetState::from_seed(EnemyDummy::open());
+        let mut sim_with = SimState::new(&with, 10_000, dummy.clone(), params.clone());
+        sim_with.run();
+        let mut sim_without = SimState::new(&without, 10_000, dummy, params);
+        sim_without.run();
+        assert_eq!(
+            sim_with.trigger_bus.count(BusEvent::OnAttunementSwap),
+            1,
+            "four attunes must not cycle; exactly one swap per run"
+        );
+        let auto_with = sim_with.skill_casts.get(&1).copied().unwrap_or(0);
+        let auto_without = sim_without.skill_casts.get(&1).copied().unwrap_or(0);
+        assert!(
+            auto_with.abs_diff(auto_without) <= 1,
+            "autos with attunes ({auto_with}) must stay within 1 of autos-only ({auto_without})"
         );
     }
 }

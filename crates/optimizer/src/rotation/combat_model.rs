@@ -1,6 +1,8 @@
 //! Fight-dummy clocks and kit gates used by the rotation scorer.
 //! Mapping lives in `builder`; this module is the scorer contract.
 
+use std::borrow::Cow;
+
 use crate::scenario::{CombatKind, CombatTier};
 use gw2_core::types::GameMode;
 
@@ -262,10 +264,39 @@ pub struct EnemyDummy {
 /// ledger, not competing `SimState.conditions` vs `outgoing_conditions`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimedFoeCondition {
-    pub name: String,
+    /// Canonical name; borrowed from the intern table for known conditions.
+    pub name: Cow<'static, str>,
     pub stacks: u32,
     pub expires_at_ms: u32,
     pub next_tick_ms: u32,
+}
+
+/// Known GW2 condition identities as `'static` literals (same set as
+/// `is_condition`). Alias input is folded first, then matched ignore-ascii-case.
+pub(crate) fn intern_foe_condition_name(name: &str) -> Cow<'static, str> {
+    let want = crate::data::boon_condition_formulas::canonical_condition_name(name);
+    const CANONICAL: &[&str] = &[
+        "Bleeding",
+        "Burning",
+        "Poisoned",
+        "Torment",
+        "Confusion",
+        "Vulnerability",
+        "Weakness",
+        "Blinded",
+        "Chilled",
+        "Crippled",
+        "Fear",
+        "Immobile",
+        "Slow",
+        "Taunt",
+    ];
+    for &canon in CANONICAL {
+        if want.eq_ignore_ascii_case(canon) {
+            return Cow::Borrowed(canon);
+        }
+    }
+    Cow::Owned(want.to_string())
 }
 
 /// Live foe state during a simulation. Seeded from [`EnemyDummy`]; mutated as
@@ -299,7 +330,7 @@ impl TargetState {
     pub fn with_condition_stacks(mut self, name: &str, stacks: u32) -> Self {
         if stacks > 0 {
             self.conditions.push(TimedFoeCondition {
-                name: name.to_string(),
+                name: intern_foe_condition_name(name),
                 stacks,
                 expires_at_ms: u32::MAX,
                 next_tick_ms: u32::MAX,
@@ -309,17 +340,65 @@ impl TargetState {
     }
 
     /// Unexpired stacks of `name` (canonical or alias), summed across entries.
+    /// Exclusive: gone when `expires_at_ms == now_ms`.
     pub fn stacks_of(&self, name: &str, now_ms: u32) -> u32 {
+        let want = crate::data::boon_condition_formulas::canonical_condition_name(name);
+        // Entries are interned/canonical at push; fold the query once, not each row.
+        self.conditions
+            .iter()
+            .filter(|c| c.expires_at_ms > now_ms && c.name.eq_ignore_ascii_case(want))
+            .map(|c| c.stacks)
+            .sum()
+    }
+
+    /// Stacks of `name` that still apply on a pulse paid at `now_ms` (`expires_at_ms >= now`).
+    /// Condition-tick payout only — strike/cap/soft-control callers use [`Self::stacks_of`].
+    pub fn stacks_of_inclusive(&self, name: &str, now_ms: u32) -> u32 {
         let want = crate::data::boon_condition_formulas::canonical_condition_name(name);
         self.conditions
             .iter()
-            .filter(|c| {
-                c.expires_at_ms > now_ms
-                    && crate::data::boon_condition_formulas::canonical_condition_name(&c.name)
-                        .eq_ignore_ascii_case(want)
-            })
+            .filter(|c| c.expires_at_ms >= now_ms && c.name.eq_ignore_ascii_case(want))
             .map(|c| c.stacks)
             .sum()
+    }
+
+    /// Incoming multiplier for a condition pulse paid at `now_ms`.
+    /// Vulnerability and vs-condition TargetGates stay live through `expires_at_ms == now`.
+    /// Disabled gates keep exclusive `is_disabled`. Strike pricing must not call this.
+    pub fn incoming_multiplier_at_tick(
+        &self,
+        now_ms: u32,
+        mode: &gw2_core::types::GameMode,
+        deferred: &[crate::combat::DeferredTargetModifier],
+    ) -> f64 {
+        let stacks = self
+            .stacks_of_inclusive("Vulnerability", now_ms)
+            .min(crate::data::boon_condition_formulas::conditions().vulnerability_max_stacks());
+        let pct = crate::data::boon_condition_formulas::conditions()
+            .vulnerability_incoming_pct_per_stack(mode);
+        let mut mult = 1.0 + stacks as f64 * pct;
+        for spec in deferred {
+            if !matches!(
+                spec.axis,
+                crate::combat::TargetModAxis::Condition | crate::combat::TargetModAxis::Both
+            ) {
+                continue;
+            }
+            let (holds, gate_stacks) = match &spec.gate {
+                crate::combat::TargetGate::Condition(name) => {
+                    (self.stacks_of_inclusive(name, now_ms) > 0, 1.0)
+                }
+                crate::combat::TargetGate::PerStack { condition, max } => {
+                    let n = self.stacks_of_inclusive(condition, now_ms).min(*max);
+                    (n > 0, n as f64)
+                }
+                crate::combat::TargetGate::Disabled => (self.is_disabled(now_ms), 1.0),
+            };
+            if holds {
+                mult *= 1.0 + gate_stacks * spec.percent / 100.0;
+            }
+        }
+        mult
     }
 
     pub fn is_disabled(&self, now_ms: u32) -> bool {
@@ -338,8 +417,10 @@ impl TargetState {
         if stacks == 0 || duration_ms == 0 || cap == 0 {
             return;
         }
-        let canonical =
-            crate::data::boon_condition_formulas::canonical_condition_name(name).to_string();
+        // ponytail: intensity stacks keep independent durations — merge only
+        // same-expiry rows would change next_tick_ms when now_ms differs, so
+        // we never upsert; intern the name to drop the per-apply String.
+        let canonical = intern_foe_condition_name(name);
         let current = self.stacks_of(&canonical, now_ms);
         let can_apply = stacks.min(cap.saturating_sub(current));
         if can_apply == 0 {
@@ -664,6 +745,60 @@ mod tests {
         let wvw =
             EnemyDummy::for_scenario(&GameMode::WvW, CombatTier::Squad, CombatKind::StrikeSpike);
         assert!(wvw.protection && wvw.stability);
+    }
+
+    #[test]
+    fn stacks_of_accepts_alias_on_overlapping_rows() {
+        let mut t = TargetState::from_seed(EnemyDummy::open());
+        t.apply_condition("Poison", 2, 3_000, 0, 25);
+        t.apply_condition("Poisoned", 3, 8_000, 0, 25);
+        assert_eq!(t.conditions.len(), 2);
+        assert_eq!(t.stacks_of("Poison", 0), 5);
+        assert_eq!(t.stacks_of("Poisoned", 0), 5);
+        assert_eq!(t.stacks_of("poisoned", 0), 5);
+        assert_eq!(t.stacks_of_inclusive("Poison", 3_000), 5);
+        assert_eq!(t.stacks_of("Poison", 3_000), 3);
+    }
+
+    #[test]
+    fn apply_condition_different_expiries_tick_independently() {
+        let mut t = TargetState::from_seed(EnemyDummy::open());
+        t.apply_condition("Burning", 2, 3_000, 0, 25);
+        t.apply_condition("Burning", 3, 8_000, 0, 25);
+        assert_eq!(
+            t.conditions.len(),
+            2,
+            "independent durations must not merge"
+        );
+        assert_eq!(t.conditions[0].expires_at_ms, 3_000);
+        assert_eq!(t.conditions[1].expires_at_ms, 8_000);
+        assert_eq!(t.stacks_of("Burning", 2_999), 5);
+        assert_eq!(t.stacks_of("Burning", 3_000), 3);
+        assert_eq!(t.stacks_of_inclusive("Burning", 3_000), 5);
+        assert_eq!(t.stacks_of("Burning", 8_000), 0);
+        assert_eq!(t.stacks_of_inclusive("Burning", 8_000), 3);
+        t.retain_active(3_000);
+        assert_eq!(t.conditions.len(), 1);
+        assert_eq!(t.conditions[0].stacks, 3);
+    }
+
+    #[test]
+    fn apply_condition_canonical_name_is_interned() {
+        let mut t = TargetState::from_seed(EnemyDummy::open());
+        t.apply_condition("Burning", 1, 1_000, 0, 25);
+        match &t.conditions[0].name {
+            std::borrow::Cow::Borrowed(n) => assert_eq!(*n, "Burning"),
+            std::borrow::Cow::Owned(_) => {
+                panic!("canonical apply must store borrowed interned name")
+            }
+        }
+        t.apply_condition("Poison", 1, 1_000, 0, 25);
+        match &t.conditions[1].name {
+            std::borrow::Cow::Borrowed(n) => assert_eq!(*n, "Poisoned"),
+            std::borrow::Cow::Owned(_) => {
+                panic!("alias apply must store borrowed interned canonical")
+            }
+        }
     }
 
     #[test]
