@@ -40,3 +40,8 @@ REVIEW-FINDINGS*.md
 
 # Machine-local developer settings (see dev.cfg.example).
 /dev.cfg
+
+# Local AI-tooling knowledge assets and worktrees; never shipped.
+/.terrain/
+/.codegraph/
+/.worktrees/
