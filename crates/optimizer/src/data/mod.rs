@@ -6,6 +6,7 @@ pub mod cleanse_sources;
 pub mod combos;
 #[cfg(test)]
 mod consistency_tests;
+pub mod effect_coverage;
 pub mod fight_population;
 pub mod hit_timing;
 pub mod manifests;

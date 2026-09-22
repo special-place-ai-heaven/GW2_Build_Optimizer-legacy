@@ -59,9 +59,9 @@ published builds. Beat meta, measured.
 
 | Measure | Value |
 |---|---|
-| Minor traits with a trigger record | 168 / 243 (145 of them flat "Passive") |
+| Minor traits with a record / executable | 169 / 243, only 34 executable (the rest were coverage placeholders) |
 | Published builds our validator rejects | WvW 5/145, PvE 16/474, PvP 1/121 |
-| Published builds passing all blocking gates | WvW 115/140, PvE 444/458, PvP 103/120 |
+| Published builds passing all blocking gates | WvW 116/140, PvE 444/458, PvP 103/120 |
 | Resource gate abstaining (unmodelled) in WvW | 79 of 140 builds (Ele, Engi, Guardian, Ranger) |
 | Unplatable references | 22 / 740 (site data) |
 | Warrior WvW Havoc Support: best reference vs ours | 0.201 vs 0.295 alignment |

@@ -16,9 +16,12 @@ Source of truth: GW2 API facts + wiki pages, written as
 
 | Number | Now | Target |
 |---|---|---|
-| Minor traits with a record | 168 / 243 | 243 / 243 |
+| Minor traits with a record / executable (not a placeholder) | 169 / 243, executable 34 | 243 / 243 executable |
+| Major traits with a record / executable | 529 / 729, executable 121 | 729 / 729 executable |
+| Rune tier lines / sigils / relics executable | 2 of 642 lines / 7 of 81 / 4 of 128 | all |
+| Profession-mechanic skills / elite skills executable | 1 of 367 / 0 of 133 | all with a proc or effect |
+| Coverage placeholders still typed `Passive` (schema artifact) | 0 (582 migrated to NotApplicable, 2026-09-22) | 0, guarded by validation rule 15 |
 | Minor-trait records that are flat "Passive" but the wiki describes a trigger, interval, combat state or weapon condition | 145 unclassified | 0 (each is either genuinely passive, with the wiki line cited, or a real trigger record) |
-| Major traits with a record | measure first | 729 / 729 |
 | Rune, sigil, relic effects modelled as records (not text parse) | 2 / 3 / 1 records | every tier bonus and proc that the wiki lists |
 | Records lacking duration, ICD or stacking where the wiki gives one | measure | 0 |
 

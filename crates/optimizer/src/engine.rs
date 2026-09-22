@@ -1478,12 +1478,54 @@ fn simulate_prepared_with(
                 ),
                 sigil_sets,
                 weapon_swap_cooldown_ms: wvw_weapon_swap_cooldown_ms(profession_name, validated),
+                equipped_weapons: equipped_weapons(validated, db.professions.get(profession_name)),
                 trace,
             },
         ));
     }
 
     result
+}
+
+/// The build's weapons as the timeline's `Gate::Weapon` reads them: one row
+/// per filled hand, keyed by set. A two-hander fills the main-hand cell and
+/// is reported as [`WeaponHand::TwoHand`], which is how the wiki words the
+/// traits that gate on it.
+///
+/// Two-handedness is the profession's own answer (`weapon_budget`), not a
+/// global type list: Bladesworn's Sword is held in both hands and core
+/// Warrior's is not.
+pub(crate) fn equipped_weapons(
+    validated: &ValidatedBuild,
+    profession: Option<&gw2_api::models::Profession>,
+) -> Vec<crate::rotation::wvw_timeline::EquippedWeapon> {
+    use crate::data::normalized_effects::WeaponHand;
+    use crate::rotation::wvw_timeline::EquippedWeapon;
+
+    let mut out = Vec::new();
+    for (set, weapons) in [
+        (1u8, &validated.weapons.set1),
+        (2u8, &validated.weapons.set2),
+    ] {
+        for (raw, off_hand) in [(&weapons.main_hand, false), (&weapons.off_hand, true)] {
+            let Some(name) = raw.as_deref().map(str::trim).filter(|n| !n.is_empty()) else {
+                continue;
+            };
+            let hand = if off_hand {
+                WeaponHand::Off
+            } else if crate::weapon_budget::is_two_handed(name, profession) {
+                WeaponHand::TwoHand
+            } else {
+                WeaponHand::Main
+            };
+            out.push(EquippedWeapon {
+                set,
+                hand,
+                weapon_type: gw2_core::i18n::weapon_type_key(name),
+            });
+        }
+    }
+    out
 }
 
 /// The timeline's parameters: `params` with each flattened health-gated

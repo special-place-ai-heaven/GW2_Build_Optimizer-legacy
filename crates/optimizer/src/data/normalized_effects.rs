@@ -136,6 +136,16 @@ pub enum EffectCategory {
     CritChancePct,
     /// NeedsMechanic Engine E4: payload creates a clone via IllusionState::spawn.
     SpawnClone,
+    // Sprint 4 (sprints/008-data-driven-simulator, Gate 1)
+    /// The source unlocks a profession mechanic, or replaces one with
+    /// another (Weaver's attunement remap, Bladesworn flow for adrenaline,
+    /// Specter's Siphon for Steal). Recorded as a capability flag on the
+    /// build, never as a stat: it carries no `value`.
+    MechanicUnlock {
+        mechanic: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaces: Option<String>,
+    },
 }
 
 impl EffectCategory {
@@ -167,6 +177,9 @@ pub enum StackingRule {
     Highest,
     /// Effect does not stack — only one instance active at a time.
     NonStacking,
+    /// Gaining a stack refreshes the duration of every stack already held
+    /// (Lethal Tempo). Without it each stack expires on its own clock.
+    RefreshAllStacks,
 }
 
 /// When this effect activates.
@@ -213,6 +226,33 @@ pub enum TriggerRule {
     OnAttunementSwap,
     /// Clone count rose (IllusionState spawn); bus OnCloneCreated.
     OnCloneCreated,
+    // Sprint 4 (sprints/008-data-driven-simulator, Gate 1)
+    /// The record is classified, not executed: the only legal trigger on a
+    /// `coverage` block. It makes no claim about when the source fires.
+    NotApplicable,
+    /// The player blocks an incoming strike.
+    OnBlock,
+    /// The player's Steal (or its elite-spec replacement) resolves.
+    OnSteal,
+    /// The player enters stealth.
+    OnStealthEnter,
+    /// The player leaves stealth.
+    OnStealthExit,
+    /// The player invokes the other legend.
+    OnLegendSwap,
+    /// The player enters berserk mode.
+    OnBerserkEnter,
+    /// One of the player's symbols strikes a foe.
+    OnSymbolHit,
+    /// One of the player's explosions resolves.
+    OnExplosion,
+    /// A boon lands on the player; `boon` narrows it to one name.
+    OnBoonGained {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        boon: Option<String>,
+    },
+    /// The player breaks a stun.
+    OnStunbreak,
 }
 
 /// Health prerequisite of an `OnHealthThreshold` / `Conditional` effect,
@@ -275,6 +315,119 @@ impl Prerequisite {
 pub enum ScaleBy {
     /// Times the number of conditions the same firing removed.
     ConditionsRemoved,
+}
+
+/// Which hand a [`Gate::Weapon`] reads. Absent means any hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WeaponHand {
+    Main,
+    Off,
+    TwoHand,
+}
+
+/// Where the player stands relative to the foe for a [`Gate::Positional`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Positional {
+    Flank,
+    Behind,
+    Front,
+}
+
+/// When a [`Gate::HealthThreshold`] may fire again after it fired once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Rearm {
+    /// Latches: one firing for the whole fight.
+    OncePerFight,
+    /// Re-arms once health leaves the gated band and crosses back in.
+    WhenRecovered,
+    /// The record's `internal_cooldown` is the only limit.
+    Icd,
+}
+
+/// State an [`Gate::Interval`] tick is checked against. The same block a
+/// record's `prerequisite` uses, so there is one evaluator for both.
+pub type StateGate = Prerequisite;
+
+/// A condition that must hold for a record to fire or stay active. A record
+/// carries any number; all of them must hold.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Gate {
+    /// The player is in combat.
+    InCombat,
+    /// At most one firing every `every_ms`, and only while `while_state`
+    /// holds (Natural Mender: astral force while *not* in celestial avatar).
+    Interval {
+        every_ms: u32,
+        #[serde(default, rename = "while", skip_serializing_if = "Option::is_none")]
+        while_state: Option<StateGate>,
+    },
+    /// One of `types` is equipped on the held set, in `hand` when given.
+    Weapon {
+        types: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hand: Option<WeaponHand>,
+    },
+    /// The player strikes from the named side.
+    Positional(Positional),
+    /// At least `min_targets` foes within `radius` of the player.
+    Proximity { radius: f64, min_targets: u32 },
+    /// Player health inside a band, with a re-arm rule.
+    HealthThreshold {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        below_pct: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        above_pct: Option<f64>,
+        rearm: Rearm,
+    },
+    /// The player carries the named boon.
+    SelfBoon { boon: String },
+    /// The player holds at least `min` of the named resource.
+    SelfResourceStacks { resource: String, min: u32 },
+}
+
+/// Live state added to a record's `value` when it fires:
+/// `effective = value + per_unit_or_stack * min(n, cap)`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Scale {
+    /// `n` = distance to the foe in game units (Pure of Sight).
+    PerDistance {
+        per_unit: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cap: Option<f64>,
+    },
+    /// `n` = the player's stacks of the named resource (Alchemic Vigor).
+    PerSelfResourceStack {
+        resource: String,
+        per_stack: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cap: Option<f64>,
+    },
+    /// `n` = the player's stacks of the named boon (Reinforced Potency).
+    PerSelfBoon {
+        boon: String,
+        per_stack: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cap: Option<f64>,
+    },
+}
+
+/// Whose event fires a trigger record. An on-crit record owned by a pet or a
+/// clone must not fire off the player's crits (Pet's Prowess, Sharper Images).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Actor {
+    #[default]
+    Player,
+    Pet,
+    Illusion,
+    /// Any actor the build fields, the player included.
+    Any,
+}
+
+impl Actor {
+    /// Serde skip predicate: the default needs no line in the JSON.
+    pub fn is_player(&self) -> bool {
+        matches!(self, Actor::Player)
+    }
 }
 
 /// Why a trait is classified instead of executed (a record with `coverage`
@@ -521,6 +674,17 @@ pub struct NormalizedEffect {
     /// Ids come from the record payload (trait.skills), never a hardcoded map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cast_skill_id: Option<u32>,
+
+    // Sprint 4 (sprints/008-data-driven-simulator, Gate 1)
+    /// Conditions that must all hold for the record to fire or stay active.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<Gate>,
+    /// Live state added to `value` at firing time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<Scale>,
+    /// Whose event fires this record. Absent means the player's.
+    #[serde(default, skip_serializing_if = "Actor::is_player")]
+    pub actor: Actor,
 }
 
 /// A single normalized effects file for one game mode in a specific patch.
@@ -756,6 +920,112 @@ fn validate_effects_file(file: &NormalizedEffectsFile) -> Result<(), NormalizedE
         {
             return fail("scale_by is only for GainsLifeForce or Heal");
         }
+
+        // Sprint 4 (sprints/008-data-driven-simulator, Gate 1)
+        // 15. A coverage block makes no claim about when the source fires,
+        // and NotApplicable is not a trigger anywhere else. Without this
+        // pair a required field's filler value reads back as a fact.
+        let is_not_applicable = effect.trigger_rule == TriggerRule::NotApplicable;
+        if effect.coverage.is_some() != is_not_applicable {
+            return fail(if is_not_applicable {
+                "NotApplicable trigger_rule is only for a coverage block"
+            } else {
+                "a coverage block requires trigger_rule NotApplicable"
+            });
+        }
+        // 16. A mechanic unlock is a capability, not a number.
+        if let EffectCategory::MechanicUnlock { mechanic, .. } = payload {
+            if mechanic.trim().is_empty() {
+                return fail("MechanicUnlock requires a mechanic name");
+            }
+            if effect.value.is_resolved() {
+                return fail("MechanicUnlock carries no value");
+            }
+        }
+        // 17. Every gate says something executable.
+        for gate in &effect.gates {
+            match gate {
+                Gate::Interval { every_ms, .. } if *every_ms == 0 => {
+                    return fail("Interval gate requires every_ms > 0")
+                }
+                Gate::Weapon { types, .. } => {
+                    if types.is_empty() {
+                        return fail("Weapon gate requires at least one weapon type");
+                    }
+                    if let Some(bad) = types
+                        .iter()
+                        .find(|t| !super::weapon_hands::is_weapon_type(t))
+                    {
+                        return fail(&format!("Weapon gate names unknown weapon type '{bad}'"));
+                    }
+                }
+                Gate::Proximity {
+                    radius,
+                    min_targets,
+                } if *radius <= 0.0 || *min_targets == 0 => {
+                    return fail("Proximity gate requires radius > 0 and min_targets >= 1")
+                }
+                Gate::HealthThreshold {
+                    below_pct,
+                    above_pct,
+                    ..
+                } => {
+                    if below_pct.is_none() && above_pct.is_none() {
+                        return fail("HealthThreshold gate requires below_pct or above_pct");
+                    }
+                    if let Some(pct) = [*below_pct, *above_pct]
+                        .into_iter()
+                        .flatten()
+                        .find(|pct| !(1.0..=99.0).contains(pct))
+                    {
+                        return fail(&format!(
+                            "HealthThreshold gate percent {pct} is outside 1..=99"
+                        ));
+                    }
+                }
+                // A boon the formula table does not know is a typo that
+                // would otherwise read as a gate that simply never opens.
+                Gate::SelfBoon { boon } if super::boons().get(boon).is_none() => {
+                    return fail(&format!("SelfBoon gate names unknown boon '{boon}'"))
+                }
+                Gate::SelfResourceStacks { resource, min }
+                    if resource.trim().is_empty() || *min == 0 =>
+                {
+                    return fail("SelfResourceStacks gate requires a resource and min >= 1")
+                }
+                _ => {}
+            }
+        }
+        // 18. A scale that scales by nothing is a typo.
+        if let Some(scale) = &effect.scale {
+            let (step, cap, name) = match scale {
+                Scale::PerDistance { per_unit, cap } => (*per_unit, *cap, ""),
+                Scale::PerSelfResourceStack {
+                    resource,
+                    per_stack,
+                    cap,
+                } => (*per_stack, *cap, resource.as_str()),
+                Scale::PerSelfBoon {
+                    boon,
+                    per_stack,
+                    cap,
+                } => (*per_stack, *cap, boon.as_str()),
+            };
+            if !step.is_finite() || step == 0.0 {
+                return fail("scale step must be finite and non-zero");
+            }
+            if cap.is_some_and(|c| c <= 0.0) {
+                return fail("scale cap must be positive");
+            }
+            if !matches!(scale, Scale::PerDistance { .. }) && name.trim().is_empty() {
+                return fail("scale requires a resource or boon name");
+            }
+            if let Scale::PerSelfBoon { boon, .. } = scale {
+                if super::boons().get(boon).is_none() {
+                    return fail(&format!("PerSelfBoon scale names unknown boon '{boon}'"));
+                }
+            }
+        }
     }
 
     Ok(())
@@ -830,6 +1100,9 @@ mod tests {
             derived_from: Vec::new(),
             coverage: None,
             cast_skill_id: None,
+            gates: Vec::new(),
+            scale: None,
+            actor: Actor::Player,
         }
     }
 
@@ -874,6 +1147,9 @@ mod tests {
             derived_from: Vec::new(),
             coverage: None,
             cast_skill_id: None,
+            gates: Vec::new(),
+            scale: None,
+            actor: Actor::Player,
         }
     }
 
@@ -1462,6 +1738,9 @@ mod tests {
 
         let mut cov = minimal_effect("coverage");
         cov.value = FactualValue::Unknown;
+        // Sprint 4 rule 15: a coverage block makes no claim about when the
+        // source fires, so `Passive` is no longer legal filler here.
+        cov.trigger_rule = TriggerRule::NotApplicable;
         cov.coverage = Some(CoverageBlock {
             class: CoverageClass::NeedsMechanic,
             mechanic: Some("minions".into()),
@@ -1493,6 +1772,252 @@ mod tests {
         e.inner_category = Some(EffectCategory::GainsLifeForce);
         e.trigger_rule = TriggerRule::OnShroudExit;
         assert!(validate_effects_file(&wvw_file(vec![e])).is_ok());
+    }
+
+    // Sprint 4 (sprints/008-data-driven-simulator, Gate 1)
+
+    /// The cheapest and most load-bearing rule of the gate: a coverage block
+    /// says nothing about when its source fires, so the required field cannot be
+    /// filled with `Passive` and read back later as 145 passive minor traits.
+    #[test]
+    fn coverage_pairs_with_not_applicable_and_nothing_else() {
+        let mut cov = minimal_effect("coverage");
+        cov.value = FactualValue::Unknown;
+        cov.trigger_rule = TriggerRule::NotApplicable;
+        cov.coverage = Some(CoverageBlock {
+            class: CoverageClass::NeedsMechanic,
+            mechanic: Some("celestial avatar".into()),
+        });
+        assert!(validate_effects_file(&wvw_file(vec![cov.clone()])).is_ok());
+
+        let mut passive = cov.clone();
+        passive.trigger_rule = TriggerRule::Passive;
+        rejected(
+            passive,
+            "a coverage block requires trigger_rule NotApplicable",
+        );
+
+        let mut loose = minimal_effect("loose");
+        loose.trigger_rule = TriggerRule::NotApplicable;
+        rejected(
+            loose,
+            "NotApplicable trigger_rule is only for a coverage block",
+        );
+    }
+
+    #[test]
+    fn gate_and_scale_validation_rejects_with_their_text() {
+        let gated = |gate: Gate| {
+            let mut e = minimal_effect("gated");
+            e.gates = vec![gate];
+            e
+        };
+        rejected(
+            gated(Gate::Interval {
+                every_ms: 0,
+                while_state: None,
+            }),
+            "Interval gate requires every_ms > 0",
+        );
+        rejected(
+            gated(Gate::Weapon {
+                types: Vec::new(),
+                hand: None,
+            }),
+            "Weapon gate requires at least one weapon type",
+        );
+        rejected(
+            gated(Gate::Weapon {
+                types: vec!["Chainsaw".into()],
+                hand: None,
+            }),
+            "Weapon gate names unknown weapon type 'Chainsaw'",
+        );
+        rejected(
+            gated(Gate::Proximity {
+                radius: 0.0,
+                min_targets: 1,
+            }),
+            "Proximity gate requires radius > 0",
+        );
+        rejected(
+            gated(Gate::HealthThreshold {
+                below_pct: None,
+                above_pct: None,
+                rearm: Rearm::Icd,
+            }),
+            "HealthThreshold gate requires below_pct or above_pct",
+        );
+        rejected(
+            gated(Gate::HealthThreshold {
+                below_pct: Some(100.0),
+                above_pct: None,
+                rearm: Rearm::Icd,
+            }),
+            "outside 1..=99",
+        );
+        rejected(
+            gated(Gate::SelfResourceStacks {
+                resource: "initiative".into(),
+                min: 0,
+            }),
+            "SelfResourceStacks gate requires a resource and min >= 1",
+        );
+        // A real weapon on a real hand is accepted.
+        assert!(validate_effects_file(&wvw_file(vec![gated(Gate::Weapon {
+            types: vec!["Torch".into(), "Greatsword".into()],
+            hand: Some(WeaponHand::Off),
+        })]))
+        .is_ok());
+
+        let mut zero_step = minimal_effect("scale");
+        zero_step.scale = Some(Scale::PerDistance {
+            per_unit: 0.0,
+            cap: None,
+        });
+        rejected(zero_step, "scale step must be finite and non-zero");
+        let mut bad_cap = minimal_effect("scale");
+        bad_cap.scale = Some(Scale::PerSelfBoon {
+            boon: "Might".into(),
+            per_stack: 1.0,
+            cap: Some(0.0),
+        });
+        rejected(bad_cap, "scale cap must be positive");
+        let mut nameless = minimal_effect("scale");
+        nameless.scale = Some(Scale::PerSelfResourceStack {
+            resource: "  ".into(),
+            per_stack: 1.0,
+            cap: None,
+        });
+        rejected(nameless, "scale requires a resource or boon name");
+
+        // A boon name the formula table does not know would otherwise be a gate
+        // that silently never opens.
+        rejected(
+            gated(Gate::SelfBoon {
+                boon: "Quackness".into(),
+            }),
+            "SelfBoon gate names unknown boon 'Quackness'",
+        );
+        assert!(validate_effects_file(&wvw_file(vec![gated(Gate::SelfBoon {
+            boon: "Quickness".into(),
+        })]))
+        .is_ok());
+        let mut bad_boon = minimal_effect("scale");
+        bad_boon.scale = Some(Scale::PerSelfBoon {
+            boon: "Mihgt".into(),
+            per_stack: 1.0,
+            cap: None,
+        });
+        rejected(bad_boon, "PerSelfBoon scale names unknown boon 'Mihgt'");
+    }
+
+    #[test]
+    fn mechanic_unlock_is_a_capability_not_a_number() {
+        let mut unlock = minimal_effect("unlock");
+        unlock.category = EffectCategory::MechanicUnlock {
+            mechanic: "Attunement".into(),
+            replaces: Some("Dual Attunement".into()),
+        };
+        unlock.value = FactualValue::Unknown;
+        assert!(validate_effects_file(&wvw_file(vec![unlock.clone()])).is_ok());
+
+        let mut valued = unlock.clone();
+        valued.value = FactualValue::Resolved(5.0);
+        rejected(valued, "MechanicUnlock carries no value");
+
+        let mut nameless = unlock;
+        nameless.category = EffectCategory::MechanicUnlock {
+            mechanic: " ".into(),
+            replaces: None,
+        };
+        rejected(nameless, "MechanicUnlock requires a mechanic name");
+    }
+
+    #[test]
+    fn sprint4_fields_roundtrip_and_stay_absent_by_default() {
+        let plain = minimal_effect("plain");
+        let json = serde_json::to_string(&plain).expect("serialize");
+        for absent in ["gates", "scale", "actor"] {
+            assert!(!json.contains(absent), "{absent} must not be written");
+        }
+        assert_eq!(
+            serde_json::from_str::<NormalizedEffect>(&json).expect("parse"),
+            plain
+        );
+
+        let mut full = minimal_effect("full");
+        full.actor = Actor::Illusion;
+        full.stacking_rule = StackingRule::RefreshAllStacks;
+        full.trigger_rule = TriggerRule::OnBoonGained {
+            boon: Some("Fury".into()),
+        };
+        full.gates = vec![
+            Gate::InCombat,
+            Gate::Interval {
+                every_ms: 3_000,
+                while_state: Some(StateGate {
+                    in_shroud: Some(false),
+                    ..Default::default()
+                }),
+            },
+            Gate::Weapon {
+                types: vec!["Torch".into()],
+                hand: Some(WeaponHand::Off),
+            },
+            Gate::Positional(Positional::Behind),
+            Gate::Proximity {
+                radius: 360.0,
+                min_targets: 3,
+            },
+            Gate::HealthThreshold {
+                below_pct: Some(50.0),
+                above_pct: None,
+                rearm: Rearm::WhenRecovered,
+            },
+            Gate::SelfBoon {
+                boon: "Quickness".into(),
+            },
+            Gate::SelfResourceStacks {
+                resource: "initiative".into(),
+                min: 3,
+            },
+        ];
+        full.scale = Some(Scale::PerSelfResourceStack {
+            resource: "initiative".into(),
+            per_stack: 2.0,
+            cap: Some(10.0),
+        });
+        let json = serde_json::to_string(&full).expect("serialize");
+        assert!(json.contains("\"while\""), "the state gate keeps its key");
+        assert_eq!(
+            serde_json::from_str::<NormalizedEffect>(&json).expect("parse"),
+            full
+        );
+    }
+
+    /// The schema grew; the data did not. Every shipped record still parses and
+    /// the counts are the ones the migration left behind.
+    #[test]
+    fn gate1_record_counts_are_unchanged() {
+        for (json, mode, expected) in [
+            (PVE_EFFECTS_JSON, "PvE", 30),
+            (PVP_EFFECTS_JSON, "PvP", 14),
+            (WVW_EFFECTS_JSON, "WvW", 779),
+        ] {
+            let file = load_effects_file(json).expect("embedded file loads");
+            assert_eq!(file.mode, mode);
+            assert_eq!(file.effects.len(), expected, "{mode} record count moved");
+        }
+        // 582 WvW coverage blocks carried `Passive` as required-field filler
+        // before the migration; all of them now say NotApplicable.
+        let wvw = load_effects_file(WVW_EFFECTS_JSON).expect("WvW loads");
+        let coverage = wvw.effects.iter().filter(|e| e.coverage.is_some()).count();
+        assert_eq!(coverage, 582);
+        assert!(wvw
+            .effects
+            .iter()
+            .all(|e| (e.trigger_rule == TriggerRule::NotApplicable) == e.coverage.is_some()));
     }
 
     /// Sprint 3: the fourteen Sprint 2 WvW records load unchanged.

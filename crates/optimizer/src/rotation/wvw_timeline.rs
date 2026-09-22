@@ -9,9 +9,11 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::data::fight_population::FightPopulation;
 use crate::data::normalized_effects::{
+    Actor, Gate, Prerequisite, Rearm, Scale, ScaleBy, StackingRule, WeaponHand,
+};
+use crate::data::normalized_effects::{
     EffectCategory, NormalizedEffect, OperationType, SourceType, TargetSide, TriggerRule,
 };
-use crate::data::normalized_effects::{Prerequisite, ScaleBy};
 use crate::data::quality::{CoverageEntry, FactualValue};
 use crate::scenario::{CombatKind, CombatTier, ScenarioSpec};
 
@@ -397,6 +399,9 @@ pub struct WvwTimelineInput<'a> {
     /// Exact in-combat weapon swap cooldown for this profession. `None`
     /// means the active specialization cannot swap weapons in combat.
     pub weapon_swap_cooldown_ms: Option<u32>,
+    /// What the build wears in each hand of each set, so a record's
+    /// `Gate::Weapon` can read the held kit (Destructive Impulses).
+    pub equipped_weapons: Vec<EquippedWeapon>,
     /// Record a bounded [`TraceEvent`] log on the report. Diagnostics only:
     /// no production caller sets this — `engine::simulate_prepared` passes
     /// `false`, the search and the Choya tools go through it, and nothing
@@ -668,6 +673,24 @@ struct ProcSpec {
     cast_skill_id: Option<u32>,
     /// Max stacks for timed stacking damage buffs (Compounding Power).
     max_stacks: u32,
+    // Sprint 4 (sprints/008-data-driven-simulator, Gate 1)
+    /// Every gate must hold at the trigger; a gate that carries state
+    /// (interval, health re-arm) keeps it here.
+    gates: Vec<GateState>,
+    /// Live state added to `value` when the record fires.
+    scale: Option<Scale>,
+    /// How a stack gained from this record treats the stacks already held.
+    stacking_rule: StackingRule,
+}
+
+/// One of a record's gates plus the state it needs across firings.
+#[derive(Debug, Clone)]
+struct GateState {
+    gate: Gate,
+    /// `Gate::Interval`: the next moment the gate opens.
+    next_ms: u32,
+    /// `Gate::HealthThreshold`: the gate has fired and is waiting to re-arm.
+    latched: bool,
 }
 
 /// A rune or relic strike bonus that holds only while its prerequisite does
@@ -689,6 +712,12 @@ struct ConditionalSpec {
     active: bool,
     stacks: u32,
     expires_at_ms: u32,
+    // Sprint 4 (sprints/008-data-driven-simulator, Gate 1)
+    /// One expiry per held stack. `StackingRule::RefreshAllStacks` resets
+    /// every entry when a stack is gained; any other rule lets each stack
+    /// run out on its own clock (wiki `Effect stacking`, intensity).
+    stack_expiries: Vec<u32>,
+    stacking_rule: StackingRule,
 }
 
 enum ConditionalKind {
@@ -909,6 +938,16 @@ struct Timeline<'a> {
     weapon_set_before_shroud: u8,
     /// Entry skills already refused once (one reason line each).
     shroud_refused: HashSet<u32>,
+    // Sprint 4 (sprints/008-data-driven-simulator, Gate 1)
+    /// When the player entered combat: the first cast started or the
+    /// first enemy event landed. `None` until then, which is what a
+    /// record's `Gate::InCombat` reads.
+    combat_started_ms: Option<u32>,
+    /// The build's weapons, for `Gate::Weapon`.
+    equipped_weapons: Vec<EquippedWeapon>,
+    /// Any loaded record carries a gate that changes between ticks, so
+    /// the tick only walks the specs when there is something to walk.
+    has_gate_state: bool,
 }
 
 /// Run the WvW exchange model. Effects resolve at cast completion, so incoming
@@ -930,6 +969,7 @@ pub fn evaluate_wvw_timeline(input: WvwTimelineInput<'_>) -> WvwCombatReport {
         population,
         sigil_sets,
         weapon_swap_cooldown_ms,
+        equipped_weapons,
         trace,
     } = input;
     let profile = WvwProfile::for_scenario(scenario, &enemy, params, duration_ms);
@@ -944,6 +984,7 @@ pub fn evaluate_wvw_timeline(input: WvwTimelineInput<'_>) -> WvwCombatReport {
         coverage,
     );
     timeline.weapon_swap_cooldown_ms = weapon_swap_cooldown_ms;
+    timeline.equipped_weapons = equipped_weapons;
     timeline.resource_model_gaps = resource_model_gaps;
     timeline.profession = profession;
     timeline.assign_sigil_sets(&sigil_sets);
@@ -977,6 +1018,7 @@ pub fn evaluate_wvw_timeline(input: WvwTimelineInput<'_>) -> WvwCombatReport {
                 Vec::new(),
             );
             trial.weapon_swap_cooldown_ms = weapon_swap_cooldown_ms;
+            trial.equipped_weapons = timeline.equipped_weapons.clone();
             trial.assign_sigil_sets(&sigil_sets);
             trial.population = population;
             trial.opener = opener;
@@ -1128,17 +1170,36 @@ impl<'a> Timeline<'a> {
             in_shroud: None,
             weapon_set_before_shroud: 1,
             shroud_refused: HashSet::new(),
+            combat_started_ms: None,
+            equipped_weapons: Vec::new(),
+            has_gate_state: false,
         };
         state.load_normalized_effects(active_effects);
         state.has_periodic = state
             .proc_specs
             .iter()
             .any(|spec| matches!(spec.trigger, TriggerRule::Periodic));
+        state.has_gate_state = state.proc_specs.iter().any(|spec| {
+            spec.gates
+                .iter()
+                .any(|g| matches!(g.gate, Gate::HealthThreshold { .. }))
+        });
         state
     }
 
     fn load_normalized_effects(&mut self, effects: &[&NormalizedEffect]) {
         for effect in effects {
+            if matches!(effect.trigger_rule, TriggerRule::NotApplicable) {
+                // A coverage block claims nothing: the caller already
+                // put its class on the coverage line.
+                continue;
+            }
+            // Doctrine rule 6: a record the timeline has no state for
+            // abstains naming the missing piece, never silently.
+            if let Some(reason) = unexecutable_reason(effect) {
+                self.note_unmodeled(format!("{} ({reason})", effect.source_name));
+                continue;
+            }
             if matches!(effect.trigger_rule, TriggerRule::Passive) {
                 // Standing modifiers are already folded into SimParams by the
                 // shared combat parser. Applying them here would count the same
@@ -1190,6 +1251,8 @@ impl<'a> Timeline<'a> {
                     active: false,
                     stacks: 0,
                     expires_at_ms: 0,
+                    stack_expiries: Vec::new(),
+                    stacking_rule: effect.stacking_rule.clone(),
                 });
                 continue;
             }
@@ -1217,6 +1280,8 @@ impl<'a> Timeline<'a> {
                     active: false,
                     stacks: 0,
                     expires_at_ms: 0,
+                    stack_expiries: Vec::new(),
+                    stacking_rule: effect.stacking_rule.clone(),
                 });
                 continue;
             }
@@ -1241,6 +1306,8 @@ impl<'a> Timeline<'a> {
                     active: false,
                     stacks: 0,
                     expires_at_ms: 0,
+                    stack_expiries: Vec::new(),
+                    stacking_rule: effect.stacking_rule.clone(),
                 });
                 continue;
             }
@@ -1268,6 +1335,8 @@ impl<'a> Timeline<'a> {
                     active: false,
                     stacks: 0,
                     expires_at_ms: 0,
+                    stack_expiries: Vec::new(),
+                    stacking_rule: effect.stacking_rule.clone(),
                 });
                 continue;
             }
@@ -1298,6 +1367,8 @@ impl<'a> Timeline<'a> {
                     active: false,
                     stacks: 0,
                     expires_at_ms: 0,
+                    stack_expiries: Vec::new(),
+                    stacking_rule: effect.stacking_rule.clone(),
                 });
                 continue;
             }
@@ -1323,6 +1394,9 @@ impl<'a> Timeline<'a> {
                     | TriggerRule::OnThreshold
                     | TriggerRule::OnAttunementSwap
                     | TriggerRule::OnCloneCreated
+                    | TriggerRule::OnLegendSwap
+                    | TriggerRule::OnStunbreak
+                    | TriggerRule::OnBoonGained { .. }
             ) || (matches!(effect.trigger_rule, TriggerRule::OnSkillUse)
                 // A skill's own record, or a trait's that names its skills (US2).
                 && (matches!(effect.source_type, SourceType::Skill) || scoped));
@@ -1413,6 +1487,22 @@ impl<'a> Timeline<'a> {
                     .and_then(resolved)
                     .copied()
                     .unwrap_or(0),
+                gates: effect
+                    .gates
+                    .iter()
+                    .map(|gate| GateState {
+                        // An interval opens after one full period, not
+                        // at t=0: three firings in ten seconds at 3 s.
+                        next_ms: match gate {
+                            Gate::Interval { every_ms, .. } => *every_ms,
+                            _ => 0,
+                        },
+                        gate: gate.clone(),
+                        latched: false,
+                    })
+                    .collect(),
+                scale: effect.scale.clone(),
+                stacking_rule: effect.stacking_rule.clone(),
             });
         }
     }
@@ -1420,6 +1510,9 @@ impl<'a> Timeline<'a> {
     fn run(&mut self) {
         while self.now_ms < self.profile.duration_ms && self.player_health > 0.0 {
             self.charge_cover_consumed_this_tick = false;
+            if self.has_gate_state {
+                self.rearm_health_gates();
+            }
             self.expire_timed_state();
             self.regenerate_resources();
             self.tick_endurance_and_dodge();
@@ -1616,6 +1709,7 @@ impl<'a> Timeline<'a> {
     }
 
     fn start_cast(&mut self, skill_idx: usize) {
+        self.combat_started_ms.get_or_insert(self.now_ms);
         let skill = &self.skills[skill_idx];
         self.pay_resource(skill.skill_id);
         if matches!(skill.slot, super::SkillSlot::Elite) {
@@ -1911,6 +2005,7 @@ impl<'a> Timeline<'a> {
         self.resource_blocked_skills.remove(&skill_id);
         self.set_skill_cooldown(skill_id, self.skills[idx].cooldown_ms);
         self.disabled_until_ms = self.now_ms;
+        self.trigger_procs(TriggerRule::OnStunbreak, Some(skill_id), false, 1.0);
         self.next_action_ms = self.at(MIN_SKILL_GAP_MS);
         self.successful_action_count += 1;
         let first_damage_event = self.damage_events.len();
@@ -1967,6 +2062,7 @@ impl<'a> Timeline<'a> {
             if self.target.disabled_until_ms > self.now_ms {
                 continue;
             }
+            self.combat_started_ms.get_or_insert(self.now_ms);
             match event.kind {
                 EnemyEventKind::Strike {
                     damage,
@@ -2779,6 +2875,7 @@ impl<'a> Timeline<'a> {
             self.apply_defense(kind, duration, stacks, true);
         }
         self.status_trigger(TriggerRule::OnBoonApplied, name, None, false);
+        self.status_trigger(TriggerRule::OnBoonGained { boon: None }, name, None, false);
     }
 
     fn apply_defense(&mut self, kind: CoverKind, duration_ms: u32, stacks: u32, strippable: bool) {
@@ -3072,12 +3169,15 @@ impl<'a> Timeline<'a> {
                     }
                 }
                 ConditionalKind::Stacking { .. } => {
-                    if spec.stacks > 0 && spec.expires_at_ms <= now {
-                        spec.stacks = 0;
+                    let before = spec.stacks;
+                    spec.stack_expiries.retain(|at| *at > now);
+                    spec.stacks = spec.stack_expiries.len() as u32;
+                    spec.expires_at_ms = spec.stack_expiries.iter().copied().max().unwrap_or(0);
+                    if spec.stacks < before {
                         changes.push((
                             spec.source_name.clone(),
-                            false,
-                            "stacks expired".to_string(),
+                            spec.stacks > 0,
+                            format!("{} of {before} stacks expired", before - spec.stacks),
                         ));
                     }
                 }
@@ -3270,6 +3370,156 @@ impl<'a> Timeline<'a> {
         Ok(())
     }
 
+    /// Every gate on a record must hold at the trigger. Read-only on purpose:
+    /// a gate that keeps state (an interval slot, a threshold latch) only
+    /// advances in [`Self::commit_gates`], once the record has actually fired,
+    /// so a refusal elsewhere does not burn the slot.
+    fn gates_hold(&self, gates: &[GateState], held_set: u8) -> Result<(), String> {
+        for state in gates {
+            match &state.gate {
+                Gate::InCombat => {
+                    if self.combat_started_ms.is_none() {
+                        return Err("out of combat".to_string());
+                    }
+                }
+                Gate::Interval { while_state, .. } => {
+                    if self.now_ms < state.next_ms {
+                        return Err(format!("interval not due until {} ms", state.next_ms));
+                    }
+                    if let Some(want) = while_state {
+                        if let Err(reason) = self.prerequisite_holds(want) {
+                            return Err(reason.detail(want));
+                        }
+                    }
+                }
+                Gate::Weapon { types, hand } => {
+                    let wanted: Vec<String> = types
+                        .iter()
+                        .map(|t| gw2_core::i18n::weapon_type_key(t))
+                        .collect();
+                    let held = self.equipped_weapons.iter().any(|w| {
+                        w.set == held_set
+                            && hand.is_none_or(|want| w.hand == want)
+                            && wanted.contains(&w.weapon_type)
+                    });
+                    if !held {
+                        return Err(format!("no {} on the held set", types.join("/")));
+                    }
+                }
+                // Abstentions, not passes: `unexecutable_reason` keeps these
+                // records off the proc list, and this arm is the backstop.
+                Gate::Positional(side) => {
+                    return Err(format!("gate not yet modelled: {side:?} facing"))
+                }
+                Gate::Proximity { .. } => {
+                    return Err("gate not yet modelled: foe distance".to_string())
+                }
+                Gate::HealthThreshold {
+                    below_pct,
+                    above_pct,
+                    rearm,
+                } => {
+                    if state.latched && !matches!(rearm, Rearm::Icd) {
+                        return Err("threshold already fired".to_string());
+                    }
+                    let pct = 100.0 * self.player_health / self.params.max_health.max(1.0);
+                    if !health_in_band(pct, *below_pct, *above_pct) {
+                        return Err(format!("health {pct:.0}% outside the gate"));
+                    }
+                }
+                Gate::SelfBoon { boon } => {
+                    let carried = self.buffs.iter().any(|b| {
+                        b.name.eq_ignore_ascii_case(boon) && b.expires_at_ms > self.now_ms
+                    });
+                    if !carried {
+                        return Err(format!("no {boon}"));
+                    }
+                }
+                Gate::SelfResourceStacks { resource, min } => {
+                    let Some(kind) = resource_kind_by_name(resource) else {
+                        return Err(format!("resource not yet modelled: {resource}"));
+                    };
+                    if self.resources.get(&kind).copied().unwrap_or(0.0) < f64::from(*min) {
+                        return Err(format!("under {min} {resource}"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Advance the state of every gate a firing consumed.
+    fn commit_gates(&mut self, idx: usize) {
+        let now = self.now_ms;
+        for state in self.proc_specs[idx].gates.iter_mut() {
+            match &state.gate {
+                Gate::Interval { every_ms, .. } => {
+                    state.next_ms = now.saturating_add(*every_ms);
+                }
+                // `Icd` leaves the record's own cooldown as the only limit.
+                Gate::HealthThreshold { rearm, .. } => {
+                    state.latched = !matches!(rearm, Rearm::Icd);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// `Rearm::WhenRecovered`: a latched health gate re-arms once health leaves
+    /// the band it fired in. Without this a gate that fires on every crossing is
+    /// indistinguishable from one that latches for the fight.
+    fn rearm_health_gates(&mut self) {
+        let pct = 100.0 * self.player_health / self.params.max_health.max(1.0);
+        for spec in self.proc_specs.iter_mut() {
+            for state in spec.gates.iter_mut() {
+                let Gate::HealthThreshold {
+                    below_pct,
+                    above_pct,
+                    rearm: Rearm::WhenRecovered,
+                } = &state.gate
+                else {
+                    continue;
+                };
+                if state.latched && !health_in_band(pct, *below_pct, *above_pct) {
+                    state.latched = false;
+                }
+            }
+        }
+    }
+
+    /// A record's `value` plus what the live state adds at firing time.
+    fn scaled_value(&self, value: f64, scale: Option<&Scale>) -> f64 {
+        let (step, cap, n) = match scale {
+            None => return value,
+            // Never loaded: `unexecutable_reason` abstains on it.
+            Some(Scale::PerDistance { .. }) => return value,
+            Some(Scale::PerSelfResourceStack {
+                resource,
+                per_stack,
+                cap,
+            }) => {
+                let held = resource_kind_by_name(resource)
+                    .and_then(|kind| self.resources.get(&kind).copied())
+                    .unwrap_or(0.0);
+                (*per_stack, *cap, held)
+            }
+            Some(Scale::PerSelfBoon {
+                boon,
+                per_stack,
+                cap,
+            }) => {
+                let held: f64 = self
+                    .buffs
+                    .iter()
+                    .filter(|b| b.name.eq_ignore_ascii_case(boon) && b.expires_at_ms > self.now_ms)
+                    .map(|b| f64::from(b.stacks))
+                    .sum();
+                (*per_stack, *cap, held)
+            }
+        };
+        value + step * cap.map_or(n, |c| n.min(c))
+    }
+
     /// End of fight: a shroud record that never fired because no shroud was
     /// entered goes on the coverage line with that reason (spec edge case).
     fn note_never_fired(&mut self) {
@@ -3380,8 +3630,7 @@ impl<'a> Timeline<'a> {
                 continue;
             }
             let spec = &mut self.conditional_specs[idx];
-            spec.stacks = (spec.stacks + 1).min(max);
-            spec.expires_at_ms = now.saturating_add(duration_ms);
+            gain_stack(spec, now, duration_ms, max);
             gained.push((spec.source_name.clone(), format!("{}/{max}", spec.stacks)));
         }
         for (name, detail) in gained {
@@ -3455,16 +3704,27 @@ impl<'a> Timeline<'a> {
         let mut ready = Vec::new();
         let mut on_cooldown = Vec::new();
         let mut skipped_prerequisite = Vec::new();
+        let mut skipped_gate: Vec<(usize, String)> = Vec::new();
         let held_set = self.held_set_for(activating_skill_id);
         for (idx, proc_spec) in self.proc_specs.iter().enumerate() {
             let source_matches = !matches!(proc_spec.source_type, SourceType::Skill)
                 || activating_skill_id == Some(proc_spec.source_id);
             let set_held = proc_spec.weapon_set == 0 || proc_spec.weapon_set == held_set;
             let scope_ok = self.scope_admits(&proc_spec.scope, activating_skill_id);
+            // `OnBoonGained { boon }` narrows which boon fires it; the
+            // emitting site names the boon in `trigger_status`.
+            let boon_ok = match &proc_spec.trigger {
+                TriggerRule::OnBoonGained { boon: Some(want) } => self
+                    .trigger_status
+                    .as_deref()
+                    .is_some_and(|got| got.eq_ignore_ascii_case(want)),
+                _ => true,
+            };
             if !same_trigger(&proc_spec.trigger, &trigger)
                 || !source_matches
                 || !set_held
                 || !scope_ok
+                || !boon_ok
             {
                 continue;
             }
@@ -3486,8 +3746,31 @@ impl<'a> Timeline<'a> {
                 .map_or(Ok(()), |p| self.prerequisite_holds(p))
             {
                 skipped_prerequisite.push((idx, reason));
+            } else if let Err(why) = self.gates_hold(&proc_spec.gates, held_set) {
+                skipped_gate.push((idx, why));
             } else {
                 ready.push(idx);
+            }
+        }
+        for (idx, why) in skipped_gate {
+            // Same rhythm as a refused prerequisite: a periodic record
+            // re-checks at its next interval, and the trace carries one
+            // line per change of reason.
+            if matches!(trigger, TriggerRule::Periodic) {
+                let spec = &mut self.proc_specs[idx];
+                spec.next_ready_ms = self
+                    .now_ms
+                    .saturating_add(spec.internal_cooldown_ms.max(TIMELINE_TICK_MS));
+            }
+            if !self.trace_enabled {
+                continue;
+            }
+            let name = self.proc_specs[idx].source_name.clone();
+            self.prerequisite_refused.insert(name.clone());
+            if self.last_prerequisite_skip.get(&name) != Some(&why) {
+                self.last_prerequisite_skip
+                    .insert(name.clone(), why.clone());
+                self.trace(TraceKind::ProcSkippedPrerequisite, &name, why);
             }
         }
         for (idx, reason) in skipped_prerequisite {
@@ -3547,6 +3830,8 @@ impl<'a> Timeline<'a> {
             if p <= 0.0 {
                 continue;
             }
+            let scale = self.proc_specs[idx].scale.clone();
+            let scaled = self.scaled_value(self.proc_specs[idx].value, scale.as_ref());
             let (category, value, duration_ms, operation, name, cast_skill_id) = {
                 let proc_spec = &mut self.proc_specs[idx];
                 proc_spec.mass += p;
@@ -3557,13 +3842,14 @@ impl<'a> Timeline<'a> {
                 }
                 (
                     proc_spec.category.clone(),
-                    proc_spec.value,
+                    scaled,
                     proc_spec.duration_ms,
                     proc_spec.operation.clone(),
                     proc_spec.source_name.clone(),
                     proc_spec.cast_skill_id,
                 )
             };
+            self.commit_gates(idx);
             // E2 cast scheduler: apply lesser SkillEffects; do not emit OnElite
             // here — elite already emitted at cast start. CrowdControl inside
             // the lesser still goes through land_foe_disable.
@@ -3605,18 +3891,19 @@ impl<'a> Timeline<'a> {
                             spec.source_name == name && spec.condition_damage == is_condi
                         }) {
                             Some(spec) => {
-                                if let ConditionalKind::Stacking { max: m, .. } = spec.kind {
-                                    spec.stacks = (spec.stacks + 1).min(m);
-                                } else {
-                                    spec.stacks = (spec.stacks + 1).min(max);
-                                    spec.kind = ConditionalKind::Stacking {
-                                        max,
-                                        duration_ms,
-                                        scope: Default::default(),
-                                        hit_fed: false,
-                                    };
-                                }
-                                spec.expires_at_ms = until;
+                                let cap = match spec.kind {
+                                    ConditionalKind::Stacking { max: m, .. } => m,
+                                    _ => {
+                                        spec.kind = ConditionalKind::Stacking {
+                                            max,
+                                            duration_ms,
+                                            scope: Default::default(),
+                                            hit_fed: false,
+                                        };
+                                        max
+                                    }
+                                };
+                                gain_stack(spec, self.now_ms, duration_ms, cap);
                                 spec.active = true;
                             }
                             None => self.conditional_specs.push(ConditionalSpec {
@@ -3634,6 +3921,8 @@ impl<'a> Timeline<'a> {
                                 active: true,
                                 stacks: 1,
                                 expires_at_ms: until,
+                                stack_expiries: vec![until],
+                                stacking_rule: self.proc_specs[idx].stacking_rule.clone(),
                             }),
                         }
                         self.update_conditionals();
@@ -3660,6 +3949,8 @@ impl<'a> Timeline<'a> {
                                 active: false,
                                 stacks: 0,
                                 expires_at_ms: 0,
+                                stack_expiries: Vec::new(),
+                                stacking_rule: self.proc_specs[idx].stacking_rule.clone(),
                             }),
                         }
                         self.update_conditionals();
@@ -4170,6 +4461,7 @@ impl<'a> Timeline<'a> {
             .insert(ResourceKind::Energy, LEGEND_SWAP_ENERGY);
         self.legend_swap_ready_ms = self.at(LEGEND_SWAP_RECHARGE_MS);
         self.active_upkeep = 0.0;
+        self.trigger_procs(TriggerRule::OnLegendSwap, None, false, 1.0);
         true
     }
 
@@ -4459,6 +4751,17 @@ fn trigger_label(trigger: &TriggerRule) -> &'static str {
         TriggerRule::OnThreshold => "on-threshold",
         TriggerRule::OnAttunementSwap => "on-attunement-swap",
         TriggerRule::OnCloneCreated => "on-clone-created",
+        TriggerRule::NotApplicable => "not-applicable",
+        TriggerRule::OnBlock => "on-block",
+        TriggerRule::OnSteal => "on-steal",
+        TriggerRule::OnStealthEnter => "on-stealth-enter",
+        TriggerRule::OnStealthExit => "on-stealth-exit",
+        TriggerRule::OnLegendSwap => "on-legend-swap",
+        TriggerRule::OnBerserkEnter => "on-berserk-enter",
+        TriggerRule::OnSymbolHit => "on-symbol-hit",
+        TriggerRule::OnExplosion => "on-explosion",
+        TriggerRule::OnBoonGained { .. } => "on-boon-gained",
+        TriggerRule::OnStunbreak => "on-stunbreak",
     }
 }
 
@@ -4621,38 +4924,126 @@ impl PrerequisiteFail {
     }
 }
 
+/// A weapon the build wears, as a `Gate::Weapon` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EquippedWeapon {
+    /// Weapon set 1 or 2.
+    pub set: u8,
+    pub hand: WeaponHand,
+    /// `gw2_core::i18n::weapon_type_key` of the weapon's type.
+    pub weapon_type: String,
+}
+
+/// Health percentage inside a gate's band. An absent side is open.
+fn health_in_band(pct: f64, below: Option<f64>, above: Option<f64>) -> bool {
+    below.is_none_or(|b| pct < b) && above.is_none_or(|a| pct > a)
+}
+
+/// Add one stack to a stacking conditional at `now`.
+///
+/// `StackingRule::RefreshAllStacks` (Lethal Tempo) resets every stack the
+/// spec already holds; any other rule leaves each earlier stack on its own
+/// clock, which is how intensity stacking expires in game. At the cap the
+/// stack closest to expiring is the one replaced.
+fn gain_stack(spec: &mut ConditionalSpec, now: u32, duration_ms: u32, max: u32) {
+    let until = now.saturating_add(duration_ms);
+    if spec.stacking_rule == StackingRule::RefreshAllStacks {
+        for at in spec.stack_expiries.iter_mut() {
+            *at = until;
+        }
+    }
+    spec.stack_expiries.push(until);
+    if spec.stack_expiries.len() > max as usize {
+        spec.stack_expiries.sort_unstable();
+        let excess = spec.stack_expiries.len() - max as usize;
+        spec.stack_expiries.drain(..excess);
+    }
+    spec.stacks = spec.stack_expiries.len() as u32;
+    spec.expires_at_ms = spec.stack_expiries.iter().copied().max().unwrap_or(until);
+}
+
+/// The one resource-name table a record's `Gate::SelfResourceStacks` and
+/// `Scale::PerSelfResourceStack` are read against. A name that is not here
+/// is a pool the timeline does not keep, and the record abstains saying so.
+fn resource_kind_by_name(name: &str) -> Option<ResourceKind> {
+    match name
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '_', '-'], "")
+        .as_str()
+    {
+        "initiative" => Some(ResourceKind::Initiative),
+        "energy" => Some(ResourceKind::Energy),
+        "adrenaline" => Some(ResourceKind::Adrenaline),
+        "illusions" | "clones" => Some(ResourceKind::Illusions),
+        "blades" | "charges" => Some(ResourceKind::Blades),
+        "lifeforce" => Some(ResourceKind::LifeForce),
+        "flow" => Some(ResourceKind::Flow),
+        _ => None,
+    }
+}
+
+/// Why `load_normalized_effects` cannot execute a record yet, worded so the
+/// coverage line names the missing piece rather than going quiet.
+///
+/// Doctrine rule 6: a gate the timeline has no state for abstains and says
+/// which mechanic it is waiting on. It never passes silently.
+pub(crate) fn unexecutable_reason(effect: &NormalizedEffect) -> Option<String> {
+    if !matches!(effect.actor, Actor::Player | Actor::Any) {
+        return Some(format!("event not yet emitted: {:?} actor", effect.actor));
+    }
+    let missing_event = match &effect.trigger_rule {
+        TriggerRule::OnBlock => Some("on-block"),
+        TriggerRule::OnSteal => Some("on-steal"),
+        TriggerRule::OnStealthEnter => Some("on-stealth-enter"),
+        TriggerRule::OnStealthExit => Some("on-stealth-exit"),
+        TriggerRule::OnBerserkEnter => Some("on-berserk-enter"),
+        TriggerRule::OnSymbolHit => Some("on-symbol-hit"),
+        TriggerRule::OnExplosion => Some("on-explosion"),
+        _ => None,
+    };
+    if let Some(event) = missing_event {
+        return Some(format!("event not yet emitted: {event}"));
+    }
+    for gate in &effect.gates {
+        let missing = match gate {
+            Gate::Positional(_) => Some("gate not yet modelled: player facing".to_string()),
+            Gate::Proximity { .. } => Some("gate not yet modelled: foe distance".to_string()),
+            Gate::SelfResourceStacks { resource, .. }
+                if resource_kind_by_name(resource).is_none() =>
+            {
+                Some(format!("resource not yet modelled: {resource}"))
+            }
+            // A boon the buff model never tracks would leave the gate shut
+            // for the whole fight with nothing on the coverage line.
+            Gate::SelfBoon { boon } if crate::data::boons().get(boon).is_none() => {
+                Some(format!("boon not yet modelled: {boon}"))
+            }
+            _ => None,
+        };
+        if missing.is_some() {
+            return missing;
+        }
+    }
+    match &effect.scale {
+        Some(Scale::PerDistance { .. }) => Some("scale not yet modelled: foe distance".to_string()),
+        Some(Scale::PerSelfResourceStack { resource, .. })
+            if resource_kind_by_name(resource).is_none() =>
+        {
+            Some(format!("resource not yet modelled: {resource}"))
+        }
+        Some(Scale::PerSelfBoon { boon, .. }) if crate::data::boons().get(boon).is_none() => {
+            Some(format!("boon not yet modelled: {boon}"))
+        }
+        _ => None,
+    }
+}
+
+/// Two triggers are the same event. `OnBoonGained`'s optional boon narrows
+/// *which* boon fires it, not which event it is, so the discriminant is the
+/// whole answer and the boon is checked beside the scope.
 fn same_trigger(left: &TriggerRule, right: &TriggerRule) -> bool {
-    matches!(
-        (left, right),
-        (TriggerRule::Passive, TriggerRule::Passive)
-            | (TriggerRule::OnCrit, TriggerRule::OnCrit)
-            | (TriggerRule::OnHit, TriggerRule::OnHit)
-            | (TriggerRule::OnSkillUse, TriggerRule::OnSkillUse)
-            | (
-                TriggerRule::OnHealthThreshold,
-                TriggerRule::OnHealthThreshold
-            )
-            | (TriggerRule::Conditional, TriggerRule::Conditional)
-            | (TriggerRule::OnShroudEnter, TriggerRule::OnShroudEnter)
-            | (TriggerRule::OnShroudExit, TriggerRule::OnShroudExit)
-            | (
-                TriggerRule::OnConditionApplied,
-                TriggerRule::OnConditionApplied
-            )
-            | (
-                TriggerRule::OnConditionRemoved,
-                TriggerRule::OnConditionRemoved
-            )
-            | (TriggerRule::OnBoonApplied, TriggerRule::OnBoonApplied)
-            | (TriggerRule::OnBoonStripped, TriggerRule::OnBoonStripped)
-            | (TriggerRule::Periodic, TriggerRule::Periodic)
-            | (TriggerRule::OnDodge, TriggerRule::OnDodge)
-            | (TriggerRule::OnDisableFoe, TriggerRule::OnDisableFoe)
-            | (TriggerRule::OnElite, TriggerRule::OnElite)
-            | (TriggerRule::OnThreshold, TriggerRule::OnThreshold)
-            | (TriggerRule::OnAttunementSwap, TriggerRule::OnAttunementSwap)
-            | (TriggerRule::OnCloneCreated, TriggerRule::OnCloneCreated)
-    )
+    std::mem::discriminant(left) == std::mem::discriminant(right)
 }
 
 fn initial_resources(rules: &[SkillResourceRule]) -> HashMap<ResourceKind, f64> {
@@ -4696,6 +5087,7 @@ fn condition_is_damaging(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::combat::CombatPerformance;
+    use crate::data::normalized_effects::Positional;
     use crate::referee::evaluate_viability_gates;
     use crate::rotation::{ControlKind, SkillSlot};
     use crate::scenario::{OptimizationTarget, TargetProfile};
@@ -7135,7 +7527,610 @@ mod tests {
             derived_from: Vec::new(),
             coverage: None,
             cast_skill_id: None,
+            gates: Vec::new(),
+            scale: None,
+            actor: Actor::Player,
         }
+    }
+
+    // Sprint 4 (sprints/008-data-driven-simulator, Gate 1): gates, scaling,
+    // actors and stacking, each on a synthetic record over a synthetic fight.
+
+    /// A heal record: `Heal` is the shortest category with a number the fight
+    /// report carries, so "did it fire, and with what value" is one assertion.
+    fn gated_heal(source_id: u32, trigger: TriggerRule, gates: Vec<Gate>) -> NormalizedEffect {
+        let mut effect = test_proc_effect(source_id, EffectCategory::Heal, None);
+        effect.source_name = format!("Gated {source_id}");
+        effect.trigger_rule = trigger;
+        effect.gates = gates;
+        effect
+    }
+
+    fn gate_timeline<'a>(
+        params: &'a SimParams,
+        effects: &[&'a NormalizedEffect],
+        duration_ms: u32,
+        events: Vec<EnemyEvent>,
+    ) -> Timeline<'a> {
+        let mut timeline = Timeline::new(
+            &[],
+            params,
+            profile(duration_ms, events),
+            open_enemy(true),
+            effects,
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.trace_enabled = true;
+        timeline
+    }
+
+    fn fires(timeline: &Timeline<'_>, source_id: u32) -> u32 {
+        timeline
+            .proc_fire_counts
+            .get(&format!("Gated {source_id}"))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn in_combat_gate_holds_until_the_fight_starts() {
+        let params = params();
+        // Nothing is cast and nothing lands: the player never enters combat.
+        let quiet = gated_heal(1, TriggerRule::Periodic, vec![Gate::InCombat]);
+        let mut timeline = gate_timeline(&params, &[&quiet], 4_000, vec![]);
+        timeline.run();
+        assert_eq!(
+            fires(&timeline, 1),
+            0,
+            "an out-of-combat gate must not fire"
+        );
+
+        // Positive control: the same record once the enemy opens.
+        let loud = gated_heal(2, TriggerRule::Periodic, vec![Gate::InCombat]);
+        let mut timeline = gate_timeline(
+            &params,
+            &[&loud],
+            4_000,
+            vec![EnemyEvent {
+                at_ms: 1_000,
+                kind: EnemyEventKind::Strike {
+                    damage: 100.0,
+                    unblockable: false,
+                },
+            }],
+        );
+        timeline.run();
+        assert!(
+            fires(&timeline, 2) > 0,
+            "the gate must open once the fight starts"
+        );
+    }
+
+    #[test]
+    fn interval_gate_fires_three_times_in_ten_seconds() {
+        let params = params();
+        let every_3s = gated_heal(
+            3,
+            TriggerRule::Periodic,
+            vec![Gate::Interval {
+                every_ms: 3_000,
+                while_state: None,
+            }],
+        );
+        let mut timeline = gate_timeline(&params, &[&every_3s], 10_000, vec![]);
+        timeline.run();
+        // The gate opens after one full period, so 3 s, 6 s and 9 s.
+        assert_eq!(fires(&timeline, 3), 3);
+    }
+
+    #[test]
+    fn weapon_gate_reads_the_held_set() {
+        let params = params();
+        let with_torch = gated_heal(
+            4,
+            TriggerRule::OnHit,
+            vec![Gate::Weapon {
+                types: vec!["Torch".into()],
+                hand: Some(WeaponHand::Off),
+            }],
+        );
+        let mut timeline = gate_timeline(&params, &[&with_torch], 2_000, vec![]);
+        timeline.equipped_weapons = vec![EquippedWeapon {
+            set: 1,
+            hand: WeaponHand::TwoHand,
+            weapon_type: "greatsword".into(),
+        }];
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 4), 0, "a greatsword is not a torch");
+
+        timeline.equipped_weapons.push(EquippedWeapon {
+            set: 1,
+            hand: WeaponHand::Off,
+            weapon_type: "torch".into(),
+        });
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 4), 1, "the torch opens the gate");
+    }
+
+    /// The producer and the gate, end to end: a build's weapon slots become
+    /// `EquippedWeapon` rows, and a record gated on an off-hand torch opens only
+    /// while the set carrying it is held.
+    #[test]
+    fn equipped_weapons_feed_the_weapon_gate() {
+        use crate::validation::ValidatedBuild;
+
+        let mut build = ValidatedBuild::default();
+        build.weapons.set1.main_hand = Some("Greatsword".into());
+        build.weapons.set2.main_hand = Some("Sword".into());
+        build.weapons.set2.off_hand = Some("Torch".into());
+
+        let worn = crate::engine::equipped_weapons(&build, None);
+        assert_eq!(
+            worn,
+            vec![
+                EquippedWeapon {
+                    set: 1,
+                    hand: WeaponHand::TwoHand,
+                    weapon_type: "greatsword".into(),
+                },
+                EquippedWeapon {
+                    set: 2,
+                    hand: WeaponHand::Main,
+                    weapon_type: "sword".into(),
+                },
+                EquippedWeapon {
+                    set: 2,
+                    hand: WeaponHand::Off,
+                    weapon_type: "torch".into(),
+                },
+            ],
+            "a two-hander fills the main-hand cell and reports as TwoHand; an \
+             empty off-hand produces no row"
+        );
+
+        let params = params();
+        let with_torch = gated_heal(
+            33,
+            TriggerRule::OnHit,
+            vec![Gate::Weapon {
+                types: vec!["Torch".into()],
+                hand: Some(WeaponHand::Off),
+            }],
+        );
+        let mut timeline = gate_timeline(&params, &[&with_torch], 2_000, vec![]);
+        timeline.equipped_weapons = worn;
+
+        timeline.active_weapon_set = 1;
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 33), 0, "the greatsword set has no torch");
+
+        timeline.active_weapon_set = 2;
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(
+            fires(&timeline, 33),
+            1,
+            "the sword/torch set opens the gate"
+        );
+    }
+
+    /// Two-handedness is the profession's answer, not a global type list:
+    /// Bladesworn holds its Sword in both hands where core Warrior does not.
+    #[test]
+    fn a_bladesworn_sword_is_two_handed_for_the_gate() {
+        use crate::validation::ValidatedBuild;
+        use gw2_api::models::{Profession, WeaponInfo};
+
+        let bladesworn = Profession {
+            id: "Warrior".into(),
+            name: "Warrior".into(),
+            code: None,
+            specializations: vec![],
+            weapons: std::iter::once((
+                "Sword".to_string(),
+                WeaponInfo {
+                    specialization: Some(68),
+                    flags: vec!["TwoHand".into(), "Mainhand".into()],
+                    skills: vec![],
+                },
+            ))
+            .collect(),
+            training: vec![],
+            skills_by_palette: vec![],
+            icon: None,
+            icon_big: None,
+        };
+
+        let mut build = ValidatedBuild::default();
+        build.weapons.set1.main_hand = Some("Sword".into());
+
+        assert_eq!(
+            crate::engine::equipped_weapons(&build, Some(&bladesworn)),
+            vec![EquippedWeapon {
+                set: 1,
+                hand: WeaponHand::TwoHand,
+                weapon_type: "sword".into(),
+            }]
+        );
+        assert_eq!(
+            crate::engine::equipped_weapons(&build, None)[0].hand,
+            WeaponHand::Main,
+            "without the profession table a Sword is the one-handed default"
+        );
+    }
+
+    #[test]
+    fn health_gate_with_when_recovered_fires_on_each_crossing() {
+        let params = params();
+        let low = gated_heal(
+            5,
+            TriggerRule::OnHit,
+            vec![Gate::HealthThreshold {
+                below_pct: Some(50.0),
+                above_pct: None,
+                rearm: Rearm::WhenRecovered,
+            }],
+        );
+        let mut timeline = gate_timeline(&params, &[&low], 2_000, vec![]);
+
+        timeline.player_health = params.max_health * 0.4;
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 5), 1, "latched after the first crossing");
+
+        // Back above the line, then below it again.
+        timeline.player_health = params.max_health;
+        timeline.rearm_health_gates();
+        timeline.player_health = params.max_health * 0.4;
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 5), 2, "re-armed by the recovery");
+    }
+
+    #[test]
+    fn health_gate_once_per_fight_never_rearms() {
+        let params = params();
+        let once = gated_heal(
+            6,
+            TriggerRule::OnHit,
+            vec![Gate::HealthThreshold {
+                below_pct: Some(50.0),
+                above_pct: None,
+                rearm: Rearm::OncePerFight,
+            }],
+        );
+        let mut timeline = gate_timeline(&params, &[&once], 2_000, vec![]);
+        timeline.player_health = params.max_health * 0.4;
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        timeline.player_health = params.max_health;
+        timeline.rearm_health_gates();
+        timeline.player_health = params.max_health * 0.4;
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 6), 1);
+    }
+
+    #[test]
+    fn self_resource_stacks_gate_and_scale_read_the_pool() {
+        let params = params();
+        let mut record = gated_heal(
+            7,
+            TriggerRule::OnHit,
+            vec![Gate::SelfResourceStacks {
+                resource: "initiative".into(),
+                min: 3,
+            }],
+        );
+        record.value = FactualValue::Resolved(0.0);
+        record.scale = Some(Scale::PerSelfResourceStack {
+            resource: "initiative".into(),
+            per_stack: 100.0,
+            cap: Some(5.0),
+        });
+        let mut timeline = gate_timeline(&params, &[&record], 2_000, vec![]);
+
+        timeline.resources.insert(ResourceKind::Initiative, 2.0);
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 7), 0, "two initiative is under the gate");
+
+        timeline.player_health = params.max_health / 2.0;
+        timeline.resources.insert(ResourceKind::Initiative, 8.0);
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 7), 1);
+        // Eight initiative, capped at five: 0 + 5 x 100.
+        assert!(
+            (timeline.healing - 500.0).abs() < 1e-6,
+            "scaled heal was {}",
+            timeline.healing
+        );
+    }
+
+    #[test]
+    fn self_boon_gate_and_per_boon_scale_read_the_buff_bar() {
+        let params = params();
+        let mut record = gated_heal(
+            8,
+            TriggerRule::OnHit,
+            vec![Gate::SelfBoon {
+                boon: "Might".into(),
+            }],
+        );
+        record.value = FactualValue::Resolved(0.0);
+        record.scale = Some(Scale::PerSelfBoon {
+            boon: "Might".into(),
+            per_stack: 10.0,
+            cap: None,
+        });
+        let mut timeline = gate_timeline(&params, &[&record], 2_000, vec![]);
+        timeline.player_health = params.max_health / 2.0;
+
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 8), 0, "no Might, no fire");
+
+        timeline.buffs.push(TimedBuff {
+            name: "Might".into(),
+            stacks: 7,
+            expires_at_ms: 10_000,
+        });
+        timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 8), 1);
+        assert!((timeline.healing - 70.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_pet_record_never_fires_off_a_player_event() {
+        let params = params();
+        let mut pet = gated_heal(9, TriggerRule::OnCrit, vec![]);
+        pet.actor = Actor::Pet;
+        let mut timeline = gate_timeline(&params, &[&pet], 2_000, vec![]);
+        assert!(
+            timeline.proc_specs.is_empty(),
+            "a pet record must not join the player's proc list"
+        );
+        timeline.trigger_procs(TriggerRule::OnCrit, None, false, 1.0);
+        assert_eq!(fires(&timeline, 9), 0);
+        assert!(
+            timeline
+                .unmodeled_names
+                .iter()
+                .any(|n| n.contains("event not yet emitted: Pet actor")),
+            "the abstention must name the missing event: {:?}",
+            timeline.unmodeled_names
+        );
+    }
+
+    #[test]
+    fn triggers_without_an_event_source_abstain_by_name() {
+        let params = params();
+        for (id, trigger, wanted) in [
+            (20, TriggerRule::OnBlock, "on-block"),
+            (21, TriggerRule::OnSteal, "on-steal"),
+            (22, TriggerRule::OnStealthEnter, "on-stealth-enter"),
+            (23, TriggerRule::OnStealthExit, "on-stealth-exit"),
+            (24, TriggerRule::OnBerserkEnter, "on-berserk-enter"),
+            (25, TriggerRule::OnSymbolHit, "on-symbol-hit"),
+            (26, TriggerRule::OnExplosion, "on-explosion"),
+        ] {
+            let record = gated_heal(id, trigger, vec![]);
+            let timeline = gate_timeline(&params, &[&record], 1_000, vec![]);
+            assert!(
+                timeline.proc_specs.is_empty(),
+                "{wanted} has no firing site yet"
+            );
+            assert!(
+                timeline
+                    .unmodeled_names
+                    .iter()
+                    .any(|n| n.contains(&format!("event not yet emitted: {wanted}"))),
+                "{wanted} must abstain by name: {:?}",
+                timeline.unmodeled_names
+            );
+        }
+    }
+
+    #[test]
+    fn positional_and_distance_abstain_rather_than_pass() {
+        let params = params();
+        let flank = gated_heal(
+            27,
+            TriggerRule::OnHit,
+            vec![Gate::Positional(Positional::Flank)],
+        );
+        let timeline = gate_timeline(&params, &[&flank], 1_000, vec![]);
+        assert!(timeline
+            .unmodeled_names
+            .iter()
+            .any(|n| n.contains("gate not yet modelled: player facing")));
+
+        let mut ranged = gated_heal(28, TriggerRule::OnHit, vec![]);
+        ranged.scale = Some(Scale::PerDistance {
+            per_unit: 0.01,
+            cap: Some(600.0),
+        });
+        let timeline = gate_timeline(&params, &[&ranged], 1_000, vec![]);
+        assert!(timeline
+            .unmodeled_names
+            .iter()
+            .any(|n| n.contains("scale not yet modelled: foe distance")));
+
+        let unknown_pool = gated_heal(
+            29,
+            TriggerRule::OnHit,
+            vec![Gate::SelfResourceStacks {
+                resource: "blight".into(),
+                min: 1,
+            }],
+        );
+        let timeline = gate_timeline(&params, &[&unknown_pool], 1_000, vec![]);
+        assert!(
+            timeline
+                .unmodeled_names
+                .iter()
+                .any(|n| n.contains("resource not yet modelled: blight")),
+            "{:?}",
+            timeline.unmodeled_names
+        );
+    }
+
+    #[test]
+    fn refresh_all_stacks_refreshes_every_stack_expiry() {
+        let mut spec = ConditionalSpec {
+            source_name: "Lethal Tempo".into(),
+            kind: ConditionalKind::Stacking {
+                max: 5,
+                duration_ms: 4_000,
+                scope: Default::default(),
+                hit_fed: true,
+            },
+            percent: 2.0,
+            crit_damage: false,
+            crit_chance: false,
+            condition_damage: false,
+            active: false,
+            stacks: 0,
+            expires_at_ms: 0,
+            stack_expiries: Vec::new(),
+            stacking_rule: StackingRule::RefreshAllStacks,
+        };
+        gain_stack(&mut spec, 0, 4_000, 5);
+        gain_stack(&mut spec, 2_000, 4_000, 5);
+        assert_eq!(spec.stacks, 2);
+        assert_eq!(
+            spec.stack_expiries,
+            vec![6_000, 6_000],
+            "the earlier stack must be pushed out with the new one"
+        );
+
+        // Any other rule leaves each stack on its own clock.
+        let mut own_clock = spec;
+        own_clock.stacking_rule = StackingRule::Multiplicative;
+        own_clock.stacks = 0;
+        own_clock.stack_expiries.clear();
+        gain_stack(&mut own_clock, 0, 4_000, 5);
+        gain_stack(&mut own_clock, 2_000, 4_000, 5);
+        assert_eq!(own_clock.stack_expiries, vec![4_000, 6_000]);
+    }
+
+    /// Wiki `Effect stacking`, stacking intensity: "each stack is applied
+    /// separately and has its own duration", so stacks drop one at a time.
+    /// Before Sprint 4 the model kept one shared expiry, which made five stacks
+    /// live as long as the newest and then vanish together — Relic of the Thief
+    /// measured 0.6 % more damage than it should have on the Reaper fixture.
+    /// Only `RefreshAllStacks` (Lethal Tempo, whose wiki line says gaining a
+    /// stack refreshes the others) gets the old behaviour, and it must say so.
+    #[test]
+    fn stacks_expire_one_at_a_time_unless_the_record_says_otherwise() {
+        let mut spec = ConditionalSpec {
+            source_name: "Relic of the Thief".into(),
+            kind: ConditionalKind::Stacking {
+                max: 5,
+                duration_ms: 6_000,
+                scope: Default::default(),
+                hit_fed: true,
+            },
+            percent: 3.0,
+            crit_damage: false,
+            crit_chance: false,
+            condition_damage: false,
+            active: false,
+            stacks: 0,
+            expires_at_ms: 0,
+            stack_expiries: Vec::new(),
+            // The shipped record: Multiplicative is how the percent combines,
+            // and it says nothing about duration, so each stack runs its own.
+            stacking_rule: StackingRule::Multiplicative,
+        };
+        for at in [0, 1_000, 2_000] {
+            gain_stack(&mut spec, at, 6_000, 5);
+        }
+        assert_eq!(spec.stack_expiries, vec![6_000, 7_000, 8_000]);
+
+        // Decay, as `expire_timed_state` does it: drop what has run out.
+        let alive = |spec: &ConditionalSpec, now: u32| {
+            spec.stack_expiries.iter().filter(|at| **at > now).count()
+        };
+        assert_eq!(alive(&spec, 5_999), 3);
+        assert_eq!(alive(&spec, 6_500), 2, "the first stack is gone alone");
+        assert_eq!(alive(&spec, 7_500), 1);
+        assert_eq!(alive(&spec, 8_000), 0);
+
+        // The reviewer's shape: three stacks at 0/1/2 s with a 5 s duration.
+        let mut five = ConditionalSpec {
+            stacks: 0,
+            stack_expiries: Vec::new(),
+            ..spec
+        };
+        for at in [0, 1_000, 2_000] {
+            gain_stack(&mut five, at, 5_000, 5);
+        }
+        assert_eq!(alive(&five, 5_500), 2, "only the 5 s stack has run out");
+        assert_eq!(alive(&five, 7_500), 0, "all three are gone");
+    }
+
+    /// Driven through `try_legend_swap`, not `trigger_procs`: deleting the
+    /// emission line inside the swap must fail this test.
+    #[test]
+    fn a_legend_swap_fires_on_legend_swap_records() {
+        let params = params();
+        let record = gated_heal(30, TriggerRule::OnLegendSwap, vec![]);
+        let mut timeline = gate_timeline(&params, &[&record], 1_000, vec![]);
+        assert_eq!(timeline.proc_specs.len(), 1, "the record must load");
+        timeline.player_health = params.max_health / 2.0;
+        // Half the pool spent, the recharge over: the swap is taken.
+        timeline
+            .resources
+            .insert(ResourceKind::Energy, LEGEND_SWAP_ENERGY / 4.0);
+        assert!(timeline.try_legend_swap(), "the swap must happen");
+        assert_eq!(fires(&timeline, 30), 1);
+    }
+
+    /// Driven through `try_stunbreak`, so the emission site is the thing
+    /// under test rather than the call the test makes itself.
+    #[test]
+    fn breaking_a_stun_fires_on_stunbreak_records() {
+        let params = params();
+        let record = gated_heal(31, TriggerRule::OnStunbreak, vec![]);
+        let breaker = {
+            let mut skill = skill(9_001, SkillSlot::Utility, 0, 20_000, Vec::new());
+            skill.is_stunbreak = true;
+            skill
+        };
+        let skills = vec![breaker];
+        let mut timeline = Timeline::new(
+            &skills,
+            &params,
+            profile(2_000, vec![]),
+            open_enemy(true),
+            &[&record],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.trace_enabled = true;
+        assert_eq!(timeline.proc_specs.len(), 1, "the record must load");
+        timeline.player_health = params.max_health / 2.0;
+        timeline.disabled_until_ms = 1_000;
+        timeline.try_stunbreak();
+        assert_eq!(timeline.disabled_until_ms, 0, "the stun must be broken");
+        assert_eq!(fires(&timeline, 31), 1);
+    }
+
+    /// Driven through `apply_buff`, the site that actually grants a boon.
+    #[test]
+    fn a_boon_landing_fires_only_the_records_narrowed_to_it() {
+        let params = params();
+        let fury_only = gated_heal(
+            32,
+            TriggerRule::OnBoonGained {
+                boon: Some("Fury".into()),
+            },
+            vec![],
+        );
+        let mut timeline = gate_timeline(&params, &[&fury_only], 1_000, vec![]);
+        timeline.player_health = params.max_health / 2.0;
+        timeline.apply_buff("Might", 3, 5_000, false);
+        assert_eq!(fires(&timeline, 32), 0, "Might is not Fury");
+        timeline.apply_buff("Fury", 1, 5_000, false);
+        assert_eq!(fires(&timeline, 32), 1);
     }
 
     #[test]
@@ -8262,6 +9257,9 @@ mod tests {
             derived_from: Vec::new(),
             coverage: None,
             cast_skill_id: None,
+            gates: Vec::new(),
+            scale: None,
+            actor: Actor::Player,
         };
         let params = params();
         let timeline = Timeline::new(
@@ -9272,6 +10270,9 @@ mod reaper_experiments {
             healing_power_coefficient: 0.0,
             cast_skill_id: None,
             max_stacks: 0,
+            gates: Vec::new(),
+            scale: None,
+            stacking_rule: StackingRule::NonStacking,
         });
         TRACE_CALLS.with(|c| c.set(0));
         timeline.trigger_procs(TriggerRule::OnHit, None, false, 1.0);

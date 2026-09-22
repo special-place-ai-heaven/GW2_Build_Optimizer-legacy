@@ -182,6 +182,13 @@ fn lookup<'a>(table: &'a WeaponHandTable, profession: &str, weapon: &str) -> Opt
     table.rows.get(&prof)?.get(&key)
 }
 
+/// True when `name` is a real GW2 weapon type, in any language the i18n key
+/// table knows. The one list a record's `Gate::Weapon` is checked against.
+pub fn is_weapon_type(name: &str) -> bool {
+    let key = gw2_core::i18n::weapon_type_key(name);
+    ONE_HAND.contains(&key.as_str()) || TWO_HAND.contains(&key.as_str())
+}
+
 /// True when the wiki table has a row for this profession + weapon type.
 pub(crate) fn known_weapon(profession: &str, weapon: &str) -> bool {
     lookup(table(), profession, weapon).is_some()

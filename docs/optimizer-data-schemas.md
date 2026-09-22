@@ -661,6 +661,53 @@ Validation rules:
 3. trigger rules must be explicit
 4. if `uptime_model.kind == "Estimated"`, evidence cannot be `Factual`
 
+### Sprint 4 additions (sprints/008-data-driven-simulator, Gate 1)
+
+Every field below is optional and absent by default, so a file written
+before this section still loads byte-for-byte unchanged.
+
+- `trigger_rule: "NotApplicable"` - the record is classified, not executed.
+  It is the **only** legal trigger on a record that carries `coverage`, and
+  it is illegal anywhere else. Before this pairing the required field was
+  filled with `"Passive"` on 582 coverage blocks, and a later census read
+  that filler back as a factual claim.
+- New trigger kinds: `OnBlock`, `OnSteal`, `OnStealthEnter`, `OnStealthExit`,
+  `OnLegendSwap`, `OnBerserkEnter`, `OnSymbolHit`, `OnExplosion`,
+  `OnStunbreak`, and `OnBoonGained { boon }` (an absent `boon` means any).
+- `category: { "MechanicUnlock": { "mechanic", "replaces" } }` - the source
+  unlocks or replaces a profession mechanic. A capability, never a stat: it
+  carries no `value`.
+- `stacking_rule: "RefreshAllStacks"` - gaining a stack refreshes every
+  stack already held. Any other rule leaves each stack on its own clock.
+- `actor` - `Player` (default), `Pet`, `Illusion` or `Any`. A pet's on-crit
+  record must not fire off the player's crits.
+- `gates: []` - all must hold for the record to fire:
+  `InCombat`, `Interval { every_ms, while }`, `Weapon { types, hand }`,
+  `Positional`, `Proximity { radius, min_targets }`,
+  `HealthThreshold { below_pct, above_pct, rearm }`, `SelfBoon { boon }`,
+  `SelfResourceStacks { resource, min }`. `rearm` is `OncePerFight`,
+  `WhenRecovered` or `Icd`. `while` takes the same block as `prerequisite`.
+- `scale` - live state added to `value` when the record fires:
+  `PerDistance { per_unit, cap }`, `PerSelfResourceStack { resource,
+  per_stack, cap }`, `PerSelfBoon { boon, per_stack, cap }`. The value is
+  `value + step * min(n, cap)`.
+
+Validation rules 15-18:
+
+15. `coverage` and `trigger_rule: NotApplicable` imply each other.
+16. `MechanicUnlock` needs a mechanic name and carries no resolved value.
+17. `Interval.every_ms > 0`; a `Weapon` gate names at least one real weapon
+    type; `Proximity` needs `radius > 0` and `min_targets >= 1`;
+    `HealthThreshold` needs at least one side, each in `1..=99`;
+    `SelfResourceStacks` needs a resource and `min >= 1`.
+18. A `scale` step is finite and non-zero, its `cap` positive, and a
+    resource or boon scale names one.
+
+A gate or scale the simulator has no state for (positional facing, foe
+distance, a resource pool it does not keep, a trigger with no emission site)
+makes the record **abstain** with that reason on the coverage line. It never
+passes silently (doctrine rule 6).
+
 ## Schema 10: Rotation Profiles
 
 Path:

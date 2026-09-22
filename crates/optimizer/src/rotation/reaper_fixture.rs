@@ -779,6 +779,9 @@ pub fn record(
         derived_from: Vec::new(),
         coverage: None,
         cast_skill_id: None,
+        gates: Vec::new(),
+        scale: None,
+        actor: crate::data::normalized_effects::Actor::Player,
     }
 }
 
