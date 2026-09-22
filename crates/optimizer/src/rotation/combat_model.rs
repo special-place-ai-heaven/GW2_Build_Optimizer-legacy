@@ -424,6 +424,18 @@ impl TargetState {
         let current = self.stacks_of(&canonical, now_ms);
         let can_apply = stacks.min(cap.saturating_sub(current));
         if can_apply == 0 {
+            // Duration-stacked conditions (`max_stacks` 1: Chilled, Weakness,
+            // Blinded, Slow, Immobile, Crippled, Fear, Taunt, Daze) refresh the
+            // live row instead of dropping the re-application. Intensity-stacked
+            // conditions at cap stay dropped.
+            if cap == 1 {
+                let expires = now_ms.saturating_add(duration_ms);
+                if let Some(row) = self.conditions.iter_mut().find(|c| {
+                    c.expires_at_ms > now_ms && c.name.eq_ignore_ascii_case(canonical.as_ref())
+                }) {
+                    row.expires_at_ms = row.expires_at_ms.max(expires);
+                }
+            }
             return;
         }
         self.conditions.push(TimedFoeCondition {
@@ -758,6 +770,35 @@ mod tests {
         assert_eq!(t.stacks_of("poisoned", 0), 5);
         assert_eq!(t.stacks_of_inclusive("Poison", 3_000), 5);
         assert_eq!(t.stacks_of("Poison", 3_000), 3);
+    }
+
+    #[test]
+    fn cap_one_condition_reapply_refreshes_duration() {
+        let mut t = TargetState::from_seed(EnemyDummy::open());
+        t.apply_condition("Chilled", 1, 3_000, 0, 1);
+        t.apply_condition("Chilled", 1, 3_000, 1_000, 1);
+        assert_eq!(t.conditions.len(), 1, "cap-1 refresh must not add a row");
+        assert_eq!(t.stacks_of("Chilled", 2_999), 1);
+        assert_eq!(t.stacks_of("Chilled", 3_999), 1, "refreshed to 4000 ms");
+        assert_eq!(t.stacks_of("Chilled", 4_000), 0);
+    }
+
+    #[test]
+    fn cap_one_condition_reapply_never_shortens() {
+        let mut t = TargetState::from_seed(EnemyDummy::open());
+        t.apply_condition("Weakness", 1, 5_000, 0, 1);
+        t.apply_condition("Weakness", 1, 1_000, 1_000, 1);
+        assert_eq!(t.conditions[0].expires_at_ms, 5_000);
+    }
+
+    #[test]
+    fn intensity_stacked_condition_at_cap_is_still_dropped() {
+        let mut t = TargetState::from_seed(EnemyDummy::open());
+        t.apply_condition("Vulnerability", 25, 3_000, 0, 25);
+        t.apply_condition("Vulnerability", 1, 9_000, 0, 25);
+        assert_eq!(t.conditions.len(), 1);
+        assert_eq!(t.conditions[0].expires_at_ms, 3_000);
+        assert_eq!(t.stacks_of("Vulnerability", 0), 25);
     }
 
     #[test]

@@ -2839,10 +2839,9 @@ impl<'a> Timeline<'a> {
         protected: bool,
     ) {
         let cap = crate::rotation::simulator::condition_stack_cap(name, &self.params.mode) as u32;
-        let can_apply = stacks.min(cap.saturating_sub(self.target.stacks_of(name, self.now_ms)));
-        if can_apply == 0 {
-            return;
-        }
+        // `apply_condition` clamps to `cap` for the ledger; the trigger fires on
+        // every application because GW2 on-apply effects also fire on a refresh
+        // (Vulnerability at 25, or any max_stacks-1 control already running).
         self.target
             .apply_condition(name, stacks, duration_ms, self.now_ms, cap);
         self.status_trigger(
@@ -3152,7 +3151,7 @@ impl<'a> Timeline<'a> {
             let Some(element) = Element::parse(want) else {
                 return Err(PrerequisiteFail::UnknownAttunement);
             };
-            if !self.attunement.is(element) {
+            if !self.attunement.is_attuned(element) {
                 return Err(PrerequisiteFail::NotAttuned);
             }
         }
@@ -3880,21 +3879,30 @@ impl<'a> Timeline<'a> {
         }
     }
 
-    /// E0: emit OnThreshold once when health first reaches 50% or below.
+    /// E0: emit OnThreshold when health drops to 50% or below; the latch
+    /// re-arms once health recovers above the threshold (record ICDs, not this
+    /// latch, are what rate-limits repeated crossings).
     fn tick_health_threshold_bus(&mut self) {
-        if self.threshold_50_emitted || self.params.max_health <= 0.0 {
+        if self.params.max_health <= 0.0 {
             return;
         }
         let pct = self.player_health / self.params.max_health * 100.0;
-        if pct <= 50.0 {
-            self.threshold_50_emitted = true;
-            self.trigger_bus.emit(BusEvent::OnThreshold, self.now_ms);
-            self.trigger_procs(TriggerRule::OnThreshold, None, false, 1.0);
+        if pct > 50.0 {
+            self.threshold_50_emitted = false;
+            return;
         }
+        if self.threshold_50_emitted {
+            return;
+        }
+        self.threshold_50_emitted = true;
+        self.trigger_bus.emit(BusEvent::OnThreshold, self.now_ms);
+        self.trigger_procs(TriggerRule::OnThreshold, None, false, 1.0);
     }
 
-    /// E0: regen EndurancePool; when a full dodge is affordable, DodgeAction
-    /// spends it and the bus emits OnDodge so dodge-tagged trait records fire.
+    /// E0: regen EndurancePool; the dodge is reactive — endurance is held until
+    /// an incoming strike lands inside the evade window, then spent so the
+    /// evade actually covers that strike. The bus emits OnDodge on each spend, so
+    /// dodge-tagged trait records still fire.
     fn tick_endurance_and_dodge(&mut self) {
         self.endurance.tick(TIMELINE_TICK_MS);
         if !self.endurance.can_dodge(DODGE_COST) {
@@ -3911,23 +3919,37 @@ impl<'a> Timeline<'a> {
         }) {
             return;
         }
+        // Already evading: a second dodge covers nothing the first does not.
+        if self.has_defense(CoverKind::Evade) {
+            return;
+        }
+        if !self.strike_within_evade_window() {
+            return;
+        }
         if self
             .dodge_action
             .try_dodge(&mut self.endurance, &mut self.trigger_bus, self.now_ms)
         {
-            // ponytail: Evade only if an enemy event is already due (unconditional
-            // 750 ms on the t=0/50 opener dodges covers 450 ms burst events).
-            if self
-                .profile
-                .enemy_events
-                .front()
-                .is_some_and(|event| event.at_ms <= self.now_ms)
-            {
-                self.apply_defense(CoverKind::Evade, DODGE_EVADE_MS, 1, false);
-            }
+            self.apply_defense(CoverKind::Evade, DODGE_EVADE_MS, 1, false);
             self.trace(TraceKind::Dodged, "dodge", "endurance spent");
             self.trigger_procs(TriggerRule::OnDodge, None, false, 1.0);
         }
+    }
+
+    /// True when an unprocessed enemy strike lands before the evade window a
+    /// dodge started now would close. `enemy_events` is sorted by `at_ms` and
+    /// events due this tick are still queued (`process_enemy_events` runs after
+    /// the dodge), so the scan starts at the front.
+    // ponytail: covers the first strike inside the window, not the biggest one
+    // in the burst; make it peak-aware if sustain scoring starts caring which
+    // hit an evade answered.
+    fn strike_within_evade_window(&self) -> bool {
+        let window_end = self.now_ms.saturating_add(DODGE_EVADE_MS);
+        self.profile
+            .enemy_events
+            .iter()
+            .take_while(|event| event.at_ms < window_end)
+            .any(|event| matches!(event.kind, EnemyEventKind::Strike { .. }))
     }
 
     fn regenerate_resources(&mut self) {
@@ -4263,7 +4285,7 @@ struct PrerequisiteView {
     foe_conditions: Vec<String>,
     foe_stacks: Vec<(String, u32)>,
     foe_ratio: Option<f64>,
-    attunement: Element,
+    attunement: AttunementState,
 }
 
 impl PrerequisiteView {
@@ -4289,7 +4311,7 @@ impl PrerequisiteView {
                 .target_health
                 .filter(|h| *h > 0.0)
                 .map(|target| timeline.enemy_hp() / target),
-            attunement: timeline.attunement.current,
+            attunement: timeline.attunement.clone(),
         }
     }
 
@@ -4335,7 +4357,7 @@ impl PrerequisiteView {
             let Some(element) = Element::parse(want) else {
                 return false;
             };
-            if self.attunement != element {
+            if !self.attunement.is_attuned(element) {
                 return false;
             }
         }
@@ -4506,6 +4528,21 @@ mod tests {
         }
     }
 
+    /// A strike every `period_ms` for the whole fight. Chip damage on purpose:
+    /// the reactive dodge needs something incoming to spend endurance on, and
+    /// these fixtures must not die to the pressure they add.
+    fn strike_script(duration_ms: u32, period_ms: u32, damage: f64) -> Vec<EnemyEvent> {
+        (0..duration_ms / period_ms)
+            .map(|i| EnemyEvent {
+                at_ms: i * period_ms,
+                kind: EnemyEventKind::Strike {
+                    damage,
+                    unblockable: false,
+                },
+            })
+            .collect()
+    }
+
     fn run_report(
         skills: &[RotationSkill],
         rules: &[SkillResourceRule],
@@ -4515,6 +4552,10 @@ mod tests {
     ) -> WvwCombatReport {
         let mut timeline =
             Timeline::new(skills, params, profile, enemy, &[], rules, true, Vec::new());
+        // Scenario fixtures measure the kit under test, not the opening dodges:
+        // a full pool evades the first 1.5s of the script (see
+        // `tick_endurance_and_dodge`), which would mask what they assert.
+        timeline.endurance.current = 0.0;
         timeline.run();
         timeline.report()
     }
@@ -4578,7 +4619,7 @@ mod tests {
             &skills,
             &[],
             open_enemy(false),
-            profile(25_000, vec![]),
+            profile(25_000, strike_script(25_000, 1_000, 10.0)),
             &params,
             &active,
         );
@@ -5045,6 +5086,56 @@ mod tests {
         assert_eq!(tl.attunement.secondary, Some(outgoing));
     }
 
+    /// FCR-004: `secondary` is read, not just written. A Weaver whose dual
+    /// attunement still holds Fire can use a Fire-gated record after swapping
+    /// to Water; a core Elementalist with the same swap history cannot. Both
+    /// prerequisite surfaces (`prerequisite_holds` and the `PrerequisiteView`
+    /// snapshot `update_conditionals` reads) must agree.
+    #[test]
+    fn fcr004_weaver_prerequisite_accepts_secondary_attunement() {
+        let fire_gate = Prerequisite {
+            attunement: Some("Fire".into()),
+            ..Default::default()
+        };
+        let check = |weaver: bool| {
+            let mut params = params();
+            params.weaver = weaver;
+            let mut tl = Timeline::new(
+                &[],
+                &params,
+                profile(1_000, vec![]),
+                open_enemy(false),
+                &[],
+                &[],
+                true,
+                Vec::new(),
+            );
+            assert!(tl.prerequisite_holds(&fire_gate).is_ok(), "starts on Fire");
+            apply_attunement_skill(
+                &mut tl.attunement,
+                &mut tl.trigger_bus,
+                0,
+                "Water Attunement",
+            );
+            assert_eq!(tl.attunement.current, Element::Water);
+            (
+                tl.prerequisite_holds(&fire_gate).is_ok(),
+                PrerequisiteView::of(&tl).is_ok_with(&fire_gate),
+            )
+        };
+
+        assert_eq!(
+            check(true),
+            (true, true),
+            "a Weaver is still attuned to the stashed Fire half"
+        );
+        assert_eq!(
+            check(false),
+            (false, false),
+            "a core Elementalist dropped Fire when it swapped"
+        );
+    }
+
     #[test]
     fn fcr006_core_ele_timeline_secondary_stays_none() {
         let mut water = skill(5493, SkillSlot::Profession, 0, 8_000, vec![]);
@@ -5136,7 +5227,7 @@ mod tests {
         let mut dodge_run = Timeline::new(
             &skills_dodge,
             &params,
-            profile(12_000, vec![]),
+            profile(12_000, strike_script(12_000, 1_000, 10.0)),
             open_enemy(false),
             &active,
             &[],
@@ -5343,7 +5434,8 @@ mod tests {
             let mut timeline = Timeline::new(
                 &[],
                 &params,
-                profile(1_000, vec![]),
+                // Reactive dodge: something has to be incoming to spend on.
+                profile(1_000, strike_script(1_000, 500, 10.0)),
                 open_enemy(false),
                 &[],
                 &[],
@@ -5369,7 +5461,7 @@ mod tests {
         let mut clear = Timeline::new(
             &[],
             &params,
-            profile(1_000, vec![]),
+            profile(1_000, strike_script(1_000, 500, 10.0)),
             open_enemy(false),
             &[],
             &[],
@@ -6411,6 +6503,69 @@ mod tests {
         assert_eq!(timeline.target.stacks_of("Burning", timeline.now_ms), cap);
     }
 
+    /// FCR-001: an application that the ledger clamps away (a cap-1 refresh, or
+    /// Vulnerability past 25) must still fire `OnConditionApplied` records.
+    #[test]
+    fn apply_outgoing_condition_fires_trigger_at_stack_cap() {
+        use crate::data::normalized_effects::TriggerScope;
+        let params = params();
+        let scoped = |id: u32, name: &str, status: &str| {
+            let mut effect = crate::rotation::reaper_fixture::record(
+                SourceType::Trait,
+                id,
+                name,
+                EffectCategory::AppliesBoon,
+                1.0,
+                TriggerRule::OnConditionApplied,
+            );
+            effect.trigger_scope = Some(TriggerScope::Status(status.into()));
+            effect
+        };
+        let chill_rec = scoped(50_010, "On Chill", "Chilled");
+        let vuln_rec = scoped(50_011, "On Vuln", "Vulnerability");
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(2_000, vec![]),
+            open_enemy(false),
+            &[&chill_rec, &vuln_rec],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.trace_enabled = true;
+        let fired = |t: &Timeline, name: &str| {
+            t.trace
+                .iter()
+                .filter(|e| e.kind == TraceKind::TraitFired && e.source == name)
+                .count()
+        };
+        // Chilled is max_stacks 1: the second apply is a refresh, not a no-op.
+        timeline.apply_outgoing_condition("Chilled", 1, 3_000, None, false);
+        timeline.apply_outgoing_condition("Chilled", 1, 3_000, None, false);
+        assert_eq!(
+            fired(&timeline, "On Chill"),
+            2,
+            "a refresh at the cap still fires OnConditionApplied: {:?}",
+            timeline.trace
+        );
+        let vuln_cap =
+            crate::rotation::simulator::condition_stack_cap("Vulnerability", &params.mode) as u32;
+        timeline.apply_outgoing_condition("Vulnerability", vuln_cap, 3_000, None, false);
+        timeline.apply_outgoing_condition("Vulnerability", 1, 3_000, None, false);
+        assert_eq!(
+            fired(&timeline, "On Vuln"),
+            2,
+            "the apply past 25 stacks still fires: {:?}",
+            timeline.trace
+        );
+        assert_eq!(
+            timeline.target.stacks_of("Vulnerability", timeline.now_ms),
+            vuln_cap,
+            "the ledger stays clamped at the cap"
+        );
+    }
+
     #[test]
     fn apply_outgoing_condition_chill_alias_satisfies_foe_prereq() {
         let params = params();
@@ -6457,6 +6612,88 @@ mod tests {
         assert!(view.foe_stacks("Chilled") >= 1);
     }
 
+    /// FCR-003: the endurance dodge must mitigate on the profile the engine
+    /// actually ships (`WvwProfile::for_scenario`), not only on a hand-built
+    /// script. The control run starts with an empty pool, so the only
+    /// difference between the two is whether dodges were affordable.
+    #[test]
+    fn production_profile_dodge_avoids_damage() {
+        let scenario = ScenarioSpec {
+            game_mode: GameMode::WvW,
+            combat_tier: CombatTier::Solo,
+            combat_kind: CombatKind::StrikeSpike,
+            target_profile: TargetProfile::Single,
+            optimization_target: OptimizationTarget {
+                label: "dodge mitigation".into(),
+            },
+            patch_id: None,
+            objective_profile_id: None,
+        };
+        let params = params();
+        let run = |endurance: f64| {
+            let mut timeline = Timeline::new(
+                &[],
+                &params,
+                WvwProfile::for_scenario(&scenario, &open_enemy(false), &params, 12_000),
+                open_enemy(false),
+                &[],
+                &[],
+                true,
+                Vec::new(),
+            );
+            timeline.endurance.current = endurance;
+            timeline.trace_enabled = true;
+            timeline.run();
+            timeline
+        };
+
+        let dodging = run(100.0);
+        let drained = run(0.0);
+
+        assert!(
+            dodging.dodge_action.dodges > 0,
+            "the production profile must give the reactive dodge something to spend on"
+        );
+        assert!(
+            dodging.trace.iter().any(|e| e.kind == TraceKind::Dodged),
+            "a spent dodge must be traced"
+        );
+        assert!(
+            dodging.avoided_damage > drained.avoided_damage,
+            "dodges must credit avoided_damage: {} with endurance vs {} without",
+            dodging.avoided_damage,
+            drained.avoided_damage
+        );
+        assert!(
+            dodging.incoming_damage < drained.incoming_damage,
+            "an evaded strike must not be taken: {} vs {}",
+            dodging.incoming_damage,
+            drained.incoming_damage
+        );
+    }
+
+    /// FCR-003: endurance is held while nothing is incoming — a dodge spent on
+    /// an empty window buys no evade frames.
+    #[test]
+    fn dodge_is_held_when_nothing_is_incoming() {
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(5_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.run();
+        assert_eq!(
+            timeline.dodge_action.dodges, 0,
+            "no enemy events means no reason to spend endurance"
+        );
+    }
+
     #[test]
     fn dodge_evade_avoids_strike_on_dodge_tick() {
         let params = params();
@@ -6493,7 +6730,7 @@ mod tests {
     }
 
     #[test]
-    fn kent_e0_causal_health_threshold_emits_on_threshold_once() {
+    fn kent_e0_causal_health_threshold_re_arms_above_threshold() {
         let params = params();
         let mut timeline = Timeline::new(
             &[],
@@ -6521,7 +6758,22 @@ mod tests {
         assert_eq!(
             timeline.trigger_bus.count(BusEvent::OnThreshold),
             1,
-            "OnThreshold must not re-emit after the first crossing"
+            "OnThreshold must not re-emit while health stays below the threshold"
+        );
+        // FCR-010: healing back above 50% re-arms the latch.
+        timeline.player_health = params.max_health * 0.90;
+        timeline.tick_health_threshold_bus();
+        assert_eq!(
+            timeline.trigger_bus.count(BusEvent::OnThreshold),
+            1,
+            "recovering above the threshold must not emit"
+        );
+        timeline.player_health = params.max_health * 0.40;
+        timeline.tick_health_threshold_bus();
+        assert_eq!(
+            timeline.trigger_bus.count(BusEvent::OnThreshold),
+            2,
+            "a later drop below the threshold emits again"
         );
     }
 
@@ -7732,6 +7984,10 @@ mod reaper_experiments {
             complete,
             Vec::new(),
         );
+        // Record fixtures script one or two strikes at most; a full
+        // endurance pool would evade them outright (reactive dodge, see
+        // `tick_endurance_and_dodge`) and leave nothing to measure.
+        timeline.endurance.current = 0.0;
         timeline.opener = opener;
         timeline.trace_enabled = true;
         timeline.run();
@@ -7886,6 +8142,10 @@ mod reaper_experiments {
             false,
             Vec::new(),
         );
+        // Record fixtures script one or two strikes at most; a full
+        // endurance pool would evade them outright (reactive dodge, see
+        // `tick_endurance_and_dodge`) and leave nothing to measure.
+        timeline.endurance.current = 0.0;
         timeline.opener = opener;
         timeline.trace_enabled = true;
         timeline.trace_loaded_unmodeled();
@@ -9507,6 +9767,10 @@ mod necro_experiments {
             Vec::new(),
         );
         timeline.population = crate::data::fight_population::FightPopulation::for_tier(tier);
+        // Record fixtures script one or two strikes at most; a full
+        // endurance pool would evade them outright (reactive dodge, see
+        // `tick_endurance_and_dodge`) and leave nothing to measure.
+        timeline.endurance.current = 0.0;
         timeline.opener = opener;
         timeline.trace_enabled = true;
         timeline.run();
@@ -10217,6 +10481,10 @@ mod necro_experiments {
             complete,
             Vec::new(),
         );
+        // Record fixtures script one or two strikes at most; a full
+        // endurance pool would evade them outright (reactive dodge, see
+        // `tick_endurance_and_dodge`) and leave nothing to measure.
+        timeline.endurance.current = 0.0;
         timeline.opener = opener;
         timeline.trace_enabled = true;
         timeline.trace_loaded_unmodeled();

@@ -28,6 +28,7 @@ pub enum BusEvent {
 
 /// One recorded emission for causal proofs / traces.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct BusEmission {
     pub event: BusEvent,
     pub at_ms: u32,
@@ -64,26 +65,14 @@ impl TriggerBus {
         let _ = at_ms;
     }
 
+    #[cfg(test)]
     pub fn drain(&mut self) -> Vec<BusEmission> {
-        #[cfg(test)]
-        {
-            self.queue.drain(..).collect()
-        }
-        #[cfg(not(test))]
-        {
-            Vec::new()
-        }
+        self.queue.drain(..).collect()
     }
 
+    #[cfg(test)]
     pub fn pending(&self) -> impl Iterator<Item = &BusEmission> {
-        #[cfg(test)]
-        {
-            self.queue.iter()
-        }
-        #[cfg(not(test))]
-        {
-            std::iter::empty()
-        }
+        self.queue.iter()
     }
 
     pub fn count(&self, event: BusEvent) -> u32 {

@@ -2,6 +2,21 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## 1.14.37 - 2026-09-22
+
+Full-code-review remediation FCR-20260922T145300Z-ccc85e1: 10 findings closed. SCHEMA CHANGE = N.
+
+- WvW: `OnConditionApplied` fires on every application, including at the stack cap (Vulnerability at 25, cap-1 controls while live).
+- Sim: cap-1 conditions (Chilled, Crippled, Weakness, Blinded, Slow, Immobile, Fear, Taunt, Daze) refresh duration on re-apply on both surfaces.
+- WvW: endurance dodge is reactive; endurance is spent only when an enemy strike lands inside the evade window, so `avoided_damage` credits dodges on the production profile.
+- WvW: Weaver secondary attunement satisfies skill prerequisites (`AttunementState::is_attuned`).
+- WvW: `OnThreshold` re-arms once health recovers above 50%; record ICDs still bound re-emits.
+- Modifiers: Sigil of Impact's `+7% vs. Stunned or Knocked-Down` half is deferred behind the Disabled gate; only the 3% is additive.
+- Modifiers: a second sigil's name fallback (Force, Bursting) applies even when the first sigil parsed something.
+- Choya `simulate_rotation`: `skill_ids` capped at 64 and `trait_ids` at 36.
+- TriggerBus `drain`/`pending`/`BusEmission` are test-only; no silent empty stubs in production builds.
+- Workspace `cargo fmt --check` clean (`packed_traits` reflowed).
+
 ## 1.14.36 - 2026-09-20
 
 Full-code-review remediation FCR-20260920T081033Z-3eafccc: 20 findings closed. SCHEMA CHANGE = N.

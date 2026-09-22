@@ -106,9 +106,7 @@ fn realm_duplicate(pals: &[u32; 5]) -> bool {
 }
 
 fn packed_traits(spec: &TemplateSpec) -> u8 {
-    (spec.choices[0] & 0b11)
-        | ((spec.choices[1] & 0b11) << 2)
-        | ((spec.choices[2] & 0b11) << 4)
+    (spec.choices[0] & 0b11) | ((spec.choices[1] & 0b11) << 2) | ((spec.choices[2] & 0b11) << 4)
 }
 
 /// Serialize the template to the exact byte string the game pastes.

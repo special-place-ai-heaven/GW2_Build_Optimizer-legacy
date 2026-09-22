@@ -96,6 +96,13 @@ impl AttunementState {
         self.current == element
     }
 
+    /// Usability check for an attunement prerequisite: a Weaver is attuned to
+    /// both halves of its dual attunement, so a skill gated on `element` is
+    /// usable off the stashed secondary too. Non-Weaver: same as `is`.
+    pub fn is_attuned(&self, element: Element) -> bool {
+        self.is(element) || (self.weaver && self.secondary == Some(element))
+    }
+
     /// Switch primary to `to`. Returns `Some((from, to))` on a real swap;
     /// `None` when already on `to` (no emit). Weaver: secondary = outgoing
     /// primary. Non-Weaver: secondary = None.
@@ -182,6 +189,30 @@ mod kent_tests {
         apply_attunement_skill(&mut state, &mut bus, 50, "Earth Attunement");
         assert_eq!(state.current, Element::Earth);
         assert_eq!(state.secondary, Some(Element::Air));
+    }
+
+    /// FCR-004: a Weaver stays attuned to the stashed half, so a prerequisite
+    /// on the outgoing element still holds after the swap. A core Elementalist
+    /// with the same swap history is only attuned to `current`.
+    #[test]
+    fn fcr004_weaver_is_attuned_to_secondary() {
+        let mut weaver = AttunementState::for_build(true);
+        weaver.swap(Element::Water);
+        assert!(weaver.is_attuned(Element::Water), "current half counts");
+        assert!(weaver.is_attuned(Element::Fire), "stashed half counts too");
+        assert!(!weaver.is(Element::Fire), "`is` stays current-only");
+        assert!(
+            !weaver.is_attuned(Element::Air),
+            "an unheld element does not"
+        );
+
+        let mut core = AttunementState::for_build(false);
+        core.swap(Element::Water);
+        assert!(core.is_attuned(Element::Water));
+        assert!(
+            !core.is_attuned(Element::Fire),
+            "a core Elementalist holds one attunement"
+        );
     }
 
     #[test]

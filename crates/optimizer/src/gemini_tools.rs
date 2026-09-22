@@ -1825,7 +1825,7 @@ fn split_weapon_sets(
 fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
     use crate::rotation;
 
-    let skill_ids: Vec<u32> = args
+    let mut skill_ids: Vec<u32> = args
         .get("skill_ids")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -1834,6 +1834,9 @@ fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
                 .collect()
         })
         .unwrap_or_default();
+    // A build has at most ~10 bar skills plus swaps; cap generously to bound
+    // CPU on the LLM thread against a runaway model-supplied list.
+    skill_ids.truncate(64);
 
     if skill_ids.is_empty() {
         return json!({ "error": "No skill IDs provided" });
@@ -1858,7 +1861,7 @@ fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
     };
     let mut full = stats::base_stats();
     full += &gear_stats;
-    let trait_ids: Vec<u32> = args
+    let mut trait_ids: Vec<u32> = args
         .get("trait_ids")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -1867,6 +1870,9 @@ fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
                 .collect()
         })
         .unwrap_or_default();
+    // A build has at most 9 traits; cap generously to bound CPU on the LLM
+    // thread against a runaway model-supplied list.
+    trait_ids.truncate(36);
     let params = rotation_sim_params(
         &full,
         ctx.profession_name,

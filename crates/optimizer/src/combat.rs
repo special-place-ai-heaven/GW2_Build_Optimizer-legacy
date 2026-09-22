@@ -1198,8 +1198,15 @@ pub(crate) fn parse_deferred_target_modifier(
         return None;
     }
 
-    // vs. disabled — checked before foe_cc_trigger would hide it.
-    if t.contains("disabled") || t.contains("disable") {
+    // vs. disabled — checked before foe_cc_trigger would hide it. Hard-CC
+    // wording ("vs. Stunned or Knocked-Down Foes") is the same gate:
+    // TargetState::is_disabled covers stun/daze/knockdown/launch.
+    if t.contains("disable")
+        || t.contains("stun")
+        || t.contains("knock")
+        || t.contains("launch")
+        || t.contains("daze")
+    {
         return Some(DeferredTargetModifier {
             gate: TargetGate::Disabled,
             percent,
@@ -1701,19 +1708,30 @@ pub(crate) fn item_buff_description(item: &Item) -> Option<&str> {
 
 /// Parse known sigil damage modifiers from item data.
 fn parse_sigil_modifier(mods: &mut DamageModifiers, sigil: &Item, ctx: &BalanceContext) {
+    // Bucket lengths, not emptiness: a second sigil must see whether *it*
+    // parsed anything, not whether an earlier sigil left the buckets non-empty.
+    // deferred_target is deliberately NOT counted: a buff that parsed only a
+    // vs-target clause still needs the standing description fallback
+    // (see sigil_infix_deferred_still_parses_standing_description).
+    fn parsed_lens(m: &DamageModifiers) -> [usize; 9] {
+        [
+            m.strike_pct.len(),
+            m.condition_pct.len(),
+            m.condi_duration_pct.len(),
+            m.boon_duration_pct.len(),
+            m.healing_pct.len(),
+            m.crit_chance_pct.len(),
+            m.crit_damage_pct.len(),
+            m.specific_condi.values().map(Vec::len).sum(),
+            m.specific_condi_duration.values().map(Vec::len).sum(),
+        ]
+    }
+
     let before = mods.deferred_target.len();
     if let Some(buff) = item_buff_description(sigil) {
+        let lens = parsed_lens(mods);
         apply_upgrade_text(mods, buff);
-        if !mods.strike_pct.is_empty()
-            || !mods.condition_pct.is_empty()
-            || !mods.condi_duration_pct.is_empty()
-            || !mods.boon_duration_pct.is_empty()
-            || !mods.healing_pct.is_empty()
-            || !mods.crit_chance_pct.is_empty()
-            || !mods.crit_damage_pct.is_empty()
-            || !mods.specific_condi.is_empty()
-            || !mods.specific_condi_duration.is_empty()
-        {
+        if parsed_lens(mods) != lens {
             return;
         }
     }
@@ -3842,6 +3860,147 @@ mod tests {
         );
         assert_eq!(combo.strike_pct, vec![0.05]);
         assert!(desc_only.deferred_target.is_empty());
+    }
+
+    fn sigil_with_buff(id: u32, name: &str, buff: Option<&str>) -> Item {
+        Item {
+            id,
+            name: name.into(),
+            item_type: "UpgradeComponent".into(),
+            rarity: "Exotic".into(),
+            level: 80,
+            description: None,
+            icon: None,
+            vendor_value: None,
+            chat_link: None,
+            default_skin: None,
+            flags: vec![],
+            game_types: vec![],
+            restrictions: vec![],
+            details: Some(gw2_api::models::ItemDetails {
+                detail_type: Some("Sigil".into()),
+                weight_class: None,
+                defense: None,
+                damage_type: None,
+                min_power: None,
+                max_power: None,
+                suffix: None,
+                bonuses: vec![],
+                infusion_upgrade_flags: vec![],
+                infusion_slots: vec![],
+                attribute_adjustment: None,
+                infix_upgrade: Some(gw2_api::models::InfixUpgrade {
+                    id: None,
+                    attributes: vec![],
+                    buff: Some(gw2_api::models::InfixBuff {
+                        skill_id: None,
+                        description: buff.map(str::to_string),
+                    }),
+                }),
+                suffix_item_id: None,
+                secondary_suffix_item_id: None,
+                stat_choices: vec![],
+            }),
+        }
+    }
+
+    /// FCR-002: Sigil of Impact's 7% half is gated on a disabled foe. Only the
+    /// 3% half is unconditional; the 7% must land as a deferred Disabled gate.
+    #[test]
+    fn sigil_of_impact_cc_half_is_deferred_not_additive() {
+        use crate::rotation::combat_model::{EnemyDummy, TargetState};
+        let buff = "+7% Strike Damage vs. Stunned or Knocked-Down Foes\n+3% Strike Damage";
+        let items: HashMap<u32, Item> = [(
+            24868,
+            sigil_with_buff(24868, "Superior Sigil of Impact", Some(buff)),
+        )]
+        .into_iter()
+        .collect();
+        let mods = extract_damage_modifiers(
+            &[],
+            None,
+            &[24868],
+            None,
+            &HashMap::new(),
+            &items,
+            &BalanceContext::pve(),
+        );
+
+        assert_eq!(mods.strike_pct, Vec::<f64>::new(), "{mods:?}");
+        assert_eq!(mods.strike_add_pct.len(), 1, "{mods:?}");
+        assert!((mods.strike_add_pct[0] - 0.03).abs() < 1e-9, "{mods:?}");
+        assert_eq!(mods.deferred_target.len(), 1, "{:?}", mods.deferred_target);
+        let d = &mods.deferred_target[0];
+        assert_eq!(d.gate, TargetGate::Disabled);
+        assert_eq!(d.axis, TargetModAxis::Strike);
+        assert!((d.percent - 7.0).abs() < 1e-9, "{d:?}");
+
+        // The gate only pays out against a disabled target.
+        let open = TargetState::from_seed(EnemyDummy::open());
+        let mut disabled = TargetState::from_seed(EnemyDummy::open());
+        disabled.extend_disable(5_000);
+        assert!(
+            (deferred_target_multiplier(&mods.deferred_target, &open, 0, TargetModAxis::Strike)
+                - 1.0)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (deferred_target_multiplier(
+                &mods.deferred_target,
+                &disabled,
+                0,
+                TargetModAxis::Strike
+            ) - 1.07)
+                .abs()
+                < 1e-9
+        );
+    }
+
+    /// FCR-007: the second sigil's fallback must not be skipped just because the
+    /// first sigil already filled a bucket.
+    #[test]
+    fn second_sigil_name_fallback_still_applies() {
+        let items: HashMap<u32, Item> = [
+            (
+                1,
+                sigil_with_buff(
+                    1,
+                    "Unknown Sigil of Testing",
+                    Some("+10% Bleeding Duration"),
+                ),
+            ),
+            (2, sigil_with_buff(2, "Superior Sigil of Force", None)),
+        ]
+        .into_iter()
+        .collect();
+        let mods = extract_damage_modifiers(
+            &[],
+            None,
+            &[1, 2],
+            None,
+            &HashMap::new(),
+            &items,
+            &BalanceContext::pve(),
+        );
+
+        let strike: f64 = mods
+            .strike_pct
+            .iter()
+            .chain(mods.strike_add_pct.iter())
+            .sum();
+        assert!(
+            (strike - 0.05).abs() < 1e-9,
+            "second-slot Sigil of Force must still grant 5%: {mods:?}"
+        );
+        assert_eq!(
+            mods.specific_condi_duration
+                .get("Bleeding")
+                .map(Vec::len)
+                .unwrap_or(0),
+            1,
+            "{mods:?}"
+        );
     }
 
     #[test]
