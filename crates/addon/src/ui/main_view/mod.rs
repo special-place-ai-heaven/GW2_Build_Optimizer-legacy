@@ -13,7 +13,7 @@ mod chat_flow;
 pub mod lock_panel;
 mod optimization;
 mod optimize_flow;
-pub(in crate::ui) mod provider_picks;
+pub(crate) mod provider_picks;
 mod resolution;
 mod stats;
 mod tabs;
@@ -342,8 +342,26 @@ fn render_top_status_bar(ui: &Ui, state: &mut AddonState) {
     ui.dummy([0.0, 2.0]);
 }
 
+/// The banner card's drawn height. The background, the border and the
+/// trailing `dummy` all measure from this.
+const CARD_HEIGHT: f32 = 62.0;
+
+/// `theme::pill`'s own padding, so a pill can be placed by hand at the same
+/// size the widget will draw itself.
+const PILL_PAD_X: f32 = 10.0;
+const PILL_PAD_Y: f32 = 3.0;
+
 /// Prominent animated progress banner for optimization.
-pub(super) fn render_optimization_progress(ui: &Ui, stage: &str, frame_count: i32) {
+///
+/// Returns true when the player clicked Stop on this frame. `can_stop` is
+/// false once a stop is already under way, because a second click cancels a
+/// token nothing is holding.
+pub(super) fn render_optimization_progress(
+    ui: &Ui,
+    stage: &str,
+    frame_count: i32,
+    can_stop: bool,
+) -> bool {
     let frame_count = frame_count as u32;
     ui.spacing();
     let start = ui.cursor_screen_pos();
@@ -356,7 +374,7 @@ pub(super) fn render_optimization_progress(ui: &Ui, stage: &str, frame_count: i3
         draw_list
             .add_rect(
                 [start[0], start[1]],
-                [start[0] + width, start[1] + 62.0],
+                [start[0] + width, start[1] + CARD_HEIGHT],
                 theme::with_alpha(theme::pal().title_bg, 0.95),
             )
             .filled(true)
@@ -456,15 +474,39 @@ pub(super) fn render_optimization_progress(ui: &Ui, stage: &str, frame_count: i3
         draw_list
             .add_rect(
                 [start[0], start[1]],
-                [start[0] + width, start[1] + 62.0],
+                [start[0] + width, start[1] + CARD_HEIGHT],
                 crate::ui::theme::pal().gold_dim,
             )
             .rounding(6.0)
             .build();
     }
 
+    // Choya's Stop, not a second one: same pill, same label, so stopping a run
+    // looks and reads the same wherever it was started. The card is drawn
+    // straight onto the draw list and moves no cursor, so the pill is placed
+    // by hand and the cursor is put back before the layout below is measured.
+    let mut stopped = false;
+    if can_stop {
+        let stop = t("chat.stop");
+        let sz = ui.calc_text_size(&stop);
+        // `theme::pill` pads 10px either side and 3px top and bottom, and
+        // floors the width at 36. Its real height follows the font, so it
+        // is measured rather than assumed.
+        let w = (sz[0] + PILL_PAD_X * 2.0).max(36.0);
+        let h = sz[1] + PILL_PAD_Y * 2.0;
+        // Centred in the whole card, not on the title row: between the title
+        // at +10 and the progress bar at +56 the pill sat visibly high.
+        ui.set_cursor_screen_pos([
+            start[0] + width - 12.0 - w,
+            start[1] + (CARD_HEIGHT - h) * 0.5,
+        ]);
+        stopped = theme::pill(ui, &stop, false, "##optimize_stop");
+        ui.set_cursor_screen_pos(start);
+    }
+
     ui.dummy([0.0, 66.0]);
     ui.spacing();
+    stopped
 }
 
 /// Horizontal tab bar for main navigation (styled buttons with active indicator).

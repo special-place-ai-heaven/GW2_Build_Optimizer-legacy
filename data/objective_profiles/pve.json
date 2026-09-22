@@ -11,6 +11,11 @@
         "sustain": 0.1,
         "control": 0.0
       },
+      "intent": {
+        "solo": { "focus": ["power", "sustain"], "avoid": ["healing"], "self_reliance": "strict" },
+        "party": { "focus": ["power", "sustain"], "avoid": ["healing"], "self_reliance": "moderate" },
+        "squad": { "focus": ["power"], "avoid": ["healing"], "self_reliance": "shared" }
+      },
       "weight_budget": 2.0,
       "normalization_constants": {
         "strike_dps_norm": 3000.0,
@@ -70,6 +75,11 @@
         "healing": 0.0,
         "sustain": 0.1,
         "control": 0.2
+      },
+      "intent": {
+        "solo": { "focus": ["condition", "sustain"], "avoid": ["healing"], "self_reliance": "strict" },
+        "party": { "focus": ["condition", "sustain"], "avoid": ["healing"], "self_reliance": "moderate" },
+        "squad": { "focus": ["condition"], "avoid": ["healing"], "self_reliance": "shared" }
       },
       "weight_budget": 2.0,
       "normalization_constants": {
@@ -131,6 +141,11 @@
         "sustain": 0.2,
         "control": 0.2
       },
+      "intent": {
+        "solo": { "focus": ["healing", "boon_support"], "avoid": ["power", "condition"], "self_reliance": "strict" },
+        "party": { "focus": ["healing", "boon_support"], "avoid": ["power", "condition"], "self_reliance": "moderate" },
+        "squad": { "focus": ["boon_support", "healing"], "avoid": ["power", "condition"], "self_reliance": "shared" }
+      },
       "weight_budget": 2.0,
       "normalization_constants": {
         "strike_dps_norm": 3000.0,
@@ -190,6 +205,11 @@
         "healing": 1.0,
         "sustain": 0.4,
         "control": 0.2
+      },
+      "intent": {
+        "solo": { "focus": ["healing"], "avoid": ["power", "condition"], "self_reliance": "strict" },
+        "party": { "focus": ["healing"], "avoid": ["power", "condition"], "self_reliance": "moderate" },
+        "squad": { "focus": ["healing"], "avoid": ["power", "condition"], "self_reliance": "shared" }
       },
       "weight_budget": 2.0,
       "normalization_constants": {
@@ -251,6 +271,11 @@
         "sustain": 0.3,
         "control": 0.2
       },
+      "intent": {
+        "solo": { "focus": ["healing", "boon_support"], "avoid": ["power", "condition"], "self_reliance": "strict" },
+        "party": { "focus": ["healing", "boon_support"], "avoid": ["power", "condition"], "self_reliance": "moderate" },
+        "squad": { "focus": ["boon_support", "healing"], "avoid": ["power", "condition"], "self_reliance": "shared" }
+      },
       "weight_budget": 2.0,
       "normalization_constants": {
         "strike_dps_norm": 3000.0,
@@ -310,6 +335,11 @@
         "healing": 0.33,
         "sustain": 0.34,
         "control": 0.34
+      },
+      "intent": {
+        "solo": { "focus": ["power", "condition", "sustain"], "avoid": [], "self_reliance": "strict" },
+        "party": { "focus": ["power", "condition"], "avoid": [], "self_reliance": "moderate" },
+        "squad": { "focus": ["power", "condition"], "avoid": [], "self_reliance": "shared" }
       },
       "weight_budget": 2.0,
       "normalization_constants": {
@@ -371,6 +401,11 @@
         "sustain": 1.0,
         "control": 0.2
       },
+      "intent": {
+        "solo": { "focus": ["sustain", "control"], "avoid": ["power", "condition"], "self_reliance": "strict" },
+        "party": { "focus": ["sustain", "control"], "avoid": ["power", "condition"], "self_reliance": "moderate" },
+        "squad": { "focus": ["sustain", "control"], "avoid": ["power", "condition"], "self_reliance": "shared" }
+      },
       "weight_budget": 2.0,
       "normalization_constants": {
         "strike_dps_norm": 3000.0,
@@ -430,6 +465,11 @@
         "healing": 0.1,
         "sustain": 0.4,
         "control": 0.6
+      },
+      "intent": {
+        "solo": { "focus": ["power", "control"], "avoid": ["sustain", "healing"], "self_reliance": "strict" },
+        "party": { "focus": ["power", "control"], "avoid": ["healing"], "self_reliance": "moderate" },
+        "squad": { "focus": ["power"], "avoid": ["healing"], "self_reliance": "shared" }
       },
       "weight_budget": 2.0,
       "normalization_constants": {
@@ -491,6 +531,11 @@
         "sustain": 0.8,
         "control": 0.3
       },
+      "intent": {
+        "solo": { "focus": ["sustain", "power", "control"], "avoid": ["healing"], "self_reliance": "strict" },
+        "party": { "focus": ["sustain", "power", "control"], "avoid": ["healing"], "self_reliance": "moderate" },
+        "squad": { "focus": ["sustain", "power"], "avoid": ["healing"], "self_reliance": "shared" }
+      },
       "weight_budget": 2.0,
       "normalization_constants": {
         "strike_dps_norm": 3000.0,
@@ -551,6 +596,11 @@
         "sustain": 0.4,
         "control": 1.0
       },
+      "intent": {
+        "solo": { "focus": ["control", "sustain"], "avoid": ["healing"], "self_reliance": "strict" },
+        "party": { "focus": ["control"], "avoid": ["healing"], "self_reliance": "moderate" },
+        "squad": { "focus": ["control"], "avoid": ["healing"], "self_reliance": "shared" }
+      },
       "weight_budget": 2.0,
       "normalization_constants": {
         "strike_dps_norm": 3000.0,
@@ -610,6 +660,11 @@
         "healing": 0.2,
         "sustain": 0.7,
         "control": 0.3
+      },
+      "intent": {
+        "solo": { "focus": ["boon_support", "sustain"], "avoid": ["condition"], "self_reliance": "strict" },
+        "party": { "focus": ["boon_support", "sustain"], "avoid": ["condition"], "self_reliance": "moderate" },
+        "squad": { "focus": ["boon_support", "sustain"], "avoid": ["condition"], "self_reliance": "shared" }
       },
       "weight_budget": 2.0,
       "normalization_constants": {

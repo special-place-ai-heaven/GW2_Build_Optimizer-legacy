@@ -179,6 +179,7 @@ fn auto(id: u32) -> RotationSkill {
         }],
         next_chain: None,
         is_stunbreak: false,
+        reaches_allies: false,
         weapon_set: 0,
     }
 }
@@ -299,6 +300,7 @@ fn stack_cap_json_and_sim() {
         }],
         next_chain: None,
         is_stunbreak: false,
+        reaches_allies: false,
         weapon_set: 0,
     };
     let vuln_skill = RotationSkill {
@@ -323,6 +325,7 @@ fn stack_cap_json_and_sim() {
         ],
         next_chain: None,
         is_stunbreak: false,
+        reaches_allies: false,
         weapon_set: 0,
     };
 
@@ -455,6 +458,7 @@ fn alacrity_recharges_skills_faster() {
         }],
         next_chain: None,
         is_stunbreak: false,
+        reaches_allies: false,
         weapon_set: 0,
     };
     let mut auto_alac = auto(1);

@@ -1169,7 +1169,10 @@ fn score_full_build(build: &Value, ctx: &ToolContext) -> Value {
         "viable": report.viability.is_viable,
         "gates": report.viability.gates.iter().map(|g| json!({
             "gate": format!("{:?}", g.gate),
+            // A skipped gate judged nothing: `passed` is meaningless there.
+            "outcome": if g.skipped { "skipped" } else if g.passed { "passed" } else { "failed" },
             "passed": g.passed,
+            "skipped": g.skipped,
             "note": g.note,
         })).collect::<Vec<_>>(),
         "user_intent_score": report.user_intent_score,

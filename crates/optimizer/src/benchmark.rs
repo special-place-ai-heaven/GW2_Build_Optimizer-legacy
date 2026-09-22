@@ -5,8 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::picks;
 use crate::providers::ProviderBuild;
-use crate::scoring::{select_gear_prefix, OptimizationWeights};
+use crate::scoring::OptimizationWeights;
 
 /// A single normalized reference build from a community build site.
 ///
@@ -65,12 +66,33 @@ pub struct BenchmarkDelta {
     pub profession: String,
     /// Role of the reference (e.g. "Power DPS").
     pub role: String,
+    /// The role the caller asked for, which is not always one any site
+    /// publishes for this profession.
+    pub requested_role: String,
+    /// Whether [`BenchmarkDelta::role`] shares any word with
+    /// [`BenchmarkDelta::requested_role`].
+    ///
+    /// False means the closest published build does a different job, so the
+    /// percentage is a fair score under the player's weights but is NOT a
+    /// comparison against a build meant for the same job - and the UI has to
+    /// say which it is showing.
+    pub role_matched: bool,
     /// Gear prefix of the reference build.
     pub ref_gear_prefix: String,
-    /// Estimated score of the community reference build (0.0-1.0).
+    /// The reference build's `RefereeReport::ranked_direction_score`, produced
+    /// by the same referee, weights, balance context and scenario as
+    /// `our_score`.
     pub ref_score: f64,
-    /// Score of the optimizer's result (0.0-1.0).
+    /// Our build's `RefereeReport::ranked_direction_score`.
     pub our_score: f64,
+    /// Whether the reference passed every blocking gate at the player's scale.
+    ///
+    /// A published page is written for its own scale and fight, so `false` is
+    /// common and does not invalidate `ref_score` — both sides are measured
+    /// output either way. The UI says so rather than hiding the comparison.
+    pub ref_viable: bool,
+    /// Whether our own build passed every blocking gate.
+    pub our_viable: bool,
     /// `our_score / ref_score` as a percentage (100 = on-par, >100 = better).
     pub pct_of_ref: f64,
     /// URL of the reference page.
@@ -111,49 +133,40 @@ pub fn find_best_benchmark<'a>(
     mode: &str,
     role_hint: &str,
 ) -> Option<&'a BenchmarkBuild> {
+    ranked_benchmarks(builds, profession, mode, role_hint)
+        .into_iter()
+        .next()
+}
+
+/// Every profession+mode match, closest role first.
+///
+/// Same criteria as [`find_best_benchmark`], but the whole list: a caller
+/// that can reject a candidate (no published ids, does not validate, scores
+/// nothing) needs the next one rather than nothing.
+fn ranked_benchmarks<'a>(
+    builds: &'a [BenchmarkBuild],
+    profession: &str,
+    mode: &str,
+    role_hint: &str,
+) -> Vec<&'a BenchmarkBuild> {
     let prof_lower = profession.to_lowercase();
     let mode_lower = mode.to_lowercase();
     let role_lower = role_hint.to_lowercase();
 
-    // Filter: must match profession AND mode
-    let candidates: Vec<&BenchmarkBuild> = builds
+    let mut candidates: Vec<&BenchmarkBuild> = builds
         .iter()
         .filter(|b| {
             b.profession.to_lowercase().contains(&prof_lower) && b.mode.to_lowercase() == mode_lower
         })
         .collect();
 
-    if candidates.is_empty() {
-        return None;
-    }
-
-    // Score by role similarity (word overlap)
-
+    // `max_by_key` returns the LAST maximum; a stable descending sort returns
+    // the first. Reversing before sorting keeps the head of this list the
+    // build `find_best_benchmark` has always picked.
+    candidates.reverse();
     candidates
-        .into_iter()
-        .max_by_key(|b| role_similarity(&b.role.to_lowercase(), &role_lower))
-}
-
-/// What a proposed build looks like, for finding published ones like it.
-///
-/// Names rather than ids, because that is what the proposal has: the model
-/// answers in names and they are resolved against the API on the way in.
-/// Everything is compared lowercased.
-#[derive(Debug, Clone, Default)]
-pub struct BuildShape {
-    pub profession: String,
-    pub mode: String,
-    /// Specialization names, elite included.
-    pub specs: Vec<String>,
-    /// Weapon type names — `Greatsword`, `Dagger`.
-    pub weapons: Vec<String>,
-    pub stat_prefix: String,
-    pub rune: String,
-    pub relic: String,
-    /// The job as this addon names it — healer, DPS, support. Carries nearly
-    /// the weight of a specialization: it is what someone means when they say
-    /// they want a healer for their spec.
-    pub role: String,
+        .sort_by_key(|b| std::cmp::Reverse(role_similarity(&b.role.to_lowercase(), &role_lower)));
+    candidates
 }
 
 /// The coarse job a role name describes, when it describes one.
@@ -171,6 +184,11 @@ pub struct BuildShape {
 /// ruled out on their account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobFamily {
+    /// Takes the fight away from the other side rather than killing it:
+    /// disables, boon strips, immobilises. Nothing the three sites publish
+    /// is labelled this way today, which is exactly why `narrow` exists -
+    /// the request has the word, the corpus does not.
+    Disabler,
     /// Keeps other people alive: healing, cleansing, boons, stability.
     Support,
     /// Sustained damage — the thing that dies to it dies over a fight.
@@ -196,6 +214,9 @@ pub fn job_family(role: &str) -> Option<JobFamily> {
     // generic ones appear inside them: "Roaming Assassin" is an assassin
     // before it is anything else, and "Offensive Support" is a support even
     // though it does damage.
+    if has("disab") || has("strip") || has("boonrip") || has("control") || has(" cc") {
+        return Some(JobFamily::Disabler);
+    }
     if has("heal") || has("medic") {
         return Some(JobFamily::Support);
     }
@@ -395,192 +416,62 @@ pub fn role_scale(role: &str) -> Option<Scale> {
     None
 }
 
-/// How close a published build is to a proposed one. Higher is closer.
+/// The scenario a published build was written for, as near as its own labels
+/// say: its mode, the job its role words name, and the group size they name.
 ///
-/// Weighted by how much each agreement actually says. Two builds sharing all
-/// three specializations are the same build with different gear; two sharing
-/// a stat prefix might have nothing else in common. So specializations
-/// dominate, then the job, then the weapons that decide five skills each,
-/// then the single choices — rune, relic, prefix.
+/// Reading a reference under the player's scenario answers "how well does
+/// this serve what I asked for". Reading it under its OWN scenario answers
+/// "does this build work at all", which is the question the viability gates
+/// are calibrated against — a zerg healer judged as a solo roamer is refused
+/// for not being self-reliant, which says nothing about the build.
 ///
-/// The job is weighted near a specialization on purpose. A healing Firebrand
-/// and a power Firebrand share all three specializations and are opposite
-/// jobs; if the role only broke ties it could never tell them apart, and the
-/// card offered to someone asking for a healer would be a DPS build wearing
-/// the same specs. Matching on specs alone is how a Firebrand zerg healer
-/// got matched to a Scrapper before any of this existed.
-///
-/// Zero means nothing in common, which is not the same as no data. A row
-/// published without a rune cannot agree about runes and is not punished for
-/// it beyond not scoring.
-pub fn closeness(shape: &BuildShape, build: &BenchmarkBuild, db: &crate::gamedb::GameDb) -> u32 {
-    let published = &build.published;
-    let lower = |s: &str| s.to_lowercase();
+/// The word lists are deliberately its own rather than [`role_scale`]'s:
+/// this one has no `None` to fall back on, so it defaults to Solo and to
+/// `StrikeSpike` where the label says nothing, and the two would diverge if
+/// either moved to serve the other.
+pub fn published_scenario(build: &BenchmarkBuild) -> crate::scenario::ScenarioSpec {
+    use crate::scenario::{CombatTier, RoleObjective, ScenarioSpec};
 
-    let their_specs: Vec<String> = published
-        .specs
-        .iter()
-        .filter_map(|line| db.specializations.get(&line.id))
-        .map(|spec| lower(&spec.name))
-        .collect();
-    // The elite specialization is the build's identity: a player who asked
-    // for a Ritualist and got a Reaper card was not shown "something like
-    // it" (in-game 2026-09-07, where a Harbinger and a Reaper outscored the
-    // three published Ritualist roaming builds on shared core lines and
-    // weapons). One elite match outweighs two core matches and the weapons.
-    let is_elite = |name: &str| {
-        db.specializations
-            .values()
-            .any(|spec| spec.elite && lower(&spec.name) == lower(name))
+    let mode = match build.mode.as_str() {
+        "WvW" => gw2_core::types::GameMode::WvW,
+        "PvP" => gw2_core::types::GameMode::PvP,
+        _ => gw2_core::types::GameMode::PvE,
     };
-    let spec_points: u32 = shape
-        .specs
-        .iter()
-        .filter(|name| their_specs.iter().any(|theirs| theirs == &lower(name)))
-        .map(|name| if is_elite(name) { 30 } else { 10 })
-        .sum();
-
-    // Weapons live in the gear rows' slot, which every site names with the
-    // weapon type: `Greatsword`, `Dagger`, `Warhorn`.
-    let their_weapons: Vec<String> = published.gear.iter().map(|g| lower(&g.slot)).collect();
-    let weapon_hits = shape
-        .weapons
-        .iter()
-        .filter(|name| their_weapons.iter().any(|theirs| theirs == &lower(name)))
-        .count() as u32;
-
-    let named = |id: Option<u32>| {
-        id.and_then(|id| db.items.get(&id))
-            .map(|item| lower(&item.name))
-            .unwrap_or_default()
+    let role = build.role.to_lowercase();
+    let has = |word: &str| role.contains(word);
+    // The site's own words, as a role chip. Word lists deliberately its own
+    // rather than the picks path's: this one has no `None` to fall back on.
+    let objective = if has("heal") || has("medic") {
+        RoleObjective::Healer
+    } else if has("support") || has("boon") {
+        RoleObjective::Buffer
+    } else if has("commander") {
+        RoleObjective::Tank
+    } else if has("disable") || has("boonstrip") {
+        RoleObjective::Disabler
+    } else if has("bruiser") || has("tank") {
+        RoleObjective::Sustain
+    } else if has("roam") || has("duel") || has("assassin") {
+        RoleObjective::WvWRoamer
+    } else if has("condi") {
+        RoleObjective::CondiDps
+    } else {
+        RoleObjective::PowerDps
     };
-    let rune_hit = !shape.rune.is_empty() && named(published.rune_id) == lower(&shape.rune);
-    let relic_hit = !shape.relic.is_empty() && named(published.relic_id) == lower(&shape.relic);
-
-    let scale_hit = match (role_scale(&shape.role), role_scale(&build.role)) {
-        (Some(want), Some(theirs)) => want == theirs,
-        _ => false,
+    let tier = if has("zerg") || has("cloud") || has("raid") {
+        CombatTier::Squad
+    } else if has("havoc") || has("party") || has("fractal") {
+        CombatTier::Party
+    } else {
+        CombatTier::Solo
     };
-
-    let prefix_hit = !shape.stat_prefix.is_empty()
-        && (lower(&build.gear_prefix) == lower(&shape.stat_prefix)
-            || published
-                .dominant_stat()
-                .is_some_and(|stat| lower(&stat) == lower(&shape.stat_prefix)));
-
-    spec_points
-        + weapon_hits * 4
-        + u32::from(rune_hit) * 3
-        + u32::from(relic_hit) * 3
-        + u32::from(prefix_hit) * 2
-        + role_similarity(&lower(&build.role), &lower(&shape.role)) as u32 * 8
-        + u32::from(scale_hit) * 9
-}
-
-/// The closest published build from each site, for "you might also like".
-///
-/// One per source rather than one overall, because the sites disagree and
-/// that disagreement is the useful part: three takes on the same job tell a
-/// player more than three rows from whichever site writes the most builds.
-///
-/// Only rows carrying real published data qualify. A row scraped before the
-/// per-site parsers existed has a name and a URL and nothing to compare, so
-/// this stays empty until the player has actually synced — which is the
-/// intended gate, not a side effect. Rows with nothing at all in common are
-/// dropped too: an unrelated build offered as a suggestion is worse than no
-/// suggestion.
-pub fn closest_per_source<'a>(
-    builds: &'a [BenchmarkBuild],
-    shape: &BuildShape,
-    db: &crate::gamedb::GameDb,
-) -> Vec<(&'a BenchmarkBuild, u32)> {
-    let prof = shape.profession.to_lowercase();
-    let mode = shape.mode.to_lowercase();
-
-    let mut best: std::collections::BTreeMap<&str, (u32, &BenchmarkBuild)> = Default::default();
-    for build in builds {
-        if build.published.is_empty()
-            || !build.profession.to_lowercase().contains(&prof)
-            || build.mode.to_lowercase() != mode
-        {
-            continue;
-        }
-        // Wrong job, no card. A site with nothing for this job should offer
-        // nothing: GuildJen publishes no Necromancer WvW support build at
-        // all, and without this it answered a request for a healer with its
-        // closest DPS — same profession, same mode, opposite job.
-        // The label says the job where it can; the gear says it where the
-        // label was vague. "Roamer" and a bare "DPS" name no job at all, and
-        // a Celestial roamer is a bruiser whatever the page called it.
-        let want_job = job_family(&shape.role).or_else(|| prefix_job(&shape.stat_prefix, db));
-        let their_job = job_family(&build.role).or_else(|| {
-            prefix_job(
-                &build
-                    .published
-                    .dominant_stat()
-                    .unwrap_or_else(|| build.gear_prefix.clone()),
-                db,
-            )
-        });
-        if let (Some(want), Some(theirs)) = (want_job, their_job) {
-            if want != theirs {
-                continue;
-            }
-        }
-        // Power and condition are not variants of one build. Read from the
-        // gear first and the label only when the gear is silent: a site that
-        // writes "Roaming DPS" and equips Marauder has told us it is a power
-        // build without using the word.
-        let want_flavour =
-            damage_flavour(&shape.role).or_else(|| prefix_flavour(&shape.stat_prefix, db));
-        // Label first on both sides, gear only where the label is silent. A
-        // build that says "Condi DPS" is a condition build even on Celestial
-        // — Celestial grants power too, so reading the gear first made it
-        // answer a request for a power build.
-        let their_flavour = damage_flavour(&build.role).or_else(|| {
-            prefix_flavour(
-                &build
-                    .published
-                    .dominant_stat()
-                    .unwrap_or_else(|| build.gear_prefix.clone()),
-                db,
-            )
-        });
-        if let (Some(want), Some(theirs)) = (want_flavour, their_flavour) {
-            if want != theirs && want != Flavour::Hybrid && theirs != Flavour::Hybrid {
-                continue;
-            }
-        }
-        // Scale is not a shade of the same job — see `Scale`. A hybrid is the
-        // exception: it carries its own sustain instead of leaning on twenty
-        // other people's boons, so it plays at any scale and its published
-        // one says nothing about where it can go.
-        let hybrid = matches!(their_flavour, Some(Flavour::Hybrid))
-            || matches!(want_flavour, Some(Flavour::Hybrid));
-        if !hybrid {
-            if let (Some(want), Some(theirs)) = (role_scale(&shape.role), role_scale(&build.role)) {
-                if theirs.self_reliance() > want.self_reliance() {
-                    continue;
-                }
-            }
-        }
-        let score = closeness(shape, build, db);
-        if score == 0 {
-            continue;
-        }
-        best.entry(build.source.as_str())
-            .and_modify(|held| {
-                if score > held.0 {
-                    *held = (score, build);
-                }
-            })
-            .or_insert((score, build));
-    }
-    let mut picks: Vec<(&BenchmarkBuild, u32)> =
-        best.into_values().map(|(score, b)| (b, score)).collect();
-    // Closest first, whichever site it came from.
-    picks.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.source.cmp(&b.0.source)));
-    picks
+    // The same constructor the addon and the picks path use, so a reference
+    // judged on its own terms is judged the way a request is - including
+    // the objective profile id, without which the referee falls back to the
+    // mode default and measures every build as a DPS.
+    let ctx = crate::balance::BalanceContext::new(mode.clone());
+    let weights = objective.to_weights_for(&mode, tier);
+    ScenarioSpec::for_request(&ctx, tier, Some(objective), &weights)
 }
 
 /// Compute a simple word-overlap similarity score between two role strings.
@@ -593,50 +484,153 @@ fn role_similarity(a: &str, b: &str) -> usize {
     words_a.intersection(&words_b).count()
 }
 
-// Scoring proxy
+// Reference scoring
 
-/// Estimate a score for a benchmark build by proxying its gear prefix through the
-/// objective scorer. This is a rough estimate — the benchmark build has no full
-/// stat block, so we use the gear prefix cosine similarity as a proxy for how
-/// well it matches the current scoring weights.
+/// A published build as a plate, in the same shape the model answers in.
 ///
-/// Returns a score in [0.0, 1.0]. Higher = better match for the current weights.
-pub fn score_benchmark_build(build: &BenchmarkBuild, weights: &OptimizationWeights) -> f64 {
-    if build.gear_prefix.is_empty() {
-        // No gear data scraped — use a neutral estimate
-        return 0.5;
+/// Lives here rather than in a calibration example because the "vs meta"
+/// meter needs it too: a reference build is only comparable to ours once it
+/// has been through the same validator and the same referee.
+pub fn plate_from(
+    build: &BenchmarkBuild,
+    db: &crate::gamedb::GameDb,
+) -> Option<crate::prompts::GeminiBuildResponse> {
+    let p = &build.published;
+    if p.specs.is_empty() {
+        return None;
     }
-
-    // Use cosine similarity between benchmark's gear prefix purpose profile
-    // and the current weights as the proxy score.
-    let gear_match = select_gear_prefix(weights);
-
-    if gear_match.primary.to_lowercase() == build.gear_prefix.to_lowercase()
-        || build
-            .gear_prefix
-            .to_lowercase()
-            .contains(&gear_match.primary.to_lowercase())
-    {
-        // Benchmark uses the same gear as the optimizer would pick — full similarity score
-        gear_match.similarity
-    } else {
-        // Different gear — penalise by how far it is from the target profile
-        // Use secondary match if the benchmark gear matches it
-        if let Some(sec) = gear_match.secondary {
-            if sec.to_lowercase() == build.gear_prefix.to_lowercase() {
-                return gear_match.similarity * 0.85;
-            }
-        }
-        // Generic fallback: use 0.6 as baseline for a valid but non-ideal gear choice
-        0.60_f64.min(gear_match.similarity * 0.75)
+    let specializations: Vec<(String, Vec<String>)> = p
+        .specs
+        .iter()
+        .filter_map(|line| {
+            let spec = db.specializations.get(&line.id)?;
+            let traits: Vec<String> = line
+                .trait_ids
+                .iter()
+                .filter_map(|id| db.traits.get(id).map(|t| t.name.clone()))
+                .collect();
+            Some((spec.name.clone(), traits))
+        })
+        .collect();
+    if specializations.len() != 3 {
+        return None;
     }
+    let name = |id: Option<u32>| {
+        id.and_then(|id| db.items.get(&id))
+            .map(|i| i.name.clone())
+            .unwrap_or_default()
+    };
+    const WEAPONS: [&str; 17] = [
+        "axe",
+        "dagger",
+        "mace",
+        "pistol",
+        "scepter",
+        "sword",
+        "focus",
+        "shield",
+        "torch",
+        "warhorn",
+        "greatsword",
+        "hammer",
+        "longbow",
+        "rifle",
+        "shortbow",
+        "staff",
+        "spear",
+    ];
+    let weapons: Vec<String> = p
+        .gear
+        .iter()
+        .map(|g| g.slot.clone())
+        .filter(|s| WEAPONS.contains(&s.to_lowercase().as_str()))
+        .collect();
+    // Heal, three utilities and elite. Sites vary on whether they mark these
+    // up at all - GuildJen mostly does not - but nearly every page publishes
+    // a chat code, and the code carries them as palette ids. Weapons decide
+    // skills 1-5 and are resolved from the profession; 6-0 are chosen, and
+    // this is where the choice is written down.
+    let skills = published_skills(p, db);
+    Some(crate::prompts::GeminiBuildResponse {
+        specializations,
+        weapons,
+        skills,
+        rune: name(p.rune_id),
+        sigils: p
+            .sigil_ids
+            .iter()
+            .filter_map(|id| db.items.get(id).map(|i| i.name.clone()))
+            .collect(),
+        relic: name(p.relic_id),
+        stat_prefix: p
+            .dominant_stat()
+            .unwrap_or_else(|| build.gear_prefix.clone()),
+        ..Default::default()
+    })
+}
+
+/// The slot bar, labelled the way a plate labels it.
+///
+/// `validation::parse_skill_names_from_response` reads `Heal: `, `Utils: `
+/// and `Elite: ` prefixes rather than a bare list, so this has to speak the
+/// same shape. Where the ids come from is `ProviderBuild::slot_skills`.
+fn published_skills(
+    p: &crate::providers::ProviderBuild,
+    db: &crate::gamedb::GameDb,
+) -> Vec<String> {
+    let slots = p.slot_skills(db);
+    let name = |slot: Option<&Option<u32>>| {
+        slot.and_then(|s| *s)
+            .and_then(|id| db.skills.get(&id))
+            .map(|s| s.name.clone())
+    };
+    let mut lines = Vec::new();
+    if let Some(heal) = name(slots.first()) {
+        lines.push(format!("Heal: {heal}"));
+    }
+    let utils: Vec<String> = slots
+        .iter()
+        .skip(1)
+        .take(3)
+        .filter_map(|slot| name(Some(slot)))
+        .collect();
+    if !utils.is_empty() {
+        lines.push(format!("Utils: {}", utils.join(", ")));
+    }
+    if let Some(elite) = name(slots.get(4)) {
+        lines.push(format!("Elite: {elite}"));
+    }
+    lines
+}
+
+/// Our score as a percentage of theirs, capped at 200% so a reference that
+/// barely scores cannot print an absurd number.
+fn pct_of(ours: f64, theirs: f64) -> f64 {
+    (ours / theirs * 100.0).clamp(0.0, 200.0)
 }
 
 /// Compute a `BenchmarkDelta` comparing the optimizer's scored result to the
-/// best matching community reference build.
+/// closest community reference build.
 ///
-/// `our_score` should be the `user_intent_score` from the RefereeReport (or
-/// a normalised combat metric if unavailable).
+/// Both sides are `RefereeReport::ranked_direction_score` under the SAME
+/// `weights`, `ctx` and `scenario` the optimized build was scored with, so
+/// the percentage means what a player reads it as. Uncapped, rather than
+/// `user_intent_score`: per-axis saturation flattens two builds that are far
+/// apart into the same number, and a ratio of two flattened numbers says
+/// nothing. `ranked_direction_score` rather than `raw_direction_score`
+/// because that one collapses to the -1.0 non-viability sentinel, and ~42% of
+/// synced WvW references fail a gate at the player's scale — the meter used
+/// to silently skip past them to a worse reference, or report none at all.
+/// Gate results are carried on `ref_viable`/`our_viable` instead.
+///
+/// The reference is chosen by the SAME rule the cards are - see
+/// [`crate::picks`]: every synced row with published ids is refereed under
+/// the player's own scenario, and the one whose measured axes sit nearest
+/// the player's weights wins, provided it clears
+/// [`crate::scoring::INTENT_ALIGNMENT_FLOOR`]. Role words decide nothing. `None` when our
+/// own score is not positive, or when nothing published measures near what
+/// was asked for - the UI already says so.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_benchmark_delta(
     builds: &[BenchmarkBuild],
     profession: &str,
@@ -644,23 +638,58 @@ pub fn compute_benchmark_delta(
     role_hint: &str,
     weights: &OptimizationWeights,
     our_score: f64,
+    our_viable: bool,
+    db: &crate::gamedb::GameDb,
+    ctx: &crate::balance::BalanceContext,
+    scenario: &crate::scenario::ScenarioSpec,
 ) -> Option<BenchmarkDelta> {
-    let reference = find_best_benchmark(builds, profession, mode, role_hint)?;
-    let ref_score = score_benchmark_build(reference, weights).max(0.01);
-    let pct_of_ref = if ref_score > 0.0 {
-        (our_score / ref_score * 100.0).min(200.0) // cap at 200% to avoid absurd display
-    } else {
-        100.0
-    };
-
+    // A build the simulator could not drive at all has no output to compare.
+    if !our_score.is_finite() || our_score <= 0.0 {
+        return None;
+    }
+    let candidates = picks::candidates(builds, profession, mode);
+    // No kit: the meter compares against our own result, which this
+    // function is not handed, so the kit tie-break has nothing to compare
+    // and stays inert. The measured direction decides on its own.
+    let (mut evaluated, _) = picks::evaluate(
+        &candidates,
+        db,
+        weights,
+        ctx,
+        scenario,
+        &picks::Kit::default(),
+        &|| false,
+    );
+    picks::order_picks(
+        &mut evaluated,
+        Some(picks::StatedScale::from_tier(scenario.combat_tier)),
+        None,
+    );
+    let best = evaluated.into_iter().find(|p| {
+        p.alignment
+            .is_some_and(|a| a >= crate::scoring::INTENT_ALIGNMENT_FLOOR)
+    })?;
+    let reference = candidates[best.index];
+    let ref_report = best.report.as_ref()?;
+    let ref_score = ref_report.ranked_direction_score;
+    // A reference that produced NOTHING measurable is no yardstick; dividing
+    // by zero is not a percentage. A failed gate is reported, not hidden.
+    if !ref_score.is_finite() || ref_score <= 0.0 {
+        return None;
+    }
     Some(BenchmarkDelta {
         source: reference.source.clone(),
         profession: reference.profession.clone(),
         role: reference.role.clone(),
+        requested_role: role_hint.to_string(),
+        role_matched: role_hint.trim().is_empty()
+            || role_similarity(&role_hint.to_lowercase(), &reference.role.to_lowercase()) > 0,
         ref_gear_prefix: reference.gear_prefix.clone(),
         ref_score,
         our_score,
-        pct_of_ref,
+        ref_viable: ref_report.viability.is_viable,
+        our_viable,
+        pct_of_ref: pct_of(our_score, ref_score),
         ref_url: reference.source_url.clone(),
     })
 }
@@ -806,39 +835,209 @@ mod tests {
         assert_eq!(role_similarity("power dps", "healer"), 0);
     }
 
+    /// An empty db can plate nothing, so nothing is scorable and the meter
+    /// stays honest by saying nothing at all.
     #[test]
-    fn score_benchmark_build_no_gear_returns_neutral() {
-        let mut b = make_build("Guardian", "PvE", "Power DPS", "");
-        b.gear_prefix = String::new();
+    fn compute_benchmark_delta_without_a_scorable_reference_is_none() {
+        let builds = vec![make_build("Guardian", "PvE", "Power DPS", "Berserker's")];
         let w = OptimizationWeights::preset_power_dps();
-        let score = score_benchmark_build(&b, &w);
-        assert!((score - 0.5).abs() < 0.001);
+        let db = crate::gamedb::GameDb::empty_for_tests();
+        let ctx = crate::balance::BalanceContext::new(gw2_core::types::GameMode::PvE);
+        let scenario = crate::scenario::ScenarioSpec::from_balance_context(&ctx);
+        assert!(compute_benchmark_delta(
+            &builds,
+            "Guardian",
+            "PvE",
+            "Power DPS",
+            &w,
+            0.7,
+            true,
+            &db,
+            &ctx,
+            &scenario,
+        )
+        .is_none());
     }
 
+    /// A reference for a different job is still scored honestly, but it is
+    /// not the same job, and the UI says so on this flag alone.
     #[test]
-    fn score_benchmark_build_matching_gear_scores_higher() {
-        let berserker = make_build("Guardian", "PvE", "Power DPS", "Berserker's");
-        let nomad = make_build("Guardian", "PvE", "Tank", "Nomad's");
+    fn role_matched_is_word_overlap_with_the_requested_role() {
+        let matched = |hint: &str, role: &str| {
+            role_similarity(&hint.to_lowercase(), &role.to_lowercase()) > 0
+        };
+        // The in-game case: no Disable reference exists, so a Roaming Condi
+        // DPS build is offered and shares no word with what was asked for.
+        assert!(!matched("Disable", "Roaming Condi DPS"));
+        assert!(!matched("Support", "Power DPS"));
+        assert!(matched("Power DPS", "Roaming Power DPS"));
+        assert!(matched("Condi DPS", "Roaming Condi DPS"));
+    }
+
+    /// A gate failure no longer zeroes our own score - `ranked_direction_score`
+    /// is measured either way - but a build the simulator produced NOTHING for
+    /// still has no honest percentage, so the meter says nothing.
+    #[test]
+    fn compute_benchmark_delta_without_measurable_own_output_is_none() {
+        let builds = vec![make_build("Guardian", "PvE", "Power DPS", "Berserker's")];
         let w = OptimizationWeights::preset_power_dps();
-        let score_b = score_benchmark_build(&berserker, &w);
-        let score_n = score_benchmark_build(&nomad, &w);
+        let db = crate::gamedb::GameDb::empty_for_tests();
+        let ctx = crate::balance::BalanceContext::new(gw2_core::types::GameMode::PvE);
+        let scenario = crate::scenario::ScenarioSpec::from_balance_context(&ctx);
+        assert!(compute_benchmark_delta(
+            &builds,
+            "Guardian",
+            "PvE",
+            "Power DPS",
+            &w,
+            0.0,
+            false,
+            &db,
+            &ctx,
+            &scenario,
+        )
+        .is_none());
+    }
+
+    /// The meter used to skip every reference whose direction score was the
+    /// -1.0 non-viability sentinel, and a large share of synced WvW rows fail
+    /// a gate at the player's scale - so it walked past the right reference
+    /// to a worse one, or reported nothing at all. Now it scores them and
+    /// says which side was refused.
+    ///
+    /// No named fixture. The meter needs a row that is BOTH refused and above
+    /// `crate::scoring::INTENT_ALIGNMENT_FLOOR`, and which row that is moves
+    /// every time a gate floor or an objective profile's focus axes are
+    /// recalibrated - this test was pinned to a named row three times and
+    /// drifted off it three times. So it searches the player's own corpus for
+    /// one, names what it found, and fails only when the corpus has none at
+    /// all, which is itself worth knowing.
+    ///
+    /// Cache-backed: a published plate needs the real `GameDb`. Prints and
+    /// returns without `dev.cfg`.
+    #[test]
+    fn a_non_viable_reference_is_reported_not_skipped() {
+        let Ok(addon_dir) = gw2_api::dev_config::addons_dir() else {
+            println!("no dev.cfg: nothing to check");
+            return;
+        };
+        let addon_dir = addon_dir.join("gw2_build_optimizer");
+        let all = crate::scraper::load_benchmarks(&addon_dir);
+        let cache = gw2_api::cache::DataCache::new(addon_dir.join("cache"));
+        let Ok(db) = crate::gamedb::GameDb::load(&cache) else {
+            println!("game data not cached: nothing to check");
+            return;
+        };
+        if all.is_empty() {
+            println!("no corpus synced: nothing to check");
+            return;
+        }
+
+        let mode = gw2_core::types::GameMode::WvW;
+        let ctx = crate::balance::BalanceContext::new(mode.clone());
+        // Every role and scale the mode offers, because which combination
+        // still has a refused-but-aligned row is exactly what keeps moving.
+        let mut found = None;
+        'search: for role in crate::scenario::RoleObjective::play_roles_for(&mode) {
+            for tier in [
+                crate::scenario::CombatTier::Solo,
+                crate::scenario::CombatTier::Party,
+                crate::scenario::CombatTier::Squad,
+            ] {
+                let w = role.to_weights_for(&mode, tier);
+                let scenario = crate::scenario::ScenarioSpec {
+                    combat_tier: tier,
+                    combat_kind: role.combat_kind_for_weights(&w),
+                    objective_profile_id: Some(role.profile_id_for(&mode, tier).to_string()),
+                    ..crate::scenario::ScenarioSpec::from_balance_context(&ctx)
+                };
+                for build in all
+                    .iter()
+                    .filter(|b| b.mode == "WvW" && !b.published.is_empty())
+                {
+                    let Some(plate) = plate_from(build, &db) else {
+                        continue;
+                    };
+                    let validated =
+                        crate::validation::validate_gemini_build(&plate, &db, &build.profession);
+                    if !validated.errors.is_empty() {
+                        continue;
+                    }
+                    let report = crate::referee::evaluate_validated_build_ranked(
+                        &validated,
+                        &db,
+                        &build.profession,
+                        &w,
+                        &ctx,
+                        &scenario,
+                    );
+                    if report.viability.is_viable {
+                        continue;
+                    }
+                    let aligned = report
+                        .intent_alignment
+                        .filter(|a| *a >= crate::scoring::INTENT_ALIGNMENT_FLOOR);
+                    let Some(aligned) = aligned else { continue };
+                    let refusing: Vec<String> = report
+                        .viability
+                        .gates
+                        .iter()
+                        .filter(|g| !g.passed && g.gate.blocks())
+                        .map(|g| format!("{:?}", g.gate))
+                        .collect();
+                    found = Some((build.clone(), *role, w, scenario, aligned, refusing));
+                    break 'search;
+                }
+            }
+        }
+        let (reference, role, w, scenario, aligned, refusing) = found.expect(
+            "no synced WvW reference is both refused and above the alignment floor -              the meter cannot be exercised, which means either every reference now              passes every gate or the floor excludes every refused one",
+        );
+        println!(
+            "fixture: {} {} {} ({:?}) aligned {aligned:.3}, refused on {refusing:?}",
+            reference.source, reference.profession, reference.role, role,
+        );
+
+        let delta = compute_benchmark_delta(
+            std::slice::from_ref(&reference),
+            &reference.profession,
+            "WvW",
+            &reference.role,
+            &w,
+            0.7,
+            true,
+            &db,
+            &ctx,
+            &scenario,
+        )
+        .expect("a refused reference is still a reference");
+        assert!(!delta.ref_viable, "this row fails a gate at this scale");
+        assert!(delta.our_viable);
         assert!(
-            score_b > score_n,
-            "Berserker (score={:.3}) should score higher than Nomad (score={:.3}) with Power DPS weights",
-            score_b, score_n
+            delta.ref_score > 0.0,
+            "the reference score is measured, not the sentinel: {}",
+            delta.ref_score
         );
     }
 
+    /// `plate_from` needs published ids; a row that has none cannot be
+    /// compared and must not be guessed at.
     #[test]
-    fn compute_benchmark_delta_produces_pct() {
-        let builds = vec![make_build("Guardian", "PvE", "Power DPS", "Berserker's")];
-        let w = OptimizationWeights::preset_power_dps();
-        let delta = compute_benchmark_delta(&builds, "Guardian", "PvE", "Power DPS", &w, 0.7);
-        assert!(delta.is_some());
-        let d = delta.unwrap();
-        assert!(d.pct_of_ref > 0.0);
-        assert!(d.pct_of_ref <= 200.0);
+    fn plate_from_without_published_specs_is_none() {
+        let build = make_build("Guardian", "PvE", "Power DPS", "Berserker's");
+        assert!(build.published.specs.is_empty());
+        assert!(plate_from(&build, &crate::gamedb::GameDb::empty_for_tests()).is_none());
     }
+
+    /// Equal scores read 100%; twice the reference is capped at 200%.
+    #[test]
+    fn pct_of_ref_is_a_ratio_capped_at_200() {
+        assert!((pct_of(0.7, 0.7) - 100.0).abs() < 1e-9);
+        assert!((pct_of(1.4, 0.7) - 200.0).abs() < 1e-9);
+        assert!((pct_of(7.0, 0.7) - 200.0).abs() < 1e-9);
+        assert!((pct_of(0.35, 0.7) - 50.0).abs() < 1e-9);
+    }
+
     /// Every role string here is one the three sites actually publish.
     #[test]
     fn a_healer_and_a_dps_are_never_the_same_job() {

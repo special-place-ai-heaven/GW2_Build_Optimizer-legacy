@@ -1236,8 +1236,12 @@ pub fn prepare_validated_rotation(
         .collect();
     let resolved_profession_skills;
     let profession_skills = if validated.skills.profession.is_empty() {
-        resolved_profession_skills =
-            rotation::builder::profession_skills_for_build(db, profession_name, &equipped_spec_ids);
+        resolved_profession_skills = rotation::builder::profession_skills_for_build(
+            db,
+            profession_name,
+            &equipped_spec_ids,
+            &validated.weapons,
+        );
         &resolved_profession_skills
     } else {
         &validated.skills.profession
@@ -1442,7 +1446,7 @@ fn simulate_prepared_with(
             crate::data::normalized_effects::effects().effects_for_mode(mode.label()),
             &executed_traits,
         );
-        let (resource_rules, resource_model_complete) = wvw_resource_rules(
+        let (resource_rules, resource_model_complete, resource_model_gaps) = wvw_resource_rules(
             validated,
             rotation_skills,
             db,
@@ -1466,6 +1470,8 @@ fn simulate_prepared_with(
                 active_effects: &active_effects,
                 resource_rules: &resource_rules,
                 resource_model_complete,
+                resource_model_gaps,
+                profession: profession_name.to_string(),
                 coverage,
                 population: crate::data::fight_population::FightPopulation::for_tier(
                     scenario.combat_tier,
@@ -1895,27 +1901,144 @@ fn is_shroud_entry(skill: &gw2_api::models::Skill) -> bool {
 /// (`specs/005-wvw-proc-sites`, FR-015): derived from the skills and the
 /// rules rather than from a list of professions. Empty rules are never a
 /// complete model.
+/// One bar of Warrior adrenaline, in strikes (wiki `Adrenaline`: three bars
+/// of 10, 30 maximum; a burst needs one full bar).
+const ADRENALINE_BAR_STRIKES: f64 = 10.0;
+
+/// Thief initiative ceiling before traits (wiki `Initiative`).
+const THIEF_INITIATIVE_CAP: f64 = 12.0;
+/// Wiki `Preparedness`: Trickery minor, +3 maximum initiative.
+const PREPAREDNESS_TRAIT_ID: u32 = 1232;
+/// Wiki `Bladesworn`: flow accrues at 2 per second while in combat.
+const FLOW_PER_SECOND_IN_COMBAT: f64 = 2.0;
+/// Wiki `Bladesworn`: Dragon Trigger converts 5 flow into one charge.
+const FLOW_PER_DRAGON_SLASH_CHARGE: f64 = 5.0;
+
+/// Energy regeneration a maintained Revenant skill removes while it is up.
+/// Wiki `Energy` lists every upkeep skill and its value; the API publishes
+/// none of them, so the table is the only source.
+fn upkeep_for(skill_name: &str) -> f64 {
+    const UPKEEP: &[(&str, f64)] = &[
+        ("Vengeful Hammers", 6.0),
+        ("Embrace the Darkness", 6.0),
+        ("Protective Solace", 8.0),
+        ("Impossible Odds", 6.0),
+        ("Facet of Light", 1.0),
+        ("Facet of Darkness", 2.0),
+        ("Facet of Elements", 1.0),
+        ("Facet of Strength", 2.0),
+        ("Facet of Chaos", 4.0),
+        ("Facet of Nature", 2.0),
+        ("Soulcleave's Summit", 5.0),
+        ("Urn of Saint Viktor", 5.0),
+    ];
+    UPKEEP
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(skill_name))
+        .map(|(_, upkeep)| *upkeep)
+        .unwrap_or(0.0)
+}
+
+/// A skill that puts an illusion on the field: the API's own `Clone` and
+/// `Phantasm` categories, with the `Phantasmal ...` name as the fallback for
+/// rows that carry no category.
+fn generates_illusion(skill: &gw2_api::models::Skill) -> bool {
+    skill
+        .categories
+        .iter()
+        .any(|category| category == "Clone" || category == "Phantasm")
+        || skill.name.starts_with("Phantasmal")
+}
+
 fn resource_model_complete(
     rules: &[rotation::wvw_timeline::SkillResourceRule],
     rotation_skills: &[rotation::RotationSkill],
     db: &GameDb,
 ) -> bool {
+    unpriced_resource_skills(rules, rotation_skills, db).is_empty()
+}
+
+/// Skills that spend a resource no rule prices. Empty rules mean the whole
+/// profession mechanic is unpriced, which is reported by name instead.
+fn unpriced_resource_skills(
+    rules: &[rotation::wvw_timeline::SkillResourceRule],
+    rotation_skills: &[rotation::RotationSkill],
+    db: &GameDb,
+) -> Vec<String> {
     if rules.is_empty() {
-        return false;
+        return vec!["profession mechanic".to_string()];
     }
     let ruled: std::collections::HashSet<u32> = rules.iter().map(|rule| rule.skill_id).collect();
-    rotation_skills.iter().all(|rotation_skill| {
-        let Some(skill) = db.skills.get(&rotation_skill.skill_id) else {
-            return true;
-        };
-        let (on_use, per_hit) = life_force_fact_shares(skill);
-        let names_resource = skill.initiative.is_some()
-            || skill.cost.is_some()
-            || is_shroud_entry(skill)
-            || on_use > 0.0
-            || per_hit > 0.0;
-        !names_resource || ruled.contains(&rotation_skill.skill_id)
-    })
+    let mut unpriced: Vec<String> = rotation_skills
+        .iter()
+        .filter(|rotation_skill| {
+            let Some(skill) = db.skills.get(&rotation_skill.skill_id) else {
+                return false;
+            };
+            let (on_use, per_hit) = life_force_fact_shares(skill);
+            let names_resource = skill.initiative.is_some()
+                || skill.cost.is_some()
+                || is_shroud_entry(skill)
+                || on_use > 0.0
+                || per_hit > 0.0;
+            names_resource && !ruled.contains(&rotation_skill.skill_id)
+        })
+        .map(|rotation_skill| rotation_skill.name.clone())
+        .collect();
+    unpriced.sort();
+    unpriced.dedup();
+    unpriced
+}
+
+/// Everything this ledger does not model for the build, named. Two kinds:
+/// a skill that spends an unpriced resource, and a profession or elite
+/// mechanic with no resource model at all. The second kind does not make
+/// the ledger "incomplete" (those builds pay nothing from a pool the
+/// timeline tracks) but it must never read as a verified pass either.
+fn resource_model_gap_names(
+    validated: &ValidatedBuild,
+    rules: &[rotation::wvw_timeline::SkillResourceRule],
+    rotation_skills: &[rotation::RotationSkill],
+    db: &GameDb,
+    profession_name: &str,
+) -> Vec<String> {
+    const PROFESSION_MECHANICS: &[(&str, &str)] = &[
+        ("Elementalist", "attunement recharge"),
+        ("Engineer", "toolbelt recharge"),
+        ("Guardian", "virtues, tomes and pages"),
+        ("Ranger", "pet swap and astral force"),
+    ];
+    const ELITE_MECHANICS: &[(&str, &str)] = &[
+        ("Deadeye", "malice"),
+        ("Harbinger", "blight"),
+        ("Holosmith", "heat"),
+        ("Berserker", "berserk adrenaline cap"),
+        ("Spellbreaker", "two-bar adrenaline cap"),
+    ];
+    let mut gaps = Vec::new();
+    if rules.is_empty() {
+        if let Some((_, mechanic)) = PROFESSION_MECHANICS
+            .iter()
+            .find(|(profession, _)| *profession == profession_name)
+        {
+            gaps.push((*mechanic).to_string());
+        } else {
+            gaps.push("profession mechanic".to_string());
+        }
+    } else {
+        gaps.extend(unpriced_resource_skills(rules, rotation_skills, db));
+    }
+    for spec in &validated.specializations {
+        if let Some((_, mechanic)) = ELITE_MECHANICS
+            .iter()
+            .find(|(name, _)| spec.name.eq_ignore_ascii_case(name))
+        {
+            gaps.push((*mechanic).to_string());
+        }
+    }
+    gaps.sort();
+    gaps.dedup();
+    gaps
 }
 
 pub(crate) fn wvw_resource_rules(
@@ -1925,19 +2048,36 @@ pub(crate) fn wvw_resource_rules(
     profession_name: &str,
     ctx: &BalanceContext,
     max_health: f64,
-) -> (Vec<rotation::wvw_timeline::SkillResourceRule>, bool) {
+) -> (
+    Vec<rotation::wvw_timeline::SkillResourceRule>,
+    bool,
+    Vec<String>,
+) {
     use rotation::wvw_timeline::{ResourceKind, SkillResourceRule};
 
     let virtuoso = validated
         .specializations
         .iter()
         .any(|spec| spec.name.eq_ignore_ascii_case("Virtuoso"));
+    let bladesworn = validated
+        .specializations
+        .iter()
+        .any(|spec| spec.name.eq_ignore_ascii_case("Bladesworn"));
+    // Wiki `Preparedness` (trait 1232, Trickery minor): +3 maximum initiative.
+    let initiative_cap = if validated
+        .specializations
+        .iter()
+        .any(|spec| spec.all_trait_ids.contains(&PREPAREDNESS_TRAIT_ID))
+    {
+        THIEF_INITIATIVE_CAP + 3.0
+    } else {
+        THIEF_INITIATIVE_CAP
+    };
     let mut rules = Vec::new();
     for rotation_skill in rotation_skills {
         let Some(skill) = db.skills.get(&rotation_skill.skill_id) else {
             continue;
         };
-        let description = skill.description.as_deref().unwrap_or("").to_lowercase();
         let profession_slot = skill
             .slot
             .as_deref()
@@ -2022,6 +2162,7 @@ pub(crate) fn wvw_resource_rules(
                 cost,
                 gain_on_hit: 0.0,
                 spend_all: false,
+                pool_cap: initiative_cap,
                 ..Default::default()
             });
             continue;
@@ -2031,8 +2172,24 @@ pub(crate) fn wvw_resource_rules(
                 skill_id: skill.id,
                 kind: ResourceKind::Energy,
                 cost: skill.cost.unwrap_or(0) as f64,
+                upkeep: upkeep_for(&skill.name),
                 gain_on_hit: 0.0,
                 spend_all: false,
+                ..Default::default()
+            });
+            continue;
+        }
+        if bladesworn && profession_slot {
+            // Wiki `Flow`: gained at 2/s while in combat, never from
+            // attacking, maximum 100, and it cannot fuel a core burst -- so
+            // a Bladesworn's profession bar is priced in flow, not
+            // adrenaline. Dragon Trigger converts 5 flow into one Dragon
+            // Slash charge, which is the smallest useful press.
+            rules.push(SkillResourceRule {
+                skill_id: skill.id,
+                kind: ResourceKind::Flow,
+                cost: FLOW_PER_DRAGON_SLASH_CHARGE,
+                pool_regen_per_second: FLOW_PER_SECOND_IN_COMBAT,
                 ..Default::default()
             });
             continue;
@@ -2041,9 +2198,19 @@ pub(crate) fn wvw_resource_rules(
             rules.push(SkillResourceRule {
                 skill_id: skill.id,
                 kind: ResourceKind::Adrenaline,
-                cost: skill.cost.unwrap_or(10) as f64,
+                // Unit: STRIKES of adrenaline, the same unit the timeline
+                // caps at 30. `skill.cost` on a burst is not in that unit
+                // and is not self-consistent either -- the API publishes
+                // 10, 30, 100 and 1000 for the same three-bar resource
+                // (Eviscerate 14353 says 100, Combustive Shot 14506 says
+                // 1000), so copying it raw put every core burst above the
+                // cap and `can_pay_resource` could never succeed. Wiki
+                // `Adrenaline`: three bars of 10 strikes, 30 maximum; a
+                // burst needs one full bar and expends every full bar it
+                // holds, which is `spend_all`.
+                cost: ADRENALINE_BAR_STRIKES,
                 gain_on_hit: 0.0,
-                spend_all: false,
+                spend_all: true,
                 ..Default::default()
             });
             continue;
@@ -2063,9 +2230,12 @@ pub(crate) fn wvw_resource_rules(
             });
             continue;
         }
-        if profession_name == "Mesmer"
-            && (description.contains("clone") || description.contains("blade"))
-        {
+        // Wiki `Illusion`: clones and phantasms come from skills MARKED as
+        // Clone or Phantasm skills, which the API publishes in `categories`.
+        // The description word match read 55 Mesmer skills as generators
+        // when 21 generate, so a shatter was priced against illusions the
+        // build never had.
+        if profession_name == "Mesmer" && generates_illusion(skill) {
             rules.push(SkillResourceRule {
                 skill_id: skill.id,
                 kind: if virtuoso {
@@ -2085,7 +2255,8 @@ pub(crate) fn wvw_resource_rules(
         .iter()
         .any(|rule| rule.enters_shroud && rule.drain_per_second.is_nan());
     let complete = !unread_shroud && resource_model_complete(&rules, rotation_skills, db);
-    (rules, complete)
+    let gaps = resource_model_gap_names(validated, &rules, rotation_skills, db, profession_name);
+    (rules, complete, gaps)
 }
 
 fn wvw_weapon_swap_cooldown_ms(profession_name: &str, validated: &ValidatedBuild) -> Option<u32> {
@@ -2230,8 +2401,21 @@ pub fn synergy_result_from_validated(
                 field: "wvw_timeline.resources".into(),
                 entity: profession_name.into(),
                 modes: vec![ctx.game_mode.label().to_string()],
-                explanation:
-                    "The active profession mechanic is outside the bounded resource ledger".into(),
+                explanation: if fight.resource_simulated {
+                    format!(
+                        "resource model incomplete for {profession_name}: {} not modelled",
+                        fight.resource_model_gaps.join(", ")
+                    )
+                } else {
+                    format!(
+                        "resource not simulated for {profession_name}: {} not modelled",
+                        if fight.resource_model_gaps.is_empty() {
+                            "the profession mechanic".to_string()
+                        } else {
+                            fight.resource_model_gaps.join(", ")
+                        }
+                    )
+                },
             });
         }
     }
@@ -2504,6 +2688,7 @@ pub fn optimize_v2(
     scenario: &crate::scenario::ScenarioSpec,
     locks: &gw2_core::types::BuildLocks,
     llm_client: Option<&dyn LlmClient>,
+    benchmarks_dir: Option<&std::path::Path>,
     on_progress: &mut dyn FnMut(OptimizeProgress),
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<SynergyResult, String> {
@@ -2513,7 +2698,12 @@ pub fn optimize_v2(
         stage: "Running v2 search...".into(),
         done: false,
     });
-    let config = SearchConfig::default();
+    let config = SearchConfig {
+        // Proven combinations seed the beam alongside our own seed. `None`
+        // (never synced) leaves the search exactly as it was.
+        benchmarks_dir: benchmarks_dir.map(|dir| dir.to_path_buf()),
+        ..SearchConfig::default()
+    };
     let mut best = crate::search_v2::optimize_v2_search(
         db,
         profession_name,
@@ -2900,6 +3090,7 @@ mod tests {
                 effects: Vec::new(),
                 next_chain: None,
                 is_stunbreak: false,
+                reaches_allies: false,
                 weapon_set,
             }
         }
@@ -3015,9 +3206,241 @@ mod tests {
             for skill in skills {
                 db.skills.insert(skill.id, skill);
             }
-            let (_, complete) =
+            let (_, complete, _) =
                 wvw_resource_rules(&validated, &rotation, &db, profession, &ctx, 20_000.0);
             assert_eq!(complete, expected, "{profession}");
+        }
+    }
+
+    /// Helpers for the resource-rule fixtures below.
+    fn resource_case(
+        profession: &str,
+        specs: &[(&str, Vec<u32>)],
+        skills: Vec<serde_json::Value>,
+        weapon_set: u8,
+    ) -> (
+        Vec<rotation::wvw_timeline::SkillResourceRule>,
+        bool,
+        Vec<String>,
+    ) {
+        let mut db = GameDb::empty_for_tests();
+        let mut rotation = Vec::new();
+        for value in skills {
+            let skill: gw2_api::models::Skill =
+                serde_json::from_value(value).expect("fixture skill");
+            rotation.push(rotation::RotationSkill {
+                targets: 1,
+                categories: skill.categories.clone(),
+                slot_name: skill.slot.clone(),
+                skill_id: skill.id,
+                name: skill.name.clone(),
+                slot: rotation::SkillSlot::Utility,
+                cast_time_ms: 500,
+                cooldown_ms: 5_000,
+                effects: Vec::new(),
+                next_chain: None,
+                is_stunbreak: false,
+                reaches_allies: false,
+                weapon_set,
+            });
+            db.skills.insert(skill.id, skill);
+        }
+        let validated = ValidatedBuild {
+            specializations: specs
+                .iter()
+                .map(|(name, traits)| crate::validation::ValidatedSpec {
+                    spec_id: 1,
+                    name: (*name).to_string(),
+                    elite: true,
+                    trait_ids: traits.clone(),
+                    trait_names: Vec::new(),
+                    all_trait_ids: traits.clone(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let ctx = BalanceContext::new(GameMode::WvW);
+        wvw_resource_rules(&validated, &rotation, &db, profession, &ctx, 20_000.0)
+    }
+
+    /// Wiki `Illusion`: clones and phantasms come from skills MARKED as
+    /// Clone or Phantasm skills, which the API publishes in `categories`.
+    /// Mentioning a clone in prose is not generating one.
+    #[test]
+    fn only_marked_skills_generate_illusions() {
+        use rotation::wvw_timeline::ResourceKind;
+        let (rules, _, _) = resource_case(
+            "Mesmer",
+            &[],
+            vec![
+                serde_json::json!({"id": 10218, "name": "Phantasmal Berserker",
+                    "slot": "Weapon_2", "facts": [], "categories": ["Phantasm"]}),
+                serde_json::json!({"id": 10169, "name": "Mirror Blade",
+                    "slot": "Weapon_3", "facts": [], "categories": ["Clone"]}),
+                serde_json::json!({"id": 10287, "name": "Signet of Illusions",
+                    "slot": "Utility", "facts": [], "categories": ["Signet"],
+                    "description": "Your illusions and clones are stronger."}),
+            ],
+            1,
+        );
+        let generators: Vec<u32> = rules
+            .iter()
+            .filter(|rule| rule.kind == ResourceKind::Illusions && rule.gain_on_hit > 0.0)
+            .map(|rule| rule.skill_id)
+            .collect();
+        assert_eq!(
+            generators,
+            vec![10218, 10169],
+            "the signet only talks about illusions"
+        );
+    }
+
+    /// Wiki `Flow`: a Bladesworn's profession bar spends flow, not
+    /// adrenaline, and flow cannot fuel a core burst.
+    #[test]
+    fn a_bladesworn_profession_bar_spends_flow() {
+        use rotation::wvw_timeline::ResourceKind;
+        let dragon_trigger = serde_json::json!({
+            "id": 62803, "name": "Dragon Trigger", "slot": "Profession_1",
+            "facts": [], "cost": 100
+        });
+        let (flow_rules, _, _) = resource_case(
+            "Warrior",
+            &[("Bladesworn", vec![])],
+            vec![dragon_trigger.clone()],
+            1,
+        );
+        let flow = flow_rules.first().expect("a rule for the trigger");
+        assert_eq!(flow.kind, ResourceKind::Flow);
+        assert_eq!(flow.cost, FLOW_PER_DRAGON_SLASH_CHARGE);
+        assert_eq!(flow.pool_regen_per_second, FLOW_PER_SECOND_IN_COMBAT);
+
+        // Core Warrior keeps adrenaline: flow is a Bladesworn pool only.
+        let (core_rules, _, _) = resource_case("Warrior", &[], vec![dragon_trigger], 1);
+        assert_eq!(
+            core_rules.first().expect("a rule").kind,
+            ResourceKind::Adrenaline,
+            "core warrior cannot spend flow"
+        );
+    }
+
+    /// Wiki `Preparedness` (trait 1232): +3 maximum initiative, so the
+    /// rules carry a 15-point ceiling instead of 12.
+    #[test]
+    fn preparedness_raises_the_initiative_cap_on_the_rules() {
+        let heartseeker = serde_json::json!({
+            "id": 13012, "name": "Heartseeker", "slot": "Weapon_2",
+            "facts": [], "initiative": 3
+        });
+        let (plain, _, _) = resource_case("Thief", &[], vec![heartseeker.clone()], 1);
+        assert_eq!(plain[0].pool_cap, THIEF_INITIATIVE_CAP);
+        let (prepared, _, _) = resource_case(
+            "Thief",
+            &[("Trickery", vec![PREPAREDNESS_TRAIT_ID])],
+            vec![heartseeker],
+            1,
+        );
+        assert_eq!(prepared[0].pool_cap, THIEF_INITIATIVE_CAP + 3.0);
+    }
+
+    /// Wiki `Energy` lists every upkeep skill and its value; the API
+    /// publishes none of them.
+    #[test]
+    fn maintained_revenant_skills_carry_their_upkeep() {
+        let (rules, _, _) = resource_case(
+            "Revenant",
+            &[],
+            vec![
+                serde_json::json!({"id": 27220, "name": "Facet of Light",
+                    "slot": "Heal", "facts": [], "cost": 0}),
+                serde_json::json!({"id": 27107, "name": "Impossible Odds",
+                    "slot": "Utility", "facts": [], "cost": 0}),
+                serde_json::json!({"id": 26937, "name": "Phase Traversal",
+                    "slot": "Utility", "facts": [], "cost": 10}),
+            ],
+            1,
+        );
+        let upkeep = |id: u32| {
+            rules
+                .iter()
+                .find(|rule| rule.skill_id == id)
+                .map(|rule| rule.upkeep)
+                .expect("rule")
+        };
+        assert_eq!(upkeep(27220), 1.0);
+        assert_eq!(upkeep(27107), 6.0);
+        assert_eq!(upkeep(26937), 0.0, "a one-shot skill maintains nothing");
+    }
+
+    /// An unmodelled mechanic never reads as a verified pass: the gap is
+    /// named, per profession and per elite specialization.
+    #[test]
+    fn unmodelled_mechanics_are_named() {
+        let virtue = serde_json::json!({
+            "id": 9152, "name": "Virtue of Justice", "slot": "Profession_1", "facts": []
+        });
+        let (_, complete, gaps) = resource_case("Guardian", &[], vec![virtue], 1);
+        assert!(!complete);
+        assert_eq!(gaps, vec!["virtues, tomes and pages".to_string()]);
+
+        let heartseeker = serde_json::json!({
+            "id": 13012, "name": "Heartseeker", "slot": "Weapon_2",
+            "facts": [], "initiative": 3
+        });
+        let (_, complete, gaps) =
+            resource_case("Thief", &[("Deadeye", vec![])], vec![heartseeker], 1);
+        assert!(complete, "initiative itself is modelled");
+        assert_eq!(
+            gaps,
+            vec!["malice".to_string()],
+            "and malice is still named"
+        );
+    }
+
+    /// A Warrior burst is priced in adrenaline STRIKES, whatever number the
+    /// API prints in `cost`. Eviscerate publishes 100 and Combustive Shot
+    /// 1000 against a 30-strike bar; copying either raw made the skill
+    /// permanently unaffordable and refused every Warrior on
+    /// `ResourceLegality`.
+    #[test]
+    fn a_warrior_burst_costs_one_bar_whatever_the_api_prints() {
+        use rotation::wvw_timeline::ResourceKind;
+        let ctx = BalanceContext::new(GameMode::WvW);
+        let validated = ValidatedBuild::default();
+        for api_cost in [10, 30, 100, 1000] {
+            let skill: gw2_api::models::Skill = serde_json::from_value(serde_json::json!({
+                "id": 14353, "name": "Eviscerate", "slot": "Profession_1",
+                "facts": [], "cost": api_cost
+            }))
+            .expect("skill");
+            let mut db = GameDb::empty_for_tests();
+            let rotation = vec![rotation::RotationSkill {
+                targets: 1,
+                categories: Vec::new(),
+                slot_name: None,
+                skill_id: 14353,
+                name: "Eviscerate".into(),
+                slot: rotation::SkillSlot::Profession,
+                cast_time_ms: 500,
+                cooldown_ms: 8_000,
+                effects: Vec::new(),
+                next_chain: None,
+                is_stunbreak: false,
+                reaches_allies: false,
+                weapon_set: 1,
+            }];
+            db.skills.insert(skill.id, skill);
+            let (rules, _, _) =
+                wvw_resource_rules(&validated, &rotation, &db, "Warrior", &ctx, 20_000.0);
+            let rule = rules
+                .iter()
+                .find(|r| r.kind == ResourceKind::Adrenaline)
+                .unwrap_or_else(|| panic!("no adrenaline rule for api cost {api_cost}"));
+            assert_eq!(rule.cost, ADRENALINE_BAR_STRIKES, "api cost {api_cost}");
+            // The bar opens at one full stage, so the burst is castable at
+            // the start of the fight and never blocks a priority decision.
+            assert!(rule.cost <= 30.0, "must sit inside the 30-strike cap");
+            assert!(rule.spend_all, "a burst expends every full bar");
         }
     }
 

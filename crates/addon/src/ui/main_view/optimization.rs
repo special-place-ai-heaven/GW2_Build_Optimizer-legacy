@@ -23,6 +23,83 @@ pub(super) fn coverage_note_from(
         })
 }
 
+/// The simulator's output in the shape the panels read.
+pub(super) fn rotation_breakdown(
+    sim: &gw2_optimizer::rotation::SimulationResult,
+) -> gw2_core::types::RotationBreakdown {
+    gw2_core::types::RotationBreakdown {
+        simulated_dps: sim.total_dps.round() as i32,
+        strike_dps: sim.strike_dps.round() as i32,
+        condition_dps: sim.condition_dps.round() as i32,
+        condition_uptime: sim
+            .condition_uptime
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect(),
+        buff_uptime: sim
+            .buff_uptime
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect(),
+        skill_usage: sim
+            .skill_usage
+            .iter()
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    s.cast_count,
+                    s.dps_contribution.round() as i32,
+                )
+            })
+            .collect(),
+        stunbreak_count: sim.stunbreak_count,
+        has_stability: sim.has_stability,
+        stability_uptime: sim.stability_uptime,
+        cleanse_count: sim.cleanse_count,
+        cleanse_rate_per_20s: sim.cleanse_rate_per_20s,
+    }
+}
+
+/// Fill the measured half of a tab straight from a referee report.
+///
+/// The reference cards are ranked by running the referee over every
+/// candidate, so the winner's report is already in hand. Re-deriving it
+/// through the engine would simulate the same build a second time for
+/// nothing - there is one referee path, and this is where its answer lands.
+pub(super) fn apply_referee_report(
+    suggestion: &mut crate::ui::comparison::BuildSuggestion,
+    report: &gw2_optimizer::referee::RefereeReport,
+    profession_name: &str,
+) {
+    let derived = gw2_optimizer::stats::compute_derived(&report.stats, profession_name);
+    suggestion.estimated_stats = Some(gw2_core::types::StatBlock {
+        power: report.stats.power.round() as i32,
+        precision: report.stats.precision.round() as i32,
+        toughness: report.stats.toughness.round() as i32,
+        vitality: report.stats.vitality.round() as i32,
+        condition_damage: report.stats.condition_damage.round() as i32,
+        expertise: report.stats.expertise.round() as i32,
+        concentration: report.stats.concentration.round() as i32,
+        ferocity: report.stats.ferocity.round() as i32,
+        healing_power: report.stats.healing_power.round() as i32,
+        crit_chance: derived.crit_chance,
+        crit_damage: derived.crit_damage,
+        health: derived.health.round() as i32,
+        armor: derived.armor.round() as i32,
+    });
+    suggestion.combat_solo = Some(perf_to_combat_metrics(&report.combat_solo));
+    suggestion.combat_party = Some(perf_to_combat_metrics(&report.combat_party));
+    suggestion.combat_squad = Some(perf_to_combat_metrics(&report.combat_squad));
+    suggestion.rotation = report.rotation.as_ref().map(rotation_breakdown);
+    suggestion.viability = Some(report.viability.clone());
+    suggestion.data_quality = report.quality.clone();
+    for reason in report.quality_reasons.iter().map(|r| r.to_string()) {
+        if !suggestion.quality_reasons.contains(&reason) {
+            suggestion.quality_reasons.push(reason);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn synergy_result_to_suggestion(
     result: &gw2_optimizer::engine::SynergyResult,
@@ -31,8 +108,12 @@ pub(super) fn synergy_result_to_suggestion(
     scenario: &gw2_optimizer::scenario::ScenarioSpec,
     role: Option<gw2_optimizer::scenario::RoleObjective>,
     label_override: Option<String>,
-    addon_dir: &std::path::Path,
+    // Where the synced community builds live, or `None` for a build that is
+    // itself a published reference: it must not be measured against itself,
+    // and the meter is not drawn for it.
+    benchmarks_dir: Option<&std::path::Path>,
     weights: &gw2_optimizer::scoring::OptimizationWeights,
+    ctx: &gw2_optimizer::balance::BalanceContext,
 ) -> crate::ui::comparison::BuildSuggestion {
     use crate::ui::comparison::BuildSuggestion;
 
@@ -140,40 +221,7 @@ pub(super) fn synergy_result_to_suggestion(
     let combat_party = Some(perf_to_combat_metrics(&result.combat_party));
     let combat_squad = Some(perf_to_combat_metrics(&result.combat_squad));
 
-    let rotation = result
-        .rotation
-        .as_ref()
-        .map(|sim| gw2_core::types::RotationBreakdown {
-            simulated_dps: sim.total_dps.round() as i32,
-            strike_dps: sim.strike_dps.round() as i32,
-            condition_dps: sim.condition_dps.round() as i32,
-            condition_uptime: sim
-                .condition_uptime
-                .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect(),
-            buff_uptime: sim
-                .buff_uptime
-                .iter()
-                .map(|(k, v)| (k.clone(), *v))
-                .collect(),
-            skill_usage: sim
-                .skill_usage
-                .iter()
-                .map(|s| {
-                    (
-                        s.name.clone(),
-                        s.cast_count,
-                        s.dps_contribution.round() as i32,
-                    )
-                })
-                .collect(),
-            stunbreak_count: sim.stunbreak_count,
-            has_stability: sim.has_stability,
-            stability_uptime: sim.stability_uptime,
-            cleanse_count: sim.cleanse_count,
-            cleanse_rate_per_20s: sim.cleanse_rate_per_20s,
-        });
+    let rotation = result.rotation.as_ref().map(rotation_breakdown);
 
     let changes_made: Vec<String> = v
         .changes
@@ -197,18 +245,23 @@ pub(super) fn synergy_result_to_suggestion(
         explanation.push_str(&v.warnings.join("; "));
     }
 
-    let primary_combat = match scenario.combat_tier {
-        gw2_optimizer::scenario::CombatTier::Solo => &result.combat_solo,
-        gw2_optimizer::scenario::CombatTier::Party => &result.combat_party,
-        gw2_optimizer::scenario::CombatTier::Squad => &result.combat_squad,
-    };
-    let mut viability = gw2_optimizer::referee::evaluate_viability_gates(
-        result.rotation.as_ref(),
-        primary_combat,
+    // One verdict per build. The panel used to run its own gate pass --
+    // `evaluate_viability_gates` with no objective profile and without the
+    // off-bar cleanse pass -- while the meter ranked the referee's. The two
+    // disagreed, so the panel printed NON-VIABLE over a build the referee
+    // had already passed. Both now read the same report.
+    //
+    // Runs the rotation simulator; every caller of this function is on the
+    // optimize worker thread.
+    let our_report = gw2_optimizer::referee::evaluate_validated_build_ranked(
+        v,
+        db,
+        profession_name,
+        weights,
+        ctx,
         scenario,
     );
-    gw2_optimizer::referee::apply_offbar_stability(&mut viability, v, db);
-    let viability = Some(viability);
+    let viability = Some(our_report.viability.clone());
 
     // Suggestion label: label_override > role name > generic
     let label = label_override
@@ -216,26 +269,35 @@ pub(super) fn synergy_result_to_suggestion(
         .unwrap_or_else(|| "Optimized Build".to_string());
 
     let role_hint = role.map(|r| r.label().to_string()).unwrap_or_default();
-    let our_score = {
-        // Use normalised strike + condi DPS index as proxy score when referee score unavailable
-        let s = &result.combat_solo;
-        let strike_norm = s.strike_dps_index / 3000.0;
-        let condi_norm = s.condition_dps_index / 3500.0;
-        strike_norm.max(condi_norm).min(1.0)
-    };
-    let benchmark_delta = {
-        let builds = gw2_optimizer::scraper::load_benchmarks(addon_dir);
+    // `benchmarks_synced` separates "you have never synced" from "nothing
+    // published could be scored here" - the UI said the first when it meant
+    // the second.
+    let (benchmark_delta, benchmarks_synced) = {
+        let builds = benchmarks_dir
+            .map(gw2_optimizer::scraper::load_benchmarks)
+            .unwrap_or_default();
         if builds.is_empty() {
-            None
+            (None, false)
         } else {
-            gw2_optimizer::benchmark::compute_benchmark_delta(
+            // Both sides of the meter are the same referee under the same
+            // weights, context and scenario - that equivalence is the whole
+            // point of the number, so ours is the report computed above
+            // rather than a DPS index. Ranked, matching the reference side:
+            // a gate failure must not turn our own number into the -1.0
+            // sentinel and delete the meter.
+            let delta = gw2_optimizer::benchmark::compute_benchmark_delta(
                 &builds,
                 profession_name,
                 scenario.game_mode.label(),
                 &role_hint,
                 weights,
-                our_score,
-            )
+                our_report.ranked_direction_score,
+                our_report.viability.is_viable,
+                db,
+                ctx,
+                scenario,
+            );
+            (delta, true)
         }
     };
 
@@ -284,6 +346,7 @@ pub(super) fn synergy_result_to_suggestion(
         rotation,
         viability,
         benchmark_delta,
+        benchmarks_synced,
         data_quality: result.data_quality.clone(),
         quality_reasons: result
             .quality_reasons
@@ -494,6 +557,9 @@ pub(super) fn candidate_to_suggestion(
         rotation: None,
         viability: Some(legacy_viability),
         benchmark_delta: None,
+        // Not measured against the community here, so nothing to say about
+        // whether the corpus is on disk.
+        benchmarks_synced: false,
         data_quality: leftover_plate_quality(true),
         quality_reasons: vec!["legacy leftover kit has no weapons or skills".into()],
         coverage_note: None,

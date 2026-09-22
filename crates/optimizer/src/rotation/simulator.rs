@@ -74,6 +74,9 @@ struct BuffInstance {
     kind: BuffKind,
     /// Index into `SimState::buff_slots`.
     slot: usize,
+    /// The skill that applied it reaches allies (see `skill_reaches_allies`).
+    /// A signet that mights only its owner is not boon support.
+    ally_facing: bool,
 }
 
 /// What the scheduler asks of a buff every tick, resolved once at push time
@@ -378,6 +381,12 @@ struct SimState {
     /// Control-seconds in ms: hard CC non-overlapping, soft control at half.
     control_ms: f64,
     might_stack_ms: f64,
+    /// Might seconds from ally-facing sources only.
+    ally_might_stack_ms: f64,
+    /// Healing and barrier this build put on OTHER people.
+    ally_healing: f64,
+    /// Per-slot boon uptime from ally-facing sources only.
+    ally_buff_active_ms: Vec<u32>,
     params: SimParams,
     /// Live combo fields (Phase 4). World/sim state, not TargetState.
     combo: ComboEngine,
@@ -438,6 +447,9 @@ impl SimState {
             total_healing: 0.0,
             control_ms: 0.0,
             might_stack_ms: 0.0,
+            ally_might_stack_ms: 0.0,
+            ally_healing: 0.0,
+            ally_buff_active_ms: Vec::new(),
             params,
             combo: ComboEngine::new(),
         }
@@ -453,6 +465,7 @@ impl SimState {
             self.tick_buffs();
             self.land_scheduled_strikes(power, weapon_strength);
             self.might_stack_ms += self.live_might_stacks() * TICK_MS as f64;
+            self.ally_might_stack_ms += self.live_ally_might_stacks() * TICK_MS as f64;
             self.control_ms += self.soft_control_weight() * TICK_MS as f64;
 
             // Alacrity: +25% recharge (wiki 2018). 100ms wall = 125ms CD. 10s → 8s.
@@ -658,6 +671,7 @@ impl SimState {
         }
         self.buff_slots.push(name.to_string());
         self.buff_active_ms.push(0);
+        self.ally_buff_active_ms.push(0);
         self.buff_seen.push(false);
         self.buff_slots.len() - 1
     }
@@ -719,6 +733,7 @@ impl SimState {
         let cast_time = skill.cast_time_ms;
         let cooldown = skill.cooldown_ms;
         let effects = skill.effects.clone();
+        let ally_facing = skill.reaches_allies;
         // Sole caller of the strike pricing until hits landed on a schedule;
         // keep the parameters flowing to the landing site.
         let _ = (power, weapon_strength);
@@ -807,6 +822,7 @@ impl SimState {
                             remaining_ms: (*duration_ms as f64 * duration_mult).round() as u32,
                             kind,
                             slot,
+                            ally_facing,
                         });
                     }
                 }
@@ -846,12 +862,20 @@ impl SimState {
                     // Same conservative model as the WvW timeline. The open
                     // dummy has no incoming pressure, so this is output the
                     // scheduler chose to produce, not survival.
-                    self.total_healing += (1_200.0 + self.params.healing_power * 0.45)
+                    let healed = (1_200.0 + self.params.healing_power * 0.45)
                         * *hit_count as f64
                         * self.params.healing_mult;
+                    self.total_healing += healed;
+                    if ally_facing {
+                        self.ally_healing += healed;
+                    }
                 }
                 SkillEffect::Barrier { amount } => {
-                    self.total_healing += amount + self.params.healing_power * 0.30;
+                    let granted = amount + self.params.healing_power * 0.30;
+                    self.total_healing += granted;
+                    if ally_facing {
+                        self.ally_healing += granted;
+                    }
                 }
                 SkillEffect::RemovesCondition { .. } => {
                     // Cleanse effects are tracked at the roster level (cleanse_count / cleanse_rate_per_20s),
@@ -930,6 +954,8 @@ impl SimState {
                         remaining_ms: duration,
                         kind,
                         slot,
+                        // Area effect: the field's boon lands on allies in it.
+                        ally_facing: true,
                     });
                 }
             }
@@ -960,7 +986,11 @@ impl SimState {
                 let amount = (base + self.params.healing_power * healing_power_coef)
                     * scale
                     * self.params.healing_mult;
+                // Wiki `Combo`: a finisher in a field produces an AREA
+                // effect, so a water blast heals the allies standing in it,
+                // not only the finisher.
                 self.total_healing += amount;
+                self.ally_healing += amount;
             }
             ComboOutcomeEffect::LifeSteal {
                 damage_base,
@@ -997,6 +1027,7 @@ impl SimState {
                     remaining_ms: duration,
                     kind: bkind,
                     slot,
+                    ally_facing: false,
                 });
             }
             ComboOutcomeEffect::CrowdControl { duration_ms } => {
@@ -1020,6 +1051,14 @@ impl SimState {
         self.buffs
             .iter()
             .filter(|buff| buff.kind == BuffKind::Might)
+            .count()
+            .min(25) as f64
+    }
+
+    fn live_ally_might_stacks(&self) -> f64 {
+        self.buffs
+            .iter()
+            .filter(|buff| buff.kind == BuffKind::Might && buff.ally_facing)
             .count()
             .min(25) as f64
     }
@@ -1128,6 +1167,9 @@ impl SimState {
                 if !self.buff_seen[buff.slot] {
                     self.buff_seen[buff.slot] = true;
                     self.buff_active_ms[buff.slot] += TICK_MS;
+                    if buff.ally_facing {
+                        self.ally_buff_active_ms[buff.slot] += TICK_MS;
+                    }
                 }
                 buff.remaining_ms = buff.remaining_ms.saturating_sub(TICK_MS);
             }
@@ -1228,19 +1270,26 @@ impl SimState {
             // printed "rate=-0.0/20s" for a kit with no cleanse at all.
             .fold(0.0, |acc, r| acc + r);
 
-        let healing_per_second = self.total_healing / duration_secs;
+        // Ally-facing, not self-facing: the healing axis is what this build
+        // does FOR OTHER PEOPLE. A Healing Signet ticking on its owner is
+        // survival, and `sustain` is where survival is scored; counting it
+        // here made every self-sustain bruiser read as a healer.
+        let healing_per_second = self.ally_healing / duration_secs;
         let control_uptime = self.control_ms / self.duration_ms as f64;
         let might_stacks_avg = self.might_stack_ms / self.duration_ms as f64;
+        let ally_might_stacks_avg = self.ally_might_stack_ms / self.duration_ms as f64;
         // From the slot vectors (insertion order), not the map: float sums
         // are order-dependent and the rank compares exact micro-units.
+        // Same rule as healing: boon SUPPORT is boons on other people. A
+        // signet that mights its owner is a damage modifier, not support.
         let boon_equivalents = self
             .buff_slots
             .iter()
-            .zip(&self.buff_active_ms)
+            .zip(&self.ally_buff_active_ms)
             .filter(|(name, _)| !name.eq_ignore_ascii_case("Might"))
             .map(|(name, ms)| boon_value(name) * (*ms as f64 / self.duration_ms as f64).min(1.0))
             .sum::<f64>()
-            + might_stacks_avg / 25.0;
+            + ally_might_stacks_avg / 25.0;
 
         SimulationResult {
             duration_ms: self.duration_ms,
@@ -1639,6 +1688,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         }
     }
@@ -1666,6 +1716,7 @@ mod tests {
             ],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         }
     }
@@ -1687,6 +1738,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: true,
             weapon_set: 0,
         }
     }
@@ -1702,6 +1754,7 @@ mod tests {
             effects: vec![SkillEffect::Healing { hit_count: 1 }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: true,
             weapon_set: 0,
             categories: Vec::new(),
             slot_name: None,
@@ -1725,6 +1778,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         }
     }
@@ -1812,7 +1866,11 @@ mod tests {
                 duration_ms,
             }],
             next_chain: None,
+            // The boon half of this helper stands for a support skill that
+            // reaches allies; the condition half applies to the target, where
+            // the flag is not read at all.
             is_stunbreak: false,
+            reaches_allies: true,
             weapon_set: 0,
         }
     }
@@ -1892,6 +1950,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 1,
         };
         set1_bleed.weapon_set = 1;
@@ -1908,6 +1967,7 @@ mod tests {
             effects: vec![SkillEffect::Healing { hit_count: 1 }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 2,
             categories: Vec::new(),
             slot_name: None,
@@ -1930,6 +1990,69 @@ mod tests {
             "must swap to the set that heals: {:?}",
             flow.skill_usage
         );
+    }
+
+    /// The healing and boon_support axes measure what a build does FOR
+    /// OTHER PEOPLE. Two kits with identical stats and identical numbers on
+    /// the meter score differently when one of them only helps itself.
+    #[test]
+    fn the_support_axes_count_allies_not_the_caster() {
+        let mut self_heal = heal_skill();
+        self_heal.reaches_allies = false;
+        let ally_heal = heal_skill();
+        let params = {
+            let mut p = SimParams::basic(2_000.0, 0.0, 1_000.0);
+            p.intent = Some(OptimizationWeights {
+                healing: 1.0,
+                boon_support: 1.0,
+                ..OptimizationWeights::default()
+            });
+            p
+        };
+        let selfish = simulate_with(
+            &[auto_attack(), self_heal],
+            30_000,
+            &params,
+            EnemyDummy::open(),
+        );
+        let ally = simulate_with(
+            &[auto_attack(), ally_heal],
+            30_000,
+            &params,
+            EnemyDummy::open(),
+        );
+        assert_eq!(
+            selfish.healing_per_second, 0.0,
+            "a self-heal is survival, not the healing axis"
+        );
+        assert!(
+            ally.healing_per_second > selfish.healing_per_second,
+            "the ally kit heals: {} vs {}",
+            ally.healing_per_second,
+            selfish.healing_per_second
+        );
+
+        // Same rule for boons: a self-might signet is a damage modifier.
+        let mut signet = buff_skill();
+        signet.name = "Signet of Might".into();
+        signet.reaches_allies = false;
+        let shout = buff_skill();
+        let selfish_boons = simulate_with(
+            &[auto_attack(), signet],
+            30_000,
+            &params,
+            EnemyDummy::open(),
+        );
+        let shouted = simulate_with(&[auto_attack(), shout], 30_000, &params, EnemyDummy::open());
+        assert_eq!(selfish_boons.boon_equivalents, 0.0);
+        assert!(
+            shouted.boon_equivalents > selfish_boons.boon_equivalents,
+            "the shout supports: {} vs {}",
+            shouted.boon_equivalents,
+            selfish_boons.boon_equivalents
+        );
+        // The self-buff is still on the meter; it is just not support.
+        assert!(selfish_boons.might_stacks_avg > 0.0);
     }
 
     #[test]
@@ -2052,6 +2175,7 @@ mod tests {
                 }],
                 next_chain: None,
                 is_stunbreak: false,
+                reaches_allies: false,
                 weapon_set: 0,
             }
         }
@@ -2106,6 +2230,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
         let low_dmg = RotationSkill {
@@ -2123,6 +2248,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
 
@@ -2155,6 +2281,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
 
@@ -2190,6 +2317,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
 
@@ -2215,6 +2343,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 1,
         };
         let set1_auto = RotationSkill {
@@ -2232,6 +2361,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 1,
         };
         let set2_skill = RotationSkill {
@@ -2249,6 +2379,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 2,
         };
         let set2_auto = RotationSkill {
@@ -2266,6 +2397,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 2,
         };
 
@@ -2341,6 +2473,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         }
     }
@@ -2427,6 +2560,7 @@ mod tests {
             ],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
         let result = simulate(&[auto_with_cleanse], 5000, 2000.0, 0.0, 1100.0);
@@ -2479,6 +2613,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
         let dummy = EnemyDummy {
@@ -2516,6 +2651,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
         let dummy = EnemyDummy {
@@ -2566,6 +2702,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
         let result = simulate(&[auto_attack(), cc], 2_000, 2000.0, 0.0, 1100.0);
@@ -2619,6 +2756,7 @@ mod tests {
             ],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         };
         let result = simulate(&[skill], 15_500, 2000.0, 0.0, 1100.0);
@@ -2758,6 +2896,7 @@ mod tests {
             ],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         }];
         let result = simulate(&skills, 8_000, 1_000.0, 1_000.0, 1_100.0);
@@ -2906,6 +3045,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         }
     }
@@ -2927,6 +3067,7 @@ mod tests {
             }],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         }
     }
@@ -3047,6 +3188,7 @@ mod tests {
                 }],
                 next_chain: None,
                 is_stunbreak: false,
+                reaches_allies: false,
                 weapon_set: 0,
             }
         }
@@ -3067,6 +3209,7 @@ mod tests {
                 }],
                 next_chain: None,
                 is_stunbreak: false,
+                reaches_allies: false,
                 weapon_set: 0,
             }
         }
@@ -3304,6 +3447,7 @@ mod tests {
             effects,
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
             categories: vec![],
             slot_name: Some("Utility".into()),
@@ -3528,6 +3672,7 @@ mod tests {
             effects: vec![],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
         }
     }

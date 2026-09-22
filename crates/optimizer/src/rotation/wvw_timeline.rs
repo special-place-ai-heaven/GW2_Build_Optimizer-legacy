@@ -31,6 +31,17 @@ use super::trigger_bus::{
 use super::{CoverKind, MobilityKind, RotationSkill, SkillEffect, SkillSlot};
 
 const TIMELINE_TICK_MS: u32 = 50;
+
+/// One bar of Warrior adrenaline, in strikes (wiki `Adrenaline`).
+const ADRENALINE_BAR_STRIKES: f64 = 10.0;
+/// Revenant energy regeneration, percent per second (wiki `Energy`).
+const ENERGY_REGEN_PER_SECOND: f64 = 5.0;
+/// Total upkeep the game allows at once (wiki `Energy`: -10, net -5/s).
+const MAX_UPKEEP: f64 = 10.0;
+/// Energy a legend invocation resets the pool to (wiki `Energy`).
+const LEGEND_SWAP_ENERGY: f64 = 50.0;
+/// Recharge on invoking a legend (wiki `Legend`: always 10 seconds).
+const LEGEND_SWAP_RECHARGE_MS: u32 = 10_000;
 /// GW2 dodge evade frame (~750 ms). No prior evade-cover duration in this file.
 const DODGE_EVADE_MS: u32 = 750;
 pub const MIN_PROTECTED_WINDOW_MS: u32 = 2_000;
@@ -153,6 +164,10 @@ pub enum ResourceKind {
     /// Necromancer life force, in absolute units; the cap is 69 % of max
     /// health (`data/formulas/shroud.json`).
     LifeForce,
+    /// Bladesworn flow. Wiki `Flow`: gained at a constant rate while in
+    /// combat (2/s base), never from attacking, maximum 100, and it cannot
+    /// fuel a core Warrior burst.
+    Flow,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -179,6 +194,16 @@ pub struct SkillResourceRule {
     /// This skill enters / exits shroud.
     pub enters_shroud: bool,
     pub exits_shroud: bool,
+    /// Pool ceiling when the build changes it (Thief Preparedness: 15
+    /// initiative instead of 12). `0.0` keeps the profession default.
+    pub pool_cap: f64,
+    /// Pool credited every second regardless of what the player does
+    /// (Bladesworn flow). `0.0` for pools that only fill from actions.
+    pub pool_regen_per_second: f64,
+    /// Energy regeneration this skill removes while it is maintained
+    /// (Revenant upkeep, wiki `Energy`: a negative modifier on the +5/s
+    /// rate, capped at -10 upkeep, i.e. -5/s net).
+    pub upkeep: f64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -214,9 +239,27 @@ pub struct WvwCombatReport {
     pub repeatable: bool,
     pub resource_blocked_actions: u32,
     pub resource_legal: bool,
+    /// Priority decisions whose top pick could not be paid for, over all
+    /// priority decisions. Opening a fight unable to pay is how the game
+    /// starts (a Mesmer has no clones, a Warrior has no adrenaline); only
+    /// sustained blocking says the bar cannot be played.
+    pub resource_blocked_ratio: f64,
+    /// Skills whose cost can never be paid because it exceeds the resource
+    /// cap. Unplayable for the whole fight, not just its opening.
+    pub resource_unpayable_skills: Vec<String>,
     /// False when the active profession mechanic needs a state model that this
     /// bounded resource ledger does not yet provide.
     pub resource_model_complete: bool,
+    /// What the ledger does not model for this build, named: an unmodelled
+    /// profession or elite mechanic, or a skill that spends a resource no
+    /// rule prices. A refusal quotes these instead of passing silently.
+    pub resource_model_gaps: Vec<String>,
+    /// False when this profession's resource was never simulated at all --
+    /// no rule priced anything, so there is nothing to judge and the
+    /// legality gate abstains rather than passing the build for free.
+    pub resource_simulated: bool,
+    /// Whose resource this is, for the abstention note.
+    pub profession: String,
     /// Every equipped or triggered effect source the timeline did not
     /// simulate, as `"{name} ({why})"` — `no record`, `on-crit`,
     /// `on-skill-use`, `on-health-threshold`, `conditional`, `unresolved
@@ -338,6 +381,10 @@ pub struct WvwTimelineInput<'a> {
     pub active_effects: &'a [&'a NormalizedEffect],
     pub resource_rules: &'a [SkillResourceRule],
     pub resource_model_complete: bool,
+    /// Mechanics this build spends that the ledger does not price.
+    pub resource_model_gaps: Vec<String>,
+    /// Whose bar this is, so an abstaining gate can name it.
+    pub profession: String,
     /// Equipped sources the timeline will not simulate, already classified
     /// by the caller (`engine::active_normalized_effects`).
     pub coverage: Vec<CoverageEntry>,
@@ -839,6 +886,24 @@ struct Timeline<'a> {
     resource_rules: HashMap<u32, SkillResourceRule>,
     resources: HashMap<ResourceKind, f64>,
     resource_blocked_skills: HashSet<u32>,
+    /// Priority decision points, and how many of them wanted a skill the
+    /// build could not pay for (specs/008: the latch alone refused builds
+    /// that were merely mid-ramp).
+    resource_priority_actions: u32,
+    resource_blocked_events: u32,
+    /// Per-pool ceilings and constant regeneration, read off the rules.
+    pool_caps: HashMap<ResourceKind, f64>,
+    pool_regen: HashMap<ResourceKind, f64>,
+    /// Revenant upkeep currently maintained, in energy per second.
+    active_upkeep: f64,
+    /// Next moment a legend can be invoked (wiki `Legend`: always a 10 s
+    /// recharge, and the swap resets energy to 50).
+    legend_swap_ready_ms: u32,
+    /// Profession mechanics this resource ledger does not model, named by
+    /// the caller so a refusal can say what is missing instead of passing
+    /// silently.
+    resource_model_gaps: Vec<String>,
+    profession: String,
     resource_model_complete: bool,
     in_shroud: Option<ShroudState>,
     weapon_set_before_shroud: u8,
@@ -859,6 +924,8 @@ pub fn evaluate_wvw_timeline(input: WvwTimelineInput<'_>) -> WvwCombatReport {
         active_effects,
         resource_rules,
         resource_model_complete,
+        resource_model_gaps,
+        profession,
         coverage,
         population,
         sigil_sets,
@@ -877,6 +944,8 @@ pub fn evaluate_wvw_timeline(input: WvwTimelineInput<'_>) -> WvwCombatReport {
         coverage,
     );
     timeline.weapon_swap_cooldown_ms = weapon_swap_cooldown_ms;
+    timeline.resource_model_gaps = resource_model_gaps;
+    timeline.profession = profession;
     timeline.assign_sigil_sets(&sigil_sets);
     timeline.population = population;
     timeline.opener = opener;
@@ -1039,6 +1108,22 @@ impl<'a> Timeline<'a> {
                 .collect(),
             resources: initial_resources(resource_rules),
             resource_blocked_skills: HashSet::new(),
+            resource_priority_actions: 0,
+            resource_blocked_events: 0,
+            pool_caps: resource_rules
+                .iter()
+                .filter(|rule| rule.pool_cap > 0.0)
+                .map(|rule| (rule.kind, rule.pool_cap))
+                .collect(),
+            pool_regen: resource_rules
+                .iter()
+                .filter(|rule| rule.pool_regen_per_second > 0.0)
+                .map(|rule| (rule.kind, rule.pool_regen_per_second))
+                .collect(),
+            active_upkeep: 0.0,
+            legend_swap_ready_ms: 0,
+            resource_model_gaps: Vec::new(),
+            profession: String::new(),
             resource_model_complete,
             in_shroud: None,
             weapon_set_before_shroud: 1,
@@ -1352,6 +1437,7 @@ impl<'a> Timeline<'a> {
                 && self.now_ms >= self.next_action_ms
                 && self.now_ms >= self.disabled_until_ms
             {
+                self.try_legend_swap();
                 if let Some(skill_idx) = self.pick_skill() {
                     self.start_cast(skill_idx);
                 } else {
@@ -1606,9 +1692,20 @@ impl<'a> Timeline<'a> {
         self.next_action_ms = self.at(cast_ms
             .saturating_add(HUMAN_DELAY_MS)
             .saturating_add(MIN_SKILL_GAP_MS));
+        // A maintained skill starts draining energy now. Wiki `Energy`:
+        // total upkeep is capped at 10 (-5 %/s net).
+        if let Some(upkeep) = self
+            .resource_rules
+            .get(&skill.skill_id)
+            .map(|rule| rule.upkeep)
+            .filter(|upkeep| *upkeep > 0.0)
+        {
+            self.active_upkeep = (self.active_upkeep + upkeep).min(MAX_UPKEEP);
+        }
     }
 
     fn pick_skill(&mut self) -> Option<usize> {
+        self.resource_priority_actions += 1;
         // Follow the published rotation while it can be followed. A skill
         // already on recharge was pressed; one on the other set asks for a
         // swap when the swap is ready and is skipped when it is not; one the
@@ -1736,6 +1833,13 @@ impl<'a> Timeline<'a> {
         if let Some((skill_id, blocked_priority)) = highest_unpaid {
             if blocked_priority > legal_priority {
                 self.resource_blocked_skills.insert(skill_id);
+                // A decision counts as resource-blocked only when the pool
+                // left NOTHING to press. Wanting a 50-energy elite while
+                // pressing an affordable skill is how every resource
+                // profession plays; it is not the bar failing.
+                if best.is_none() {
+                    self.resource_blocked_events += 1;
+                }
             }
         }
         best.map(|(idx, _)| idx).or(filler)
@@ -1773,6 +1877,7 @@ impl<'a> Timeline<'a> {
         if self.now_ms >= self.disabled_until_ms {
             return;
         }
+        self.resource_priority_actions += 1;
         let candidates: Vec<usize> = self
             .skills
             .iter()
@@ -1784,6 +1889,7 @@ impl<'a> Timeline<'a> {
             })
             .map(|(idx, _)| idx)
             .collect();
+        let blocked_before = self.resource_blocked_skills.len();
         let Some(idx) = candidates.into_iter().find(|idx| {
             let skill_id = self.skills[*idx].skill_id;
             let can_pay = self.can_pay_resource(skill_id);
@@ -1792,6 +1898,12 @@ impl<'a> Timeline<'a> {
             }
             can_pay
         }) else {
+            // One decision, one count: scanning three unaffordable
+            // stunbreaks before giving up is still a single moment where
+            // the pool left nothing to press, exactly as in `pick_skill`.
+            if self.resource_blocked_skills.len() > blocked_before {
+                self.resource_blocked_events += 1;
+            }
             return;
         };
         let skill_id = self.skills[idx].skill_id;
@@ -3844,6 +3956,15 @@ impl<'a> Timeline<'a> {
         value / (skill.cast_time_ms.max(100) as f64 / 1_000.0)
     }
 
+    /// This build's ceiling for a pool: the rule's override, else the
+    /// profession default.
+    fn cap_of(&self, kind: ResourceKind) -> f64 {
+        self.pool_caps
+            .get(&kind)
+            .copied()
+            .unwrap_or_else(|| resource_cap(kind, self.params.max_health))
+    }
+
     fn can_pay_resource(&self, skill_id: u32) -> bool {
         let Some(rule) = self.resource_rules.get(&skill_id) else {
             return true;
@@ -3851,16 +3972,41 @@ impl<'a> Timeline<'a> {
         self.resources.get(&rule.kind).copied().unwrap_or(0.0) >= rule.cost.max(rule.entry_floor)
     }
 
+    /// Skills the build can never pay for: the cost is above the pool's
+    /// cap, so no amount of ramp makes them castable.
+    fn unpayable_skills(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .skills
+            .iter()
+            .filter(|skill| {
+                self.resource_rules
+                    .get(&skill.skill_id)
+                    .is_some_and(|rule| rule.cost.max(rule.entry_floor) > self.cap_of(rule.kind))
+            })
+            .map(|skill| skill.name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     fn pay_resource(&mut self, skill_id: u32) {
         let Some(rule) = self.resource_rules.get(&skill_id) else {
             return;
         };
-        let resource = self.resources.entry(rule.kind).or_default();
-        if *resource >= rule.cost {
-            if rule.spend_all {
+        let spend_all = rule.spend_all;
+        let cost = rule.cost;
+        let kind = rule.kind;
+        let resource = self.resources.entry(kind).or_default();
+        if *resource >= cost {
+            if spend_all && kind == ResourceKind::Adrenaline {
+                // Wiki `Adrenaline`: a burst expends every FULL bar, so the
+                // strikes above the last full bar stay on the meter.
+                *resource %= ADRENALINE_BAR_STRIKES;
+            } else if spend_all {
                 *resource = 0.0;
             } else {
-                *resource -= rule.cost;
+                *resource -= cost;
             }
         }
     }
@@ -3874,8 +4020,17 @@ impl<'a> Timeline<'a> {
             }
         }
         if self.resources.contains_key(&ResourceKind::Adrenaline) {
-            let adrenaline = self.resources.entry(ResourceKind::Adrenaline).or_default();
-            *adrenaline = (*adrenaline + 5.0).min(30.0);
+            // Wiki `Adrenaline`: one strike per non-burst attack that
+            // connects. A burst pays for itself, so it does not feed the bar.
+            let is_burst = self
+                .resource_rules
+                .get(&skill_id)
+                .is_some_and(|rule| rule.kind == ResourceKind::Adrenaline && rule.cost > 0.0);
+            if !is_burst {
+                let cap = self.cap_of(ResourceKind::Adrenaline);
+                let adrenaline = self.resources.entry(ResourceKind::Adrenaline).or_default();
+                *adrenaline = (*adrenaline + 1.0).min(cap);
+            }
         }
     }
 
@@ -3961,12 +4116,61 @@ impl<'a> Timeline<'a> {
                 self.exit_shroud("life force 0");
             }
         }
+        let initiative_cap = self.cap_of(ResourceKind::Initiative);
         if let Some(initiative) = self.resources.get_mut(&ResourceKind::Initiative) {
-            *initiative = (*initiative + seconds).min(12.0);
+            *initiative = (*initiative + seconds).min(initiative_cap);
         }
+        // Wiki `Energy`: +5 % per second, and upkeep is a negative modifier
+        // on that rate. Upkeep is capped at -10, so the floor is -5 %/s.
+        let energy_rate =
+            (ENERGY_REGEN_PER_SECOND - self.active_upkeep).max(-ENERGY_REGEN_PER_SECOND);
         if let Some(energy) = self.resources.get_mut(&ResourceKind::Energy) {
-            *energy = (*energy + 5.0 * seconds).min(100.0);
+            *energy = (*energy + energy_rate * seconds).clamp(0.0, 100.0);
+            // Wiki `Energy`: at 0 % every upkeep skill ends, even when total
+            // regeneration is positive. Without this the ledger holds a
+            // Herald at -5 %/s for the whole fight and calls the bar
+            // unplayable; in game the facets simply drop.
+            if *energy <= 0.0 {
+                self.active_upkeep = 0.0;
+            }
         }
+        // Pools that fill on the clock rather than from actions (flow).
+        let flow_rate = self
+            .pool_regen
+            .get(&ResourceKind::Flow)
+            .copied()
+            .unwrap_or(0.0);
+        let flow_cap = self.cap_of(ResourceKind::Flow);
+        if let Some(flow) = self.resources.get_mut(&ResourceKind::Flow) {
+            *flow = (*flow + flow_rate * seconds).min(flow_cap);
+        }
+    }
+
+    /// Invoke the other legend. Wiki `Legend`: a 10 s recharge, and the swap
+    /// resets energy to 50 -- the revenant's only way to refill mid-fight, so
+    /// the timeline takes it once the pool is spent rather than standing
+    /// there unable to pay. Any maintained upkeep ends with the legend.
+    fn try_legend_swap(&mut self) -> bool {
+        if !self.resources.contains_key(&ResourceKind::Energy)
+            || self.now_ms < self.legend_swap_ready_ms
+        {
+            return false;
+        }
+        let energy = self
+            .resources
+            .get(&ResourceKind::Energy)
+            .copied()
+            .unwrap_or(0.0);
+        // Swapping on a full pool throws the reset away and puts the only
+        // refill on a 10 s clock; wait until half of it is gone.
+        if energy >= LEGEND_SWAP_ENERGY / 2.0 {
+            return false;
+        }
+        self.resources
+            .insert(ResourceKind::Energy, LEGEND_SWAP_ENERGY);
+        self.legend_swap_ready_ms = self.at(LEGEND_SWAP_RECHARGE_MS);
+        self.active_upkeep = 0.0;
+        true
     }
 
     fn report(&self) -> WvwCombatReport {
@@ -4044,7 +4248,13 @@ impl<'a> Timeline<'a> {
             repeatable,
             resource_blocked_actions: self.resource_blocked_skills.len() as u32,
             resource_legal: self.resource_blocked_skills.is_empty(),
+            resource_blocked_ratio: self.resource_blocked_events as f64
+                / self.resource_priority_actions.max(1) as f64,
+            resource_unpayable_skills: self.unpayable_skills(),
             resource_model_complete: self.resource_model_complete,
+            resource_model_gaps: self.resource_model_gaps.clone(),
+            resource_simulated: !self.resource_rules.is_empty(),
+            profession: self.profession.clone(),
             unmodeled_sources: coverage.iter().map(CoverageEntry::rendered).collect(),
             coverage,
             trait_fire_counts: self.trait_fire_counts.clone(),
@@ -4454,7 +4664,10 @@ fn initial_resources(rules: &[SkillResourceRule]) -> HashMap<ResourceKind, f64> 
                 ResourceKind::Initiative => 12.0,
                 ResourceKind::Energy => 50.0,
                 ResourceKind::Adrenaline => 10.0,
-                ResourceKind::Illusions | ResourceKind::Blades | ResourceKind::LifeForce => 0.0,
+                ResourceKind::Illusions
+                | ResourceKind::Blades
+                | ResourceKind::LifeForce
+                | ResourceKind::Flow => 0.0,
             });
     }
     resources
@@ -4468,6 +4681,7 @@ fn resource_cap(kind: ResourceKind, max_health: f64) -> f64 {
         ResourceKind::Illusions => 3.0,
         ResourceKind::Blades => 5.0,
         ResourceKind::LifeForce => crate::data::shroud::table().pool_for(max_health),
+        ResourceKind::Flow => 100.0,
     }
 }
 
@@ -4504,6 +4718,7 @@ mod tests {
             effects,
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
             categories: Vec::new(),
             slot_name: None,
@@ -7027,6 +7242,39 @@ mod tests {
         assert!((ratio - prot.protection_multiplier).abs() < 1e-9);
     }
 
+    /// A cost the pool can never reach is named; the blocked ratio is
+    /// blocked decisions over decisions, not a latch on the first one.
+    #[test]
+    fn unpayable_cost_is_named_and_blocked_ratio_is_a_share() {
+        let rules = [
+            rule(1, ResourceKind::Energy, 25.0, 0.0, false),
+            rule(2, ResourceKind::Energy, 150.0, 0.0, false),
+        ];
+        let skills = vec![
+            skill(1, SkillSlot::Utility, 200, 5_000, Vec::new()),
+            skill(2, SkillSlot::Utility, 200, 5_000, Vec::new()),
+        ];
+        let params = params();
+        let mut timeline = Timeline::new(
+            &skills,
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &rules,
+            true,
+            Vec::new(),
+        );
+        // Energy caps at 100: skill 2 can never be cast, skill 1 always can.
+        assert_eq!(timeline.unpayable_skills(), vec!["test-2".to_string()]);
+
+        timeline.resource_priority_actions = 4;
+        timeline.resource_blocked_events = 1;
+        let report = timeline.report();
+        assert!((report.resource_blocked_ratio - 0.25).abs() < 1e-9);
+        assert_eq!(report.resource_unpayable_skills, vec!["test-2".to_string()]);
+    }
+
     #[test]
     fn energy_respects_its_cap_and_cost() {
         let rules = [rule(1, ResourceKind::Energy, 25.0, 0.0, false)];
@@ -7067,9 +7315,244 @@ mod tests {
         );
         timeline.resources.insert(ResourceKind::Adrenaline, 0.0);
         assert!(!timeline.can_pay_resource(1));
-        timeline.gain_resource_on_hit(99);
+        // Wiki `Adrenaline`: one strike per connecting non-burst hit, so a
+        // full bar is ten hits away, not two.
+        for _ in 0..9 {
+            timeline.gain_resource_on_hit(99);
+        }
+        assert!(!timeline.can_pay_resource(1), "nine strikes is not a bar");
         timeline.gain_resource_on_hit(99);
         assert!(timeline.can_pay_resource(1));
+        // The burst itself does not feed the bar it spends.
+        timeline.gain_resource_on_hit(1);
+        assert_eq!(timeline.resources[&ResourceKind::Adrenaline], 10.0);
+    }
+
+    /// Wiki `Adrenaline`: a burst expends every FULL bar and leaves the
+    /// strikes above the last full bar on the meter.
+    /// One decision, one count. Scanning three unaffordable stunbreaks
+    /// before finding a payable one is still a single moment, and it is not
+    /// a starved one; only the moment where nothing could pay is.
+    #[test]
+    fn a_stunbreak_scan_counts_one_decision_not_one_per_candidate() {
+        let rules = [
+            rule(1, ResourceKind::Energy, 90.0, 0.0, false),
+            rule(2, ResourceKind::Energy, 90.0, 0.0, false),
+            rule(3, ResourceKind::Energy, 90.0, 0.0, false),
+            rule(4, ResourceKind::Energy, 10.0, 0.0, false),
+        ];
+        let mut skills: Vec<RotationSkill> = (1..=4)
+            .map(|id| skill(id, SkillSlot::Utility, 200, 5_000, Vec::new()))
+            .collect();
+        for entry in skills.iter_mut() {
+            entry.is_stunbreak = true;
+        }
+        let params = params();
+        let mut timeline = Timeline::new(
+            &skills,
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &rules,
+            true,
+            Vec::new(),
+        );
+        timeline.disabled_until_ms = 5_000;
+        timeline.try_stunbreak();
+        assert_eq!(timeline.resource_priority_actions, 1);
+        assert_eq!(
+            timeline.resource_blocked_events, 0,
+            "the fourth candidate paid"
+        );
+
+        // Nothing payable: one decision, one blocked decision, ratio <= 1.
+        let mut starved = Timeline::new(
+            &skills,
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &rules,
+            true,
+            Vec::new(),
+        );
+        starved.disabled_until_ms = 5_000;
+        starved.resources.insert(ResourceKind::Energy, 0.0);
+        starved.try_stunbreak();
+        assert_eq!(starved.resource_priority_actions, 1);
+        assert_eq!(starved.resource_blocked_events, 1);
+        assert!(starved.report().resource_blocked_ratio <= 1.0);
+    }
+
+    /// Wiki `Legend`: invoking a legend resets energy to 50 on a 10 s
+    /// recharge -- the only mid-fight refill. A revenant holding two
+    /// 50-energy skills casts both inside the window and is never left
+    /// unable to act.
+    #[test]
+    fn a_legend_swap_refills_the_energy_pool() {
+        let rules = [
+            rule(1, ResourceKind::Energy, 50.0, 0.0, false),
+            rule(2, ResourceKind::Energy, 50.0, 0.0, false),
+        ];
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &rules,
+            true,
+            Vec::new(),
+        );
+        assert!(timeline.can_pay_resource(1));
+        timeline.pay_resource(1);
+        assert!(!timeline.can_pay_resource(2), "the pool is spent");
+        assert!(timeline.try_legend_swap(), "the swap is the refill");
+        assert_eq!(timeline.resources[&ResourceKind::Energy], 50.0);
+        assert!(timeline.can_pay_resource(2));
+        timeline.pay_resource(2);
+        assert!(
+            !timeline.try_legend_swap(),
+            "one invocation per 10 s recharge"
+        );
+        assert_eq!(timeline.report().resource_blocked_actions, 0);
+    }
+
+    /// Wiki `Energy`: upkeep is a negative modifier on the +5 %/s rate,
+    /// capped at -10 (net -5 %/s), and every upkeep skill ends the moment
+    /// the pool reaches 0.
+    #[test]
+    fn upkeep_bends_the_energy_rate_and_ends_at_zero() {
+        let rules = [SkillResourceRule {
+            skill_id: 1,
+            kind: ResourceKind::Energy,
+            cost: 0.0,
+            upkeep: 10.0,
+            ..Default::default()
+        }];
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &rules,
+            true,
+            Vec::new(),
+        );
+        timeline.active_upkeep = 10.0;
+        timeline.resources.insert(ResourceKind::Energy, 50.0);
+        // One second of -5 %/s.
+        for _ in 0..(1_000 / TIMELINE_TICK_MS) {
+            timeline.regenerate_resources();
+        }
+        assert!(
+            (timeline.resources[&ResourceKind::Energy] - 45.0).abs() < 1e-6,
+            "net regen is -5/s: {}",
+            timeline.resources[&ResourceKind::Energy]
+        );
+        timeline.resources.insert(ResourceKind::Energy, 0.0);
+        timeline.regenerate_resources();
+        assert_eq!(timeline.active_upkeep, 0.0, "upkeep ends at 0 energy");
+    }
+
+    /// Wiki `Flow`: 2 per second while in combat, never from attacking,
+    /// maximum 100. Dragon Trigger converts 5 flow into a charge.
+    #[test]
+    fn flow_fills_on_the_clock_and_fires_dragon_trigger() {
+        let rules = [SkillResourceRule {
+            skill_id: 62803,
+            kind: ResourceKind::Flow,
+            cost: 5.0,
+            pool_regen_per_second: 2.0,
+            ..Default::default()
+        }];
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &rules,
+            true,
+            Vec::new(),
+        );
+        assert_eq!(timeline.resources[&ResourceKind::Flow], 0.0);
+        assert!(!timeline.can_pay_resource(62803), "flow starts empty");
+        // Standing in combat for 3 s is 6 flow, past the 5 a charge costs.
+        for _ in 0..(3_000 / TIMELINE_TICK_MS) {
+            timeline.regenerate_resources();
+        }
+        assert!(timeline.can_pay_resource(62803));
+        // Attacking does not generate flow, and the pool stops at 100.
+        let before = timeline.resources[&ResourceKind::Flow];
+        timeline.gain_resource_on_hit(62803);
+        assert_eq!(timeline.resources[&ResourceKind::Flow], before);
+        timeline.resources.insert(ResourceKind::Flow, 99.9);
+        timeline.regenerate_resources();
+        assert_eq!(timeline.resources[&ResourceKind::Flow], 100.0);
+    }
+
+    /// Wiki `Preparedness`: +3 maximum initiative. The rule carries the
+    /// build's ceiling, so regeneration fills to 15 instead of 12.
+    #[test]
+    fn preparedness_raises_the_initiative_ceiling() {
+        let rules = [SkillResourceRule {
+            skill_id: 1,
+            kind: ResourceKind::Initiative,
+            cost: 3.0,
+            pool_cap: 15.0,
+            ..Default::default()
+        }];
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &rules,
+            true,
+            Vec::new(),
+        );
+        timeline.resources.insert(ResourceKind::Initiative, 14.9);
+        for _ in 0..4 {
+            timeline.regenerate_resources();
+        }
+        assert_eq!(timeline.resources[&ResourceKind::Initiative], 15.0);
+    }
+
+    #[test]
+    fn a_burst_spends_full_bars_and_keeps_the_remainder() {
+        let rules = [rule(1, ResourceKind::Adrenaline, 10.0, 0.0, true)];
+        let params = params();
+        let mut timeline = Timeline::new(
+            &[],
+            &params,
+            profile(1_000, vec![]),
+            open_enemy(false),
+            &[],
+            &rules,
+            true,
+            Vec::new(),
+        );
+        timeline.resources.insert(ResourceKind::Adrenaline, 23.0);
+        timeline.pay_resource(1);
+        assert_eq!(timeline.resources[&ResourceKind::Adrenaline], 3.0);
+        timeline.resources.insert(ResourceKind::Adrenaline, 25.0);
+        timeline.pay_resource(1);
+        assert_eq!(
+            timeline.resources[&ResourceKind::Adrenaline],
+            5.0,
+            "two full bars spent, five strikes left"
+        );
+        timeline.resources.insert(ResourceKind::Adrenaline, 30.0);
+        timeline.pay_resource(1);
+        assert_eq!(timeline.resources[&ResourceKind::Adrenaline], 0.0);
     }
 
     #[test]
@@ -7966,7 +8449,7 @@ mod reaper_experiments {
         let (stats, _) = engine::calculate_validated_stats(build, &db, "Necromancer", &ctx);
         let prepared = engine::prepare_validated_rotation(build, &db, &stats, Some(&scenario))
             .expect("the fixture prepares a rotation");
-        let (rules, complete) = engine::wvw_resource_rules(
+        let (rules, complete, _) = engine::wvw_resource_rules(
             build,
             &prepared.skills,
             &db,
@@ -9747,7 +10230,7 @@ mod necro_experiments {
         let build = fx::build();
         let (ctx, _) = fx::scenario();
         let p = prepared();
-        let (rules, complete) = engine::wvw_resource_rules(
+        let (rules, complete, _) = engine::wvw_resource_rules(
             &build,
             &p.skills,
             &db,
@@ -10197,7 +10680,7 @@ mod necro_experiments {
         let db = fx::db();
         let build = fx::build();
         let (ctx, _) = fx::scenario();
-        let (rules, complete) = engine::wvw_resource_rules(
+        let (rules, complete, _) = engine::wvw_resource_rules(
             &build,
             &p.skills,
             &db,
@@ -10462,7 +10945,7 @@ mod necro_experiments {
         let build = fx::build();
         let (ctx, _) = fx::scenario();
         let p = prepared();
-        let (rules, complete) = engine::wvw_resource_rules(
+        let (rules, complete, _) = engine::wvw_resource_rules(
             &build,
             &p.skills,
             &db,
@@ -10643,7 +11126,7 @@ mod necro_experiments {
         let build = fx::build();
         let (ctx, _) = fx::scenario();
         let p = prepared();
-        let (rules, _) = engine::wvw_resource_rules(
+        let (rules, _, _) = engine::wvw_resource_rules(
             &build,
             &p.skills,
             &db,

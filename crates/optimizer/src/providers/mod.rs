@@ -178,7 +178,17 @@ impl ProviderBuild {
     /// caller needs to label them: compacting the list first turns a build
     /// with no elite into one whose elite is its last utility.
     pub fn slot_skills(&self, db: &crate::gamedb::GameDb) -> Vec<Option<u32>> {
-        if !self.skill_ids.is_empty() {
+        // A slot-bar seat only ever holds a Heal, Utility or Elite skill. A
+        // published id with any other slot — Snowcrows writes the profession
+        // placeholder literally named "Locked" into all three utility seats
+        // when its page does not expose them — means the markup did not
+        // publish the bar, and the chat code is the better source.
+        let markup_is_a_bar = self.skill_ids.iter().all(|id| {
+            db.skills
+                .get(id)
+                .is_some_and(|s| matches!(s.slot.as_deref(), Some("Heal" | "Utility" | "Elite")))
+        });
+        if !self.skill_ids.is_empty() && markup_is_a_bar {
             return self.skill_ids.iter().map(|id| Some(*id)).collect();
         }
         let Some(template) = self

@@ -344,6 +344,15 @@ pub struct AddonState {
     /// Cancellation token — cloned into every background thread.
     /// Cancelled on addon unload so threads exit early.
     pub cancel_token: CancellationToken,
+    /// Cancellation for work that Stop is not meant to stop.
+    ///
+    /// [`Self::cancel_and_renew`] ends the request in flight, which is what
+    /// the Stop button means. Measuring a published reference build is not
+    /// that request: it was cancelled as collateral and, because the picks
+    /// key had not changed, nothing ever retried it, so the tab kept saying
+    /// "no rotation simulation" until the player changed roles. Unload still
+    /// cancels this one.
+    pub pick_cancel_token: CancellationToken,
     /// Handles of the workers started by [`AddonState::spawn_worker`], so unload
     /// can wait for them. Private on purpose: nothing outside this module may
     /// start an untracked thread.
@@ -397,7 +406,17 @@ impl AddonState {
     where
         F: FnOnce(CancellationToken) + Send + 'static,
     {
-        let token = self.cancel_token.clone();
+        self.spawn_worker_on(name, self.cancel_token.clone(), work)
+    }
+
+    /// [`Self::spawn_worker`] on a caller-chosen token.
+    ///
+    /// Only for work outside the Stop button's meaning; everything else takes
+    /// the run token so one Stop ends the whole run.
+    pub fn spawn_worker_on<F>(&self, name: &'static str, token: CancellationToken, work: F) -> bool
+    where
+        F: FnOnce(CancellationToken) + Send + 'static,
+    {
         // Pin before spawn returns: `HMODULE` is Copy, so the child and the
         // spawn-fail undo both see the same increment.
         let pin = pin_addon_module();
@@ -468,6 +487,8 @@ impl AddonState {
         // and unload still waits for them; only new workers get the fresh token.
         self.cancel_token.cancel();
         self.cancel_token = CancellationToken::new();
+        self.pick_cancel_token.cancel();
+        self.pick_cancel_token = CancellationToken::new();
         self.config = config;
         self.setup = SetupState::default();
 
@@ -718,6 +739,18 @@ pub struct MainState {
     /// What `provider_picks` was computed for — profession, mode, role and
     /// the proposal's specs. Empty means nothing has been matched yet.
     pub provider_picks_key: String,
+    /// True while the pick-ranking worker is measuring candidates.
+    pub picks_matching: bool,
+    /// One per card, in `provider_picks` order: what it measured.
+    pub pick_notes: Vec<crate::ui::main_view::provider_picks::PickCardNote>,
+    /// Rows a source published that we could not plate or validate. Not the
+    /// same as a source with nothing to offer, and it must not read that way.
+    pub pick_unparsed: Vec<(String, usize)>,
+    /// Sources that publish builds for this profession and mode, but none
+    /// whose measured axes come near what was asked for. Printed rather
+    /// than left silent: no card because nothing published does this job is
+    /// a different answer from no card because we could not read the page.
+    pub pick_no_match: Vec<String>,
     /// How far the Free-filter Choya has risen, 0 hidden to 1 fully up.
     ///
     /// Eased per frame rather than stored as a bool so the sprite slides and
@@ -1076,6 +1109,7 @@ pub fn init(addon_dir: PathBuf) {
         setup,
         main,
         cancel_token: CancellationToken::new(),
+        pick_cancel_token: CancellationToken::new(),
         workers: WorkerRegistry::default(),
         force_window_pos: false,
         news: crate::news::NewsState::default(),
@@ -1130,6 +1164,7 @@ pub fn is_window_visible() -> bool {
 pub fn request_shutdown() {
     if let Some(state) = lock_state().as_ref() {
         state.cancel_token.cancel();
+        state.pick_cancel_token.cancel();
     }
 }
 
@@ -1149,6 +1184,7 @@ pub fn join_workers(budget: Duration) -> ShutdownReport {
         match guard.as_mut() {
             Some(state) => {
                 state.cancel_token.cancel();
+                state.pick_cancel_token.cancel();
                 state.workers.take_all()
             }
             None => Vec::new(),
@@ -1167,6 +1203,7 @@ pub fn clear() {
     let mut guard = lock_state();
     if let Some(ref state) = *guard {
         state.cancel_token.cancel();
+        state.pick_cancel_token.cancel();
     }
     *guard = None;
 }

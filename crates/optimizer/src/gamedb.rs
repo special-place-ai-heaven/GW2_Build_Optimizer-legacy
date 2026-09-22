@@ -138,6 +138,8 @@ impl GameDb {
         let mut runes = Vec::new();
         let mut sigils = Vec::new();
         let mut relics = Vec::new();
+        let mut pvp_runes = Vec::new();
+        let mut pvp_sigils = Vec::new();
 
         // Build skill ↔ palette ID maps from professions.
         //
@@ -178,6 +180,11 @@ impl GameDb {
                     match details.detail_type.as_deref() {
                         Some("Rune") => runes.push(item.id),
                         Some("Sigil") => sigils.push(item.id),
+                        // PvP rune/sigil variants (see `pvp_rune`/`pvp_sigil`).
+                        // Appended after the sort so a PvE item always wins a
+                        // fuzzy name lookup; only an exact PvP name reaches one.
+                        Some("Default") if pvp_rune(item, details) => pvp_runes.push(item.id),
+                        Some("Default") if pvp_sigil(item, details) => pvp_sigils.push(item.id),
                         _ => {}
                     }
                 }
@@ -266,6 +273,10 @@ impl GameDb {
         runes.sort_unstable();
         sigils.sort_unstable();
         relics.sort_unstable();
+        pvp_runes.sort_unstable();
+        pvp_sigils.sort_unstable();
+        runes.extend(pvp_runes);
+        sigils.extend(pvp_sigils);
 
         Ok(GameDb {
             items,
@@ -828,6 +839,43 @@ fn condition_index_key(status: &str) -> &str {
     crate::data::boon_condition_formulas::canonical_condition_name(status)
 }
 
+/// PvP is on its own item table: the PvP copy of a rune or sigil is a
+/// separate item whose `details.type` is `"Default"`, not `"Rune"`/`"Sigil"`,
+/// so the tag-driven classification above drops it and no synced PvP
+/// reference build can be plated. Measured over the cached `items.json`
+/// (17 296 items, 987 UpgradeComponents, 614 of them `"Default"`): exactly
+/// 146 `"Default"` components are PvP-only (`game_types == ["Pvp",
+/// "PvpLobby"]`) — 78 runes, 58 sigils and 10 stat jewels. Every other
+/// `"Default"` is a PvE infusion or jewel. Within the PvP-only set the split
+/// is structural, so nothing here matches on a name: a rune carries the six
+/// tier `bonuses` strings, a sigil carries an `infix_upgrade.buff` and no
+/// bonuses, a jewel carries neither (its infix is bare attributes).
+///
+/// Names do not collide with the PvE items (the PvP copies are "Rune of X",
+/// the PvE ones "Superior Rune of X"), and the optimizer's own search paths
+/// filter on `"Superior"`, so these never enter a PvE or WvW candidate set.
+fn pvp_rune(item: &Item, details: &gw2_api::models::ItemDetails) -> bool {
+    is_pvp_only(item) && !details.bonuses.is_empty()
+}
+
+/// Sigil half of [`pvp_rune`]: an `infix_upgrade.buff` with no rune tiers.
+fn pvp_sigil(item: &Item, details: &gw2_api::models::ItemDetails) -> bool {
+    is_pvp_only(item)
+        && details.bonuses.is_empty()
+        && details
+            .infix_upgrade
+            .as_ref()
+            .is_some_and(|i| i.buff.is_some())
+}
+
+fn is_pvp_only(item: &Item) -> bool {
+    !item.game_types.is_empty()
+        && item
+            .game_types
+            .iter()
+            .all(|g| g == "Pvp" || g == "PvpLobby")
+}
+
 /// GW2 boons.
 fn is_boon(status: &str) -> bool {
     matches!(
@@ -1275,5 +1323,54 @@ mod tests {
             assert_eq!(hits.len(), 1, "{name}");
             assert_eq!(hits[0].id, 7, "{name}");
         }
+    }
+
+    /// The PvP item table's runes and sigils carry `details.type = "Default"`,
+    /// so they are told apart structurally. Shapes are copied from the cached
+    /// `items.json`: rune 21092, sigil 21121, jewel 21093, PvE sigil 24615.
+    #[test]
+    fn pvp_default_upgrades_split_into_runes_and_sigils() {
+        let item = |v: serde_json::Value| -> Item { serde_json::from_value(v).expect("item") };
+        let pvp = serde_json::json!(["Pvp", "PvpLobby"]);
+
+        let rune = item(serde_json::json!({
+            "id": 21092, "name": "Rune of Strength", "type": "UpgradeComponent",
+            "rarity": "Exotic", "level": 0, "game_types": pvp,
+            "details": { "type": "Default", "suffix": "of Strength",
+                "bonuses": ["+25 Power", "+4% Might Duration"],
+                "infix_upgrade": { "id": 112, "attributes": [], "buff": null } }
+        }));
+        let sigil = item(serde_json::json!({
+            "id": 21121, "name": "Sigil of Agony", "type": "UpgradeComponent",
+            "rarity": "Exotic", "level": 0, "game_types": pvp,
+            "details": { "type": "Default", "suffix": "of Agony", "bonuses": [],
+                "infix_upgrade": { "id": 1250, "attributes": [],
+                    "buff": { "skill_id": 38742, "description": "Bleeding +25%" } } }
+        }));
+        // A stat jewel is PvP-only and "Default" too: no tiers, no buff.
+        let jewel = item(serde_json::json!({
+            "id": 21093, "name": "Berserker's Jewel", "type": "UpgradeComponent",
+            "rarity": "Exotic", "level": 0, "game_types": pvp,
+            "details": { "type": "Default", "suffix": "", "bonuses": [],
+                "infix_upgrade": { "id": 512,
+                    "attributes": [{ "attribute": "Power", "modifier": 125 }], "buff": null } }
+        }));
+        // The PvE copy keeps its own tag and never reaches these predicates.
+        let pve_sigil = item(serde_json::json!({
+            "id": 24615, "name": "Superior Sigil of Force", "type": "UpgradeComponent",
+            "rarity": "Exotic", "level": 39, "game_types": ["Activity", "Wvw", "Dungeon", "Pve"],
+            "details": { "type": "Sigil", "suffix": "of Force", "bonuses": [],
+                "infix_upgrade": { "id": 1234, "attributes": [],
+                    "buff": { "skill_id": 9447, "description": "+5% damage" } } }
+        }));
+
+        let d = |i: &Item| i.details.clone().expect("details");
+        assert!(pvp_rune(&rune, &d(&rune)));
+        assert!(!pvp_sigil(&rune, &d(&rune)));
+        assert!(pvp_sigil(&sigil, &d(&sigil)));
+        assert!(!pvp_rune(&sigil, &d(&sigil)));
+        assert!(!pvp_rune(&jewel, &d(&jewel)) && !pvp_sigil(&jewel, &d(&jewel)));
+        assert_eq!(d(&pve_sigil).detail_type.as_deref(), Some("Sigil"));
+        assert!(!is_pvp_only(&pve_sigil));
     }
 }

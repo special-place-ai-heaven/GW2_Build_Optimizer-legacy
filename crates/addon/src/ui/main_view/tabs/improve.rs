@@ -28,7 +28,11 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
 
     // Optimization progress banner
     if state.main.optimizing {
-        render_optimization_progress(ui, &state.main.optimize_stage, ui.frame_count());
+        let stopping = state.main.optimize_stage == t("status.stopping");
+        if render_optimization_progress(ui, &state.main.optimize_stage, ui.frame_count(), !stopping)
+        {
+            crate::ui::main_view::optimize_flow::stop_optimization(state);
+        }
     }
 
     let locked_spec_name = state
@@ -48,6 +52,12 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
 
     // Two-panel layout: Current Build | Optimized Build
     let has_suggestion = !state.main.comparison.suggestions.is_empty();
+    if has_suggestion {
+        // Improve shows the community cards too. It never called this, so the
+        // whole feature was invisible on the tab a player reaches by asking
+        // for a better version of their own build.
+        crate::ui::main_view::provider_picks::refresh_provider_picks(state);
+    }
     let footer = if has_suggestion {
         ui.current_font_size() + 22.0
     } else {
@@ -239,6 +249,20 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
         ui.text_colored(theme::pal().muted, t("improve.loading"));
     } else {
         ui.text_colored(theme::pal().muted, t("improve.select"));
+    }
+
+    if has_suggestion {
+        // Below the panes rather than inside `##improve_scroll`: that child's
+        // closure holds a `&GameDb` borrowed out of state for its whole body,
+        // so a `&mut AddonState` call cannot go inside it.
+        ui.spacing();
+        if let Some(i) = crate::ui::main_view::provider_picks::render_provider_picks(ui, state) {
+            crate::ui::main_view::provider_picks::adopt_provider_pick(state, i);
+        }
+        if crate::ui::main_view::provider_picks::take_sync_invite(ui, state) {
+            state.main.active_tab = crate::state::MainTab::Settings;
+        }
+        ui.spacing();
     }
 
     if has_suggestion {

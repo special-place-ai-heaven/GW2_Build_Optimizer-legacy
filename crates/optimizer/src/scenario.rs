@@ -40,6 +40,22 @@ pub enum CombatKind {
 }
 
 impl CombatKind {
+    /// The job this fight shape implies, so a scenario that never named an
+    /// `objective_profile_id` (references, tests, any caller without a role
+    /// chip) still resolves to its data profile instead of falling back to
+    /// hardcoded gate floors. Inverse of [`RoleObjective::combat_kind`].
+    pub fn role_objective(&self) -> RoleObjective {
+        match self {
+            CombatKind::StrikeSpike => RoleObjective::PowerDps,
+            CombatKind::CondiRamp => RoleObjective::CondiDps,
+            CombatKind::Harasser => RoleObjective::WvWRoamer,
+            CombatKind::Support => RoleObjective::Buffer,
+            CombatKind::Disabler => RoleObjective::Disabler,
+            CombatKind::Commander => RoleObjective::Tank,
+            CombatKind::Staller => RoleObjective::Staller,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             CombatKind::StrikeSpike => "Strike spike",
@@ -88,6 +104,42 @@ impl ScenarioSpec {
             },
             patch_id: Some(ctx.patch_id.clone()),
             objective_profile_id: None,
+        }
+    }
+
+    /// The scenario a REQUEST names: the player's mode, their scale chip and
+    /// their role chip.
+    ///
+    /// The one place a request becomes a scenario. `objective_profile_id` is
+    /// what `intent_alignment` reads the focus and avoid axes from, so a
+    /// caller that forgets it does not get a slightly different answer, it
+    /// gets a different QUESTION: the referee falls back to the scenario's
+    /// combat kind, which for a freshly built spec is the mode default, and
+    /// every candidate is then measured against a DPS direction. That is a
+    /// silent wrong answer, which is why this lives here and not at three
+    /// call sites (in-game 2026-09-22: the example offered a Berserker for a
+    /// Support request while the addon offered a healer).
+    pub fn for_request(
+        ctx: &crate::balance::BalanceContext,
+        combat_tier: CombatTier,
+        role: Option<RoleObjective>,
+        weights: &OptimizationWeights,
+    ) -> Self {
+        let combat_kind = role
+            .map(|r| r.combat_kind_for_weights(weights))
+            .unwrap_or_else(|| {
+                if weights.condition > weights.power {
+                    CombatKind::CondiRamp
+                } else {
+                    CombatKind::StrikeSpike
+                }
+            });
+        Self {
+            combat_tier,
+            combat_kind,
+            objective_profile_id: role
+                .map(|r| r.profile_id_for(&ctx.game_mode, combat_tier).to_string()),
+            ..Self::from_balance_context(ctx)
         }
     }
 
@@ -317,6 +369,61 @@ impl RoleObjective {
         }
     }
 
+    /// The word the overlay's chip is spelled with, in English.
+    ///
+    /// The same vocabulary the addon's `role_i18n_key` uses (`role.damage`,
+    /// `role.support`, ...), so a tool outside the addon can name a chip the
+    /// way the player sees it. `label()` is the long form - "Power DPS",
+    /// "Buffer / Support" - and nobody types that.
+    pub fn chip_word(&self, game_mode: &GameMode) -> &'static str {
+        match self {
+            RoleObjective::WvWRoamer => "roamer",
+            RoleObjective::PowerDps | RoleObjective::WvWZergDps | RoleObjective::PvPBurst => {
+                "damage"
+            }
+            RoleObjective::CondiDps => "condi",
+            RoleObjective::Healer => "heal",
+            RoleObjective::Sustain | RoleObjective::PvPSustain => "bruiser",
+            RoleObjective::Staller => "troll",
+            RoleObjective::Buffer | RoleObjective::WvWZergSupport => "support",
+            RoleObjective::Disabler | RoleObjective::WvWDisruptor | RoleObjective::PvPDisruptor => {
+                "disable"
+            }
+            RoleObjective::Hybrid => "hybrid",
+            // The same split the chip label makes: a WvW or PvE tank is a
+            // commander, a PvE one is a tank.
+            RoleObjective::Tank => match game_mode {
+                GameMode::PvE => "tank",
+                _ => "commander",
+            },
+        }
+    }
+
+    /// Resolve a typed name to a chip this mode offers.
+    ///
+    /// Accepts the chip word (`support`) or any distinctive part of
+    /// [`Self::label`] (`Buffer`, `Power DPS`). Case-insensitive. `None`
+    /// when the mode offers no such chip - which a caller must treat as an
+    /// error rather than as "no role", because a request with no role is
+    /// measured against the mode default and answers a question nobody
+    /// asked.
+    pub fn from_name(name: &str, game_mode: &GameMode) -> Option<Self> {
+        let name = name.trim().to_lowercase();
+        if name.is_empty() {
+            return None;
+        }
+        let offered = Self::play_roles_for(game_mode);
+        offered
+            .iter()
+            .find(|r| r.chip_word(game_mode) == name)
+            .or_else(|| {
+                offered
+                    .iter()
+                    .find(|r| r.label().to_lowercase().contains(&name))
+            })
+            .copied()
+    }
+
     /// The combat tier this role implies (used to construct ScenarioSpec).
     pub fn combat_tier(&self) -> CombatTier {
         match self {
@@ -400,6 +507,132 @@ impl RoleObjective {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every chip a mode offers is reachable by the word it is spelled
+    /// with, and no two chips in one mode answer to the same word.
+    ///
+    /// Without this the two tables drift: `chip_word` says "damage", the
+    /// mode offers `PowerDps`, and a tool that typed "Damage" silently got
+    /// no role and measured against the mode default (2026-09-22).
+    #[test]
+    fn every_chip_resolves_from_its_own_word() {
+        for mode in GameMode::ALL {
+            let offered = RoleObjective::play_roles_for(&mode);
+            let mut words: Vec<&str> = Vec::new();
+            for role in offered {
+                let word = role.chip_word(&mode);
+                assert!(
+                    !words.contains(&word),
+                    "{} offers two chips spelled {word:?}",
+                    mode.label()
+                );
+                words.push(word);
+                assert_eq!(
+                    RoleObjective::from_name(word, &mode),
+                    Some(*role),
+                    "{word:?} in {}",
+                    mode.label()
+                );
+                assert_eq!(
+                    RoleObjective::from_name(role.label(), &mode),
+                    Some(*role),
+                    "the long label must work too: {}",
+                    role.label()
+                );
+            }
+            assert_eq!(RoleObjective::from_name("nonsense", &mode), None);
+            assert_eq!(RoleObjective::from_name("", &mode), None);
+        }
+        // A chip another mode offers is still not a chip THIS mode offers.
+        assert_eq!(RoleObjective::from_name("heal", &GameMode::WvW), None);
+        assert_eq!(
+            RoleObjective::from_name("heal", &GameMode::PvE),
+            Some(RoleObjective::Healer)
+        );
+    }
+
+    /// The scenario a request builds must name the profile the chip maps to,
+    /// at every mode and every scale.
+    ///
+    /// The bug this exists for: `scenario_for_run` used to leave
+    /// `objective_profile_id` unset and let the referee recover it from
+    /// `combat_kind`, which is a lossy round trip - Healer becomes
+    /// `CombatKind::Support` and comes back as Buffer, so the Healer chip
+    /// was scored against `WvW_Support` rather than `WvW_Heal`, and
+    /// `WvW_Roamer` was unreachable from any chip at all. The id is set
+    /// explicitly now; this pins it for every combination, and the match
+    /// below fails to compile when a role is added so a new chip cannot
+    /// drift back into the fallback.
+    #[test]
+    fn every_role_and_scale_names_its_own_profile() {
+        let all = [
+            RoleObjective::PowerDps,
+            RoleObjective::CondiDps,
+            RoleObjective::Hybrid,
+            RoleObjective::Sustain,
+            RoleObjective::Staller,
+            RoleObjective::Healer,
+            RoleObjective::Buffer,
+            RoleObjective::Disabler,
+            RoleObjective::Tank,
+            RoleObjective::WvWRoamer,
+            RoleObjective::WvWZergDps,
+            RoleObjective::WvWZergSupport,
+            RoleObjective::WvWDisruptor,
+            RoleObjective::PvPBurst,
+            RoleObjective::PvPSustain,
+            RoleObjective::PvPDisruptor,
+        ];
+        // Exhaustive: adding a `RoleObjective` breaks this match, which is
+        // the reminder to add it to `all` above.
+        for role in all {
+            match role {
+                RoleObjective::PowerDps
+                | RoleObjective::CondiDps
+                | RoleObjective::Hybrid
+                | RoleObjective::Sustain
+                | RoleObjective::Staller
+                | RoleObjective::Healer
+                | RoleObjective::Buffer
+                | RoleObjective::Disabler
+                | RoleObjective::Tank
+                | RoleObjective::WvWRoamer
+                | RoleObjective::WvWZergDps
+                | RoleObjective::WvWZergSupport
+                | RoleObjective::WvWDisruptor
+                | RoleObjective::PvPBurst
+                | RoleObjective::PvPSustain
+                | RoleObjective::PvPDisruptor => {}
+            }
+        }
+        for mode in GameMode::ALL {
+            let ctx = crate::balance::BalanceContext::new(mode.clone());
+            for tier in [CombatTier::Solo, CombatTier::Party, CombatTier::Squad] {
+                for role in all {
+                    let weights = role.to_weights_for(&mode, tier);
+                    let scenario = ScenarioSpec::for_request(&ctx, tier, Some(role), &weights);
+                    assert_eq!(
+                        scenario.objective_profile_id.as_deref(),
+                        Some(role.profile_id_for(&mode, tier)),
+                        "{role:?} in {} at {tier:?}",
+                        mode.label()
+                    );
+                    assert_eq!(scenario.combat_tier, tier);
+                }
+            }
+        }
+    }
+
+    /// A request with no chip still names no profile: the caller asked for
+    /// nothing in particular, and inventing a role for them would score
+    /// their build against a job they did not pick.
+    #[test]
+    fn a_request_without_a_role_names_no_profile() {
+        let ctx = crate::balance::BalanceContext::new(GameMode::WvW);
+        let weights = crate::scoring::OptimizationWeights::default();
+        let scenario = ScenarioSpec::for_request(&ctx, CombatTier::Party, None, &weights);
+        assert_eq!(scenario.objective_profile_id, None);
+    }
     use super::{CombatKind, CombatTier, RoleObjective, ScenarioSpec, TargetProfile};
     use crate::balance::BalanceContext;
     use gw2_core::types::GameMode;

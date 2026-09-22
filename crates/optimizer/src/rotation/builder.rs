@@ -136,6 +136,123 @@ pub(crate) fn skill_to_rotation(skill: &Skill) -> RotationSkill {
     skill_to_rotation_for_context(skill, &BalanceContext::pve())
 }
 
+#[cfg(test)]
+mod stunbreak_tests {
+    use super::skill_breaks_stun;
+    use gw2_api::models::Skill;
+
+    fn skill(description: Option<&str>) -> Skill {
+        skill_with_id(1, description)
+    }
+
+    fn skill_with_id(id: u32, description: Option<&str>) -> Skill {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": "test",
+            "description": description,
+            "facts": [],
+        }))
+        .expect("test skill")
+    }
+
+    /// "Never Surrender!", Banner of Tactics and Mantra of Concentration all
+    /// carry the words and not the `StunBreak` fact.
+    #[test]
+    fn description_alone_counts_as_a_stunbreak() {
+        for text in [
+            "Shout. Break stun and grant resolution to allies.",
+            "Mantra. Breaks stun for you and nearby allies.",
+            "Banner. Stun break.",
+            "Glyph. Stunbreak and daze foes.",
+        ] {
+            assert!(skill_breaks_stun(&skill(Some(text))), "missed: {text}");
+        }
+    }
+
+    #[test]
+    fn a_skill_with_neither_fact_nor_words_does_not_count() {
+        assert!(!skill_breaks_stun(&skill(Some(
+            "Cantrip. Teleport to target area."
+        ))));
+        assert!(!skill_breaks_stun(&skill(None)));
+    }
+
+    /// Gladiator's Defense (77291) carries an untyped fact and description
+    /// wording ("Break out of stun") the fixed text needles miss; it counts
+    /// only via `data::stunbreak_sources`. Lightning Flash (5536), by
+    /// contrast, is not a stun break at all per the wiki ("You can still use
+    /// this skill to teleport when stunned, but it will not break stun") and
+    /// must not be in the override table.
+    #[test]
+    fn the_override_table_catches_what_fact_and_text_miss() {
+        assert!(skill_breaks_stun(&skill_with_id(
+            77291,
+            Some(
+                "Break out of stun, damaging and weakening enemies close to you. \
+                 Gain boons if this skill strikes at least one enemy."
+            )
+        )));
+        assert!(!skill_breaks_stun(&skill_with_id(
+            5536,
+            Some("Cantrip. Teleport to target area.")
+        )));
+    }
+}
+
+/// Whether this skill reaches ALLIES rather than only its owner.
+///
+/// The API says so itself: 147 skills publish a `Number of Allied
+/// Targets`, `Allied Healing`, `Allied Heal per Pulse`, `Maximum Number
+/// of Allied Targets` or `Allied Target Radius` fact. Anything else heals
+/// or buffs the caster, which is survival (the `sustain` axis), not
+/// support.
+///
+/// Categories are deliberately not consulted: not every shout helps
+/// allies ("Nothing Can Save You!" is aimed at foes), so reading the
+/// category would credit a foe skill as boon support.
+pub(crate) fn skill_reaches_allies(skill: &Skill) -> bool {
+    skill.facts.iter().any(|fact| {
+        let text = match fact {
+            Fact::Number { text, .. }
+            | Fact::Time { text, .. }
+            | Fact::AttributeAdjust { text, .. }
+            | Fact::Radius { text, .. } => text.as_deref(),
+            _ => None,
+        };
+        text.is_some_and(|text| text.to_lowercase().contains("allied"))
+    })
+}
+
+/// A skill breaks stun when the API says so in a `StunBreak` fact, in its
+/// own description text, or in `data::stunbreak_sources`. Twelve skills
+/// ("Never Surrender!", Banner of Tactics, Mantra of Concentration, Glyph of
+/// Equality among them) carry the words and not the fact, and reading them
+/// as unarmed by the StunbreakCount gate refused builds that break stun in
+/// game. A further handful (Gladiator's Defense, Toss Elixir U) carry
+/// neither: an untyped fact or description wording the fixed text needles
+/// miss. The table is catalogued against the wiki, not inferred.
+pub(crate) fn skill_breaks_stun(skill: &Skill) -> bool {
+    if skill.facts.iter().any(|f| {
+        matches!(
+            f,
+            Fact::StunBreak {
+                value: Some(true),
+                ..
+            }
+        )
+    }) {
+        return true;
+    }
+    let description = skill.description.as_deref().unwrap_or("").to_lowercase();
+    if ["break stun", "breaks stun", "stun break", "stunbreak"]
+        .iter()
+        .any(|needle| description.contains(needle))
+    {
+        return true;
+    }
+    crate::data::stunbreak_sources::is_override(skill.id)
+}
+
 fn skill_to_rotation_for_context(skill: &Skill, ctx: &BalanceContext) -> RotationSkill {
     let slot = skill
         .slot
@@ -150,15 +267,7 @@ fn skill_to_rotation_for_context(skill: &Skill, ctx: &BalanceContext) -> Rotatio
         .unwrap_or_else(|| extract_cooldown(&skill.facts));
     let effects =
         extract_effects_for_context(skill.id, &skill.facts, skill.description.as_deref(), ctx);
-    let is_stunbreak = skill.facts.iter().any(|f| {
-        matches!(
-            f,
-            Fact::StunBreak {
-                value: Some(true),
-                ..
-            }
-        )
-    });
+    let is_stunbreak = skill_breaks_stun(skill);
 
     RotationSkill {
         skill_id: skill.id,
@@ -169,6 +278,7 @@ fn skill_to_rotation_for_context(skill: &Skill, ctx: &BalanceContext) -> Rotatio
         effects,
         next_chain: skill.next_chain,
         is_stunbreak,
+        reaches_allies: skill_reaches_allies(skill),
         weapon_set: 0, // default; caller can tag with set 1/2 via tag_weapon_set()
         categories: skill.categories.clone(),
         slot_name: skill.slot.clone(),
@@ -281,14 +391,29 @@ pub fn merge_weapon_sets(
     set1
 }
 
-/// Resolve the F1-F5 mechanic bar for the equipped specialization set.
-/// Elite-spec replacements win over their core skill in the same profession
-/// slot; deterministic ID ordering breaks ties in incomplete API data.
+/// Resolve the F1-F5 mechanic bar for the equipped specialization set and
+/// the weapons in hand. Elite-spec replacements win over their core skill in
+/// the same profession slot; deterministic ID ordering breaks ties in
+/// incomplete API data.
+///
+/// Weapon-dependent slots (every Warrior burst, every Berserker primal burst,
+/// every Bladesworn dragon trigger) are filtered by `skill.weapon_type`
+/// against the equipped sets: without it the id sort handed a Spear Warrior
+/// Eviscerate, an Axe skill it cannot press. Slots whose candidates are
+/// weapon-independent (Spellbreaker's Full Counter, Thief steal, shatters)
+/// carry `weapon_type: "None"` and are unaffected, as is a build with no
+/// weapons resolved yet.
 pub fn profession_skills_for_build(
     db: &GameDb,
     profession_name: &str,
     equipped_spec_ids: &[u32],
+    weapons: &crate::validation::ValidatedWeapons,
 ) -> Vec<(u32, String)> {
+    let equipped: Vec<&str> = [&weapons.set1, &weapons.set2]
+        .into_iter()
+        .flat_map(|set| [set.main_hand.as_deref(), set.off_hand.as_deref()])
+        .flatten()
+        .collect();
     let mut by_slot: HashMap<String, Vec<&gw2_api::models::Skill>> = HashMap::new();
     for skill_id in db
         .skills_by_profession
@@ -318,7 +443,21 @@ pub fn profession_skills_for_build(
         .into_iter()
         .filter_map(|(_, mut skills)| {
             skills.sort_by_key(|skill| (u8::from(skill.specialization.is_none()), skill.id));
-            skills.first().map(|skill| (skill.id, skill.name.clone()))
+            // First candidate whose weapon is in hand, else the first
+            // candidate: an unresolved weapon set must not empty the bar.
+            let picked = skills
+                .iter()
+                .position(|skill| {
+                    skill.weapon_type.as_deref().is_some_and(|weapon| {
+                        equipped
+                            .iter()
+                            .any(|held| held.eq_ignore_ascii_case(weapon))
+                    })
+                })
+                .unwrap_or(0);
+            skills
+                .get(picked)
+                .map(|skill| (skill.id, skill.name.clone()))
         })
         .collect()
 }
@@ -389,13 +528,45 @@ pub fn shroud_bar_for_build(
 }
 
 /// Extract cooldown from Fact::Recharge (seconds → milliseconds).
+/// How long the rotation must wait before pressing this skill again.
+///
+/// For an ordinary skill that is the `Recharge` fact. For an AMMUNITION
+/// skill (ammo utilities, mantras) `Recharge` is only the delay between two
+/// casts of a charge already banked -- Combat Stimulant 62978 publishes 1 s
+/// -- while the skill really returns one charge every `Count Recharge`
+/// seconds. Reading the first fact made a 20 s heal look like a 1 s one and
+/// the timeline pressed it twenty times a fight. The sustainable rate is
+/// `count recharge / maximum count`, and the inter-cast delay is the floor.
 fn extract_cooldown(facts: &[Fact]) -> u32 {
-    for fact in facts {
-        if let Fact::Recharge { value: Some(v), .. } = fact {
-            return (*v * 1000.0) as u32;
-        }
+    let recharge_ms = facts
+        .iter()
+        .find_map(|fact| match fact {
+            Fact::Recharge { value: Some(v), .. } => Some((*v * 1_000.0) as u32),
+            _ => None,
+        })
+        .unwrap_or(0); // no cooldown = auto-attack or instant
+    let max_count = facts.iter().find_map(|fact| match fact {
+        Fact::Number {
+            text: Some(text),
+            value: Some(value),
+            ..
+        } if text.eq_ignore_ascii_case("Maximum Count") && *value > 0 => Some(*value as u32),
+        _ => None,
+    });
+    // The first Count Recharge is the live one; later duplicates are the
+    // competitive-mode splits.
+    let count_recharge_ms = facts.iter().find_map(|fact| match fact {
+        Fact::Time {
+            text: Some(text),
+            duration: Some(duration),
+            ..
+        } if text.eq_ignore_ascii_case("Count Recharge") => Some(*duration * 1_000),
+        _ => None,
+    });
+    match (max_count, count_recharge_ms) {
+        (Some(count), Some(count_recharge)) => recharge_ms.max(count_recharge / count),
+        _ => recharge_ms,
     }
-    0 // no cooldown = auto-attack or instant
 }
 
 /// Extract all combat-relevant effects from skill facts (+ description for corrupt/mobility).
@@ -835,6 +1006,85 @@ mod tests {
             flags: vec![],
             specialization: None,
         }
+    }
+
+    /// Combat Stimulant 62978 publishes Recharge 1 s, Maximum Count 2 and
+    /// Count Recharge 20 s: the sustainable rate is one press per 10 s, not
+    /// one per second. Facts copied from the live API.
+    #[test]
+    fn an_ammo_skill_amortizes_its_count_recharge() {
+        let facts: Vec<Fact> = serde_json::from_value(serde_json::json!([
+            {"type": "Recharge", "text": "Recharge", "value": 1.0},
+            {"type": "Number", "text": "Maximum Count", "value": 2},
+            {"type": "Time", "text": "Count Recharge", "duration": 20},
+            {"type": "Time", "text": "Count Recharge", "duration": 25}
+        ]))
+        .expect("facts");
+        assert_eq!(extract_cooldown(&facts), 10_000);
+
+        // No ammunition: the recharge stands on its own.
+        let plain: Vec<Fact> = serde_json::from_value(serde_json::json!([
+            {"type": "Recharge", "text": "Recharge", "value": 24.0}
+        ]))
+        .expect("facts");
+        assert_eq!(extract_cooldown(&plain), 24_000);
+
+        // A long inter-cast delay is the floor, not the amortized rate.
+        let slow_cast: Vec<Fact> = serde_json::from_value(serde_json::json!([
+            {"type": "Recharge", "text": "Recharge", "value": 15.0},
+            {"type": "Number", "text": "Maximum Count", "value": 3},
+            {"type": "Time", "text": "Count Recharge", "duration": 30}
+        ]))
+        .expect("facts");
+        assert_eq!(extract_cooldown(&slow_cast), 15_000);
+    }
+
+    /// Every ammunition skill in the live database resolves to at least its
+    /// sustainable rate. A blanket "no slotted skill is faster than 3 s"
+    /// sweep was the original ask, but 110 slotted skills are legitimately
+    /// faster than that -- engineer kits and their stow skills at 0, spirit
+    /// weapon and Ventari tablet actives at 1-2 s, flip skills -- so the
+    /// allowlist would be the test. This invariant needs none.
+    #[test]
+    #[ignore = "reads the live skill cache"]
+    fn no_ammo_skill_in_the_cache_resolves_faster_than_its_count_recharge() {
+        let cache = gw2_api::cache::DataCache::new(
+            gw2_api::dev_config::cache_dir().expect("dev.cfg cache dir"),
+        );
+        let db = crate::gamedb::GameDb::load(&cache).expect("cached game data");
+        let mut checked = 0;
+        for (id, skill) in &db.skills {
+            let ammo = skill.facts.iter().find_map(|fact| match fact {
+                Fact::Number {
+                    text: Some(text),
+                    value: Some(value),
+                    ..
+                } if text.eq_ignore_ascii_case("Maximum Count") && *value > 0 => {
+                    Some(*value as u32)
+                }
+                _ => None,
+            });
+            let count_recharge = skill.facts.iter().find_map(|fact| match fact {
+                Fact::Time {
+                    text: Some(text),
+                    duration: Some(duration),
+                    ..
+                } if text.eq_ignore_ascii_case("Count Recharge") => Some(*duration * 1_000),
+                _ => None,
+            });
+            let (Some(count), Some(recharge)) = (ammo, count_recharge) else {
+                continue;
+            };
+            checked += 1;
+            assert!(
+                extract_cooldown(&skill.facts) >= recharge / count,
+                "{} ({id}) resolves to {} ms, under its {} ms sustainable rate",
+                skill.name,
+                extract_cooldown(&skill.facts),
+                recharge / count
+            );
+        }
+        assert!(checked > 20, "only {checked} ammunition skills found");
     }
 
     #[test]
@@ -1432,6 +1682,7 @@ mod tests {
             effects: vec![],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
             categories: Vec::new(),
             slot_name: None,
@@ -1507,6 +1758,7 @@ mod tests {
             effects: vec![],
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: set,
             categories: Vec::new(),
             slot_name: None,
@@ -1692,10 +1944,69 @@ mod tests {
         db.skills_by_profession
             .insert("Warrior".into(), vec![1, 2, 3, 4]);
 
-        let selected = profession_skills_for_build(&db, "Warrior", &[77]);
+        let selected = profession_skills_for_build(
+            &db,
+            "Warrior",
+            &[77],
+            &crate::validation::ValidatedWeapons::default(),
+        );
         assert_eq!(
             selected,
             vec![(2, "Elite F1".into()), (4, "Core F2".into())]
+        );
+    }
+
+    /// The burst belongs to the weapon in hand. Eviscerate is an Axe skill:
+    /// a Spear Warrior presses the Spear burst, and the id sort only decides
+    /// between candidates the build can actually hold.
+    #[test]
+    fn the_profession_bar_follows_the_equipped_weapon() {
+        use crate::validation::{ValidatedWeaponSet, ValidatedWeapons};
+        let mut db = empty_db();
+        let mut axe = make_test_skill(14353, "Eviscerate", "Profession_1", vec![]);
+        axe.weapon_type = Some("Axe".into());
+        let mut spear = make_test_skill(14443, "Whirling Strike", "Profession_1", vec![]);
+        spear.weapon_type = Some("Spear".into());
+        let mut counter = make_test_skill(44165, "Full Counter", "Profession_2", vec![]);
+        counter.weapon_type = Some("None".into());
+        for skill in [axe, spear, counter] {
+            db.skills.insert(skill.id, skill);
+        }
+        db.skills_by_profession
+            .insert("Warrior".into(), vec![14353, 14443, 44165]);
+
+        let spear_build = ValidatedWeapons {
+            set1: ValidatedWeaponSet {
+                main_hand: Some("Spear".into()),
+                off_hand: None,
+            },
+            set2: ValidatedWeaponSet::default(),
+        };
+        assert_eq!(
+            profession_skills_for_build(&db, "Warrior", &[], &spear_build),
+            vec![
+                (14443, "Whirling Strike".into()),
+                (44165, "Full Counter".into())
+            ],
+            "Spear Warrior presses the Spear burst, and Full Counter is weapon-independent"
+        );
+
+        let axe_build = ValidatedWeapons {
+            set1: ValidatedWeaponSet {
+                main_hand: Some("Axe".into()),
+                off_hand: Some("Shield".into()),
+            },
+            set2: ValidatedWeaponSet::default(),
+        };
+        assert_eq!(
+            profession_skills_for_build(&db, "Warrior", &[], &axe_build)[0],
+            (14353, "Eviscerate".into())
+        );
+
+        // No weapons resolved yet: the bar still fills, by id order.
+        assert_eq!(
+            profession_skills_for_build(&db, "Warrior", &[], &ValidatedWeapons::default())[0],
+            (14353, "Eviscerate".into())
         );
     }
 }

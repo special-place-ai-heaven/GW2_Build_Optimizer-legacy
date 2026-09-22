@@ -198,12 +198,15 @@ pub fn access(profession: &str, weapon: &str, hand: Hand) -> WeaponAccess {
     }
 }
 
-pub fn is_legal(profession: &str, weapon: &str, hand: Hand, equipped_elite: Option<&str>) -> bool {
-    match access(profession, weapon, hand) {
-        WeaponAccess::None => false,
-        WeaponAccess::Core | WeaponAccess::ExpandedSoto | WeaponAccess::SpearJw => true,
-        WeaponAccess::Elite(name) => equipped_elite.is_some_and(|e| e.eq_ignore_ascii_case(&name)),
-    }
+/// Can this profession hold this weapon in this hand on land?
+///
+/// Weaponmaster Training (SotO) unlocked every elite specialization's weapon
+/// for every build of that profession, so `Elite(name)` records which spec
+/// *brought* the weapon, not a spec the build must equip — GuildJen publishes
+/// Catalyst Hammer on a Weaver and Tempest Warhorn on a Catalyst. Only
+/// `None`, a hand the profession never trains, is illegal.
+pub fn is_legal(profession: &str, weapon: &str, hand: Hand) -> bool {
+    !matches!(access(profession, weapon, hand), WeaponAccess::None)
 }
 
 pub fn choya_label(access: &WeaponAccess) -> String {

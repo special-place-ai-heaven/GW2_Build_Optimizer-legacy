@@ -297,8 +297,13 @@ fn cancelled_result(source: &str) -> ScrapeResult {
 /// downstream `find_best_benchmark` ties broke on raw iteration order —
 /// meaning the "best" benchmark could differ between machines.
 pub fn load_benchmarks(addon_dir: &Path) -> Vec<BenchmarkBuild> {
-    let dir = addon_dir.join("benchmarks");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    load_benchmarks_from(&addon_dir.join("benchmarks"))
+}
+
+/// [`load_benchmarks`] against an explicit directory, so a test can read a
+/// checked-in snapshot of the corpus instead of the player's synced one.
+pub fn load_benchmarks_from(dir: &Path) -> Vec<BenchmarkBuild> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return vec![];
     };
     let mut paths: Vec<std::path::PathBuf> = entries

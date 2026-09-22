@@ -20,6 +20,21 @@ const MIN_STUNBREAKS: u32 = 1;
 const MIN_CLEANSE_COUNT: u32 = 1;
 const MIN_CLEANSE_RATE_PER_20S: f64 = 2.0;
 
+/// Share of decisions the build may spend resource-starved before the bar
+/// counts as unplayable. A decision is starved only when the pool left
+/// nothing to press but the autoattack; wanting an unaffordable elite while
+/// pressing something else is how every resource profession plays, and
+/// opening a fight unable to pay is how they all start.
+///
+/// Measured over the 140 plated WvW references, starved-decision share:
+/// 0.10 refuses 8 builds, 0.25 refuses 3, 0.50 and above refuse none. The
+/// three at 0.25 are Revenant supports whose energy this ledger models
+/// coarsely (no tablet, no upkeep toggling policy), so refusing them would
+/// describe our model rather than the build. The gate's remaining teeth:
+/// a cost the pool can never reach fails regardless of this ratio, and a
+/// build starved for more than half the fight fails on it.
+const MAX_RESOURCE_BLOCKED_RATIO: f64 = 0.50;
+
 fn stunbreak_floor(profile: Option<&crate::data::ObjectiveProfile>) -> u32 {
     profile
         .and_then(|p| p.viability_gates.min_stunbreaks)
@@ -167,8 +182,14 @@ impl ViabilityGate {
 pub struct GateResult {
     /// Which gate was checked.
     pub gate: ViabilityGate,
-    /// Whether the gate passed.
+    /// Whether the gate passed. A skipped gate reports `true` so that every
+    /// "list the failures" caller stays correct; read `skipped` to tell an
+    /// abstention from a verdict.
     pub passed: bool,
+    /// The gate did not judge this build: the simulator does not model what
+    /// the gate reads, so it is neither a pass nor a fail and carries no
+    /// weight in `is_viable` or `shortfall`. The note says what is missing.
+    pub skipped: bool,
     /// Human-readable explanation (threshold, actual value, or reason for skip/fail).
     pub note: String,
 }
@@ -210,13 +231,20 @@ pub struct ViabilityReport {
 /// and still becomes a caveat on a served build - it just cannot be the reason
 /// a build scores -1.0.
 fn gates_all_blocking_passed(gates: &[GateResult]) -> bool {
-    gates.iter().all(|g| g.passed || !g.gate.blocks())
+    gates
+        .iter()
+        .all(|g| g.passed || g.skipped || !g.gate.blocks())
 }
 
 impl ViabilityReport {
-    /// Returns the first failing gate, if any.
+    /// Returns the first failing gate, if any. An abstention is not one.
     pub fn first_failure(&self) -> Option<&GateResult> {
-        self.gates.iter().find(|g| !g.passed)
+        self.gates.iter().find(|g| !g.passed && !g.skipped)
+    }
+
+    /// Gates that could not judge this build, with their reasons.
+    pub fn skipped_gates(&self) -> impl Iterator<Item = &GateResult> {
+        self.gates.iter().filter(|g| g.skipped)
     }
 }
 
@@ -225,14 +253,36 @@ pub(crate) fn is_roam_objective(scenario: &ScenarioSpec) -> bool {
     needs_outcome_clock(scenario) || needs_mobility_out(scenario)
 }
 
+/// Whether `search_rank` ranks on the WvW counterplay timeline.
+///
+/// Every WvW scenario does. `is_roam_objective` answers a narrower question
+/// -- does this build have to finish a kill or escape -- and it is false for
+/// Support, Commander and Staller, and for any tier above Solo. Ranking off
+/// it meant a WvW/Party/Support search compared builds on four trailing
+/// zeros: the ally-facing keys (sequence, outcome, execution, tempo) never
+/// ran for the one role that is made of them. PvP solo harassers keep the
+/// timeline keys they already had.
+fn ranks_on_the_wvw_timeline(scenario: &ScenarioSpec) -> bool {
+    scenario.game_mode == GameMode::WvW || is_roam_objective(scenario)
+}
+
 /// Higher is better. WvW first requires a viable, completed exchange, then
 /// honors the player's radar weights before ranking surplus role execution.
 /// PvE/PvP: realized capped score, realized uncapped direction, then the
 /// closed-form stat direction as the last word when output ties exactly.
-pub fn search_rank(report: &RefereeReport) -> [i64; 9] {
+pub fn search_rank(report: &RefereeReport) -> [i64; 10] {
     let viable = i64::from(report.viability.is_viable);
+    // Key 1, above every measure of HOW WELL a build performs: a build that
+    // delivers what another role exists for is the wrong build, not a lesser
+    // one. Signed, so a build can sort below one that does nothing at all.
+    // Unmeasurable (no profile, or the collapsed axes) sorts under every real
+    // alignment, which only ever ties builds that already lost on key 0.
+    let alignment = report
+        .intent_alignment
+        .map(|a| (a * 1_000_000.0).round() as i64)
+        .unwrap_or(-2_000_000);
     let gates = report.viability.gates.iter().filter(|g| g.passed).count() as i64;
-    if is_roam_objective(&report.scenario) {
+    if ranks_on_the_wvw_timeline(&report.scenario) {
         let rot = report.rotation.as_ref();
         let wvw = rot.and_then(|rotation| rotation.wvw.as_ref());
         let sequence = wvw
@@ -285,6 +335,7 @@ pub fn search_rank(report: &RefereeReport) -> [i64; 9] {
         let raw = (report.raw_direction_score * 1_000_000.0).round() as i64;
         [
             viable,
+            alignment,
             gates,
             sequence,
             outcome,
@@ -298,7 +349,7 @@ pub fn search_rank(report: &RefereeReport) -> [i64; 9] {
         let score = (report.user_intent_score * 1_000_000.0) as i64;
         let raw = (report.raw_direction_score * 1_000_000.0) as i64;
         let stats = (report.stat_direction_score * 1_000_000.0) as i64;
-        [viable, gates, score, raw, stats, 0, 0, 0, 0]
+        [viable, alignment, gates, score, raw, stats, 0, 0, 0, 0]
     }
 }
 
@@ -365,6 +416,7 @@ pub fn evaluate_viability_gates_for(
                 }
                 GateResult {
                     gate: ViabilityGate::StunbreakCount,
+                    skipped: false,
                     passed,
                     note: format!(
                         "stunbreak_count={} (required >={})",
@@ -374,6 +426,7 @@ pub fn evaluate_viability_gates_for(
             }
             None => GateResult {
                 gate: ViabilityGate::StunbreakCount,
+                skipped: false,
                 passed: false,
                 note: "rotation unavailable".into(),
             },
@@ -407,12 +460,14 @@ pub fn evaluate_viability_gates_for(
                     };
                     GateResult {
                         gate: ViabilityGate::StabilityAccess,
+                        skipped: false,
                         passed,
                         note,
                     }
                 }
                 None => GateResult {
                     gate: ViabilityGate::StabilityAccess,
+                    skipped: false,
                     passed: false,
                     note: "rotation unavailable".into(),
                 },
@@ -423,18 +478,20 @@ pub fn evaluate_viability_gates_for(
         gates.push(match rotation {
             Some(rot) => {
                 let required_rate = effective_cleanse_requirement(scenario, rot, profile);
-                let passed = rot.cleanse_count >= need_cleanses
-                    && rot.cleanse_rate_per_20s >= required_rate;
+                // The rate supersedes the count. Sigils, runes, relics and
+                // traits cleanse without occupying a skill slot, so a kit can
+                // out-cleanse the floor with `cleanse_count == 0`; requiring
+                // both refused builds that cleanse entirely off-bar.
+                let passed = rot.cleanse_rate_per_20s >= required_rate;
                 if !passed {
-                    let count_short = (need_cleanses.saturating_sub(rot.cleanse_count)) as f64
-                        / need_cleanses.max(1) as f64;
                     let rate_short =
                         ((required_rate - rot.cleanse_rate_per_20s) / required_rate).clamp(0.0, 1.0);
-                    shortfall += count_short.max(rate_short);
+                    shortfall += rate_short;
                     graded.push(ViabilityGate::CleanseRate);
                 }
                 GateResult {
                     gate: ViabilityGate::CleanseRate,
+                    skipped: false,
                     passed,
                     note: format!(
                         "cleanse_count={}, rate={:.1}/20s (required count >={}, rate >={required_rate:.1}/20s)",
@@ -444,6 +501,7 @@ pub fn evaluate_viability_gates_for(
             }
             None => GateResult {
                 gate: ViabilityGate::CleanseRate,
+                skipped: false,
                 passed: false,
                 note: "rotation unavailable".into(),
             },
@@ -473,6 +531,7 @@ pub fn evaluate_viability_gates_for(
                 };
                 GateResult {
                     gate: ViabilityGate::ControlCoverage,
+                    skipped: false,
                     passed,
                     note: format!(
                         "soft-control coverage via {limb} (need cleanse OR Resistance OR stunbreak)"
@@ -481,6 +540,7 @@ pub fn evaluate_viability_gates_for(
             }
             None => GateResult {
                 gate: ViabilityGate::ControlCoverage,
+                skipped: false,
                 passed: false,
                 note: "rotation unavailable".into(),
             },
@@ -510,6 +570,7 @@ pub fn evaluate_viability_gates_for(
                     let passed = fight.chain_completed && damage_route;
                     GateResult {
                         gate: ViabilityGate::ProtectedExecution,
+                        skipped: false,
                         passed,
                         // `chain_completed` decides this gate — for a
                         // Support build it decides it alone, since the damage
@@ -533,6 +594,7 @@ pub fn evaluate_viability_gates_for(
                 }
                 None => GateResult {
                     gate: ViabilityGate::ProtectedExecution,
+                    skipped: false,
                     passed: false,
                     note: "WvW counterplay timeline unavailable".into(),
                 },
@@ -579,6 +641,7 @@ pub fn evaluate_viability_gates_for(
                     }
                     GateResult {
                         gate: ViabilityGate::SustainRecovery,
+                        skipped: false,
                         passed,
                         note: format!(
                             "survived={}, health={:.0}%, margin={:+.0}/s, repeatable={}",
@@ -591,22 +654,76 @@ pub fn evaluate_viability_gates_for(
                 }
                 None => GateResult {
                     gate: ViabilityGate::SustainRecovery,
+                    skipped: false,
                     passed: false,
                     note: "WvW counterplay timeline unavailable".into(),
                 },
             });
 
             gates.push(match rotation.and_then(|rotation| rotation.wvw.as_ref()) {
-                Some(fight) => GateResult {
+                // The ledger did not price this bar: either nothing was
+                // simulated at all (Guardian virtues, Elementalist
+                // attunements, Engineer toolbelt) or a skill on it spends
+                // a resource no rule covers. Either way the gate has not
+                // read enough to judge, so it abstains instead of handing
+                // out a free pass or manufacturing a refusal. The ratio
+                // and the unpayable check decide only on a complete model.
+                Some(fight) if !fight.resource_model_complete => GateResult {
                     gate: ViabilityGate::ResourceLegality,
-                    passed: fight.resource_legal,
+                    skipped: true,
+                    passed: true,
                     note: format!(
-                        "resource-blocked priority actions={}",
-                        fight.resource_blocked_actions
+                        "not simulated: {}",
+                        if fight.resource_model_gaps.is_empty() {
+                            format!("{} resource", fight.profession)
+                        } else {
+                            format!(
+                                "{} ({})",
+                                fight.resource_model_gaps.join(", "),
+                                fight.profession
+                            )
+                        }
                     ),
                 },
+                Some(fight) => {
+                    // Opening a fight unable to pay is how a resource
+                    // profession starts; only sustained blocking, or a cost
+                    // the pool can never reach, means the bar cannot be
+                    // played.
+                    let unpayable = !fight.resource_unpayable_skills.is_empty();
+                    let passed =
+                        !unpayable && fight.resource_blocked_ratio <= MAX_RESOURCE_BLOCKED_RATIO;
+                    GateResult {
+                        gate: ViabilityGate::ResourceLegality,
+                        skipped: false,
+                        passed,
+                        note: if unpayable {
+                            format!(
+                                "cost above the resource cap, never castable: {}",
+                                fight.resource_unpayable_skills.join(", ")
+                            )
+                        } else {
+                            let mut note = format!(
+                                "resource-blocked priority actions={} ({:.0}% of decisions, allowed <={:.0}%)",
+                                fight.resource_blocked_actions,
+                                fight.resource_blocked_ratio * 100.0,
+                                MAX_RESOURCE_BLOCKED_RATIO * 100.0
+                            );
+                            // Never a silent pass: say what the ledger does
+                            // not model, whether the gate passed or failed.
+                            if !fight.resource_model_gaps.is_empty() {
+                                note.push_str(&format!(
+                                    "; resource model incomplete: {} not modelled",
+                                    fight.resource_model_gaps.join(", ")
+                                ));
+                            }
+                            note
+                        },
+                    }
+                }
                 None => GateResult {
                     gate: ViabilityGate::ResourceLegality,
+                    skipped: false,
                     passed: false,
                     note: "WvW timeline unavailable".into(),
                 },
@@ -618,6 +735,7 @@ pub fn evaluate_viability_gates_for(
             gates.push(match rotation {
                 Some(rot) => GateResult {
                     gate: ViabilityGate::MobilityOut,
+                    skipped: false,
                     passed: rot.has_mobility_out,
                     note: if rot.has_mobility_out {
                         "escape kit present".into()
@@ -629,6 +747,7 @@ pub fn evaluate_viability_gates_for(
                 },
                 None => GateResult {
                     gate: ViabilityGate::MobilityOut,
+                    skipped: false,
                     passed: false,
                     note: "rotation unavailable".into(),
                 },
@@ -639,6 +758,7 @@ pub fn evaluate_viability_gates_for(
             gates.push(match rotation {
                 Some(rot) => GateResult {
                     gate: ViabilityGate::HarasserStrip,
+                    skipped: false,
                     passed: rot.has_strip,
                     note: if rot.has_strip {
                         "strip/steal/corrupt present".into()
@@ -648,6 +768,7 @@ pub fn evaluate_viability_gates_for(
                 },
                 None => GateResult {
                     gate: ViabilityGate::HarasserStrip,
+                    skipped: false,
                     passed: false,
                     note: "rotation unavailable".into(),
                 },
@@ -664,6 +785,7 @@ pub fn evaluate_viability_gates_for(
                     };
                     GateResult {
                         gate: ViabilityGate::EncounterOutcome,
+                        skipped: false,
                         passed: target_reached,
                         note: if target_reached {
                             "target threshold reached in window".into()
@@ -674,6 +796,7 @@ pub fn evaluate_viability_gates_for(
                 }
                 None => GateResult {
                     gate: ViabilityGate::EncounterOutcome,
+                    skipped: false,
                     passed: false,
                     note: "rotation unavailable".into(),
                 },
@@ -681,6 +804,7 @@ pub fn evaluate_viability_gates_for(
             gates.push(match rotation {
                 Some(rot) => GateResult {
                     gate: ViabilityGate::SecureCompletion,
+                    skipped: false,
                     passed: rot.has_interrupt,
                     note: if rot.has_interrupt {
                         "interrupt available for the target's recovery action".into()
@@ -690,6 +814,7 @@ pub fn evaluate_viability_gates_for(
                 },
                 None => GateResult {
                     gate: ViabilityGate::SecureCompletion,
+                    skipped: false,
                     passed: false,
                     note: "rotation unavailable".into(),
                 },
@@ -728,6 +853,7 @@ pub fn evaluate_viability_gates_for(
     }
     gates.push(GateResult {
         gate: ViabilityGate::EffectiveHealth,
+        skipped: false,
         passed,
         note: format!(
             "effective_health={:.0} (required >={:.0})",
@@ -756,6 +882,7 @@ pub fn evaluate_viability_gates_for(
                 }
                 GateResult {
                     gate: ViabilityGate::BoonUptime,
+                    skipped: false,
                     passed,
                     note: if passed {
                         "boon uptime floors met".into()
@@ -766,6 +893,7 @@ pub fn evaluate_viability_gates_for(
             }
             None => GateResult {
                 gate: ViabilityGate::BoonUptime,
+                skipped: false,
                 passed: false,
                 note: "rotation unavailable".into(),
             },
@@ -951,15 +1079,12 @@ pub fn apply_offbar_cleanse(
     }
     let required = effective_cleanse_requirement(scenario, rot, profile);
     let need = cleanse_count_floor(profile);
-    let count_short = (need.saturating_sub(rot.cleanse_count)) as f64 / need.max(1) as f64;
-    let short = |rate: f64| {
-        let rate_short = ((required - rate) / required).clamp(0.0, 1.0);
-        count_short.max(rate_short)
-    };
+    // Mirrors the gate: the rate decides, the count is reporting only.
+    let short = |rate: f64| ((required - rate) / required).clamp(0.0, 1.0);
     let before = rot.cleanse_rate_per_20s;
     let after = before + gear;
-    let was_failing = rot.cleanse_count < need || before < required;
-    let now_passes = rot.cleanse_count >= need && after >= required;
+    let was_failing = before < required;
+    let now_passes = after >= required;
     let mut changed = false;
     for g in &mut report.gates {
         if g.gate != ViabilityGate::CleanseRate {
@@ -1112,6 +1237,38 @@ pub struct RefereeReport {
     /// post-saturation piece swaps toward the user's wished stats win ties
     /// that the capped `user_intent_score` cannot see.
     pub raw_direction_score: f64,
+    /// Direction score over the axes that were actually MEASURED, not gated.
+    ///
+    /// Same formula as the non-sentinel branch of `raw_direction_score`, but
+    /// it keeps its value when a blocking gate fails — so a refused build can
+    /// still be RANKED against other refused builds. Only the
+    /// [`evaluate_validated_build_ranked`] entry point pays for the flow
+    /// simulation that makes this real; every other entry point sets it equal
+    /// to `raw_direction_score`, sentinel included.
+    pub ranked_direction_score: f64,
+    /// Cosine between the player's weight vector and the realized axes.
+    ///
+    /// DIAGNOSTIC ONLY. Nothing gates on this: measured across the corpus the
+    /// angle cannot separate a support build from a damage one, because every
+    /// build sustains and that common-mode axis dominates the direction. The
+    /// picks path, the meter and the serve invariant all use
+    /// [`Self::intent_alignment`] against
+    /// [`scoring::INTENT_ALIGNMENT_FLOOR`] instead. Kept because it is
+    /// cheap and because a calibration run wants to see both numbers.
+    ///
+    /// `None` when the axes are the collapsed `realized_axes_no_rotation`
+    /// fallback - a vector that is sustain and five zeroes has no direction.
+    pub intent_similarity: Option<f64>,
+    /// How well the measured axes serve the DIRECTION the role is written
+    /// for: the focus axes delivered, minus what the role says to avoid.
+    /// See [`scoring::intent_alignment`].
+    ///
+    /// The selection metric for the picks cards and the "vs meta" reference,
+    /// and what the serve path should gate on. `None` when the axes are the
+    /// collapsed no-rotation fallback, or when the scenario names no
+    /// objective profile and its combat kind names none either - there is
+    /// no direction to serve without one.
+    pub intent_alignment: Option<f64>,
     /// Per-axis output of the 60s flow simulation, as fractions of the
     /// realized norms. This is what `user_intent_score` is computed from.
     pub realized: scoring::RealizedAxes,
@@ -1123,16 +1280,26 @@ pub struct RefereeReport {
     pub quality_reasons: Vec<DataQualityReason>,
 }
 
-/// Look up the objective profile named on `scenario`, if any.
-/// Unset or unknown ids resolve to `None` and keep hardcoded gate floors.
+/// Look up the objective profile for `scenario`.
+///
+/// The named id wins. When no id was set -- references, tests and every
+/// caller without a role chip -- the scenario's own combat kind, mode and
+/// tier name the profile, so a WvW Support build is judged by
+/// `WvW_Support`/`WvW_Zerg_Support` floors instead of the hardcoded ones.
+/// Only an id that names nothing in the catalog still resolves to `None`.
 fn objective_profile_for<'a>(
     scenario: &ScenarioSpec,
     catalog: &'a crate::data::ObjectiveProfileData,
 ) -> Option<&'a crate::data::ObjectiveProfile> {
-    scenario
-        .objective_profile_id
-        .as_deref()
-        .and_then(|id| catalog.profile_by_id(id))
+    match scenario.objective_profile_id.as_deref() {
+        Some(id) => catalog.profile_by_id(id),
+        None => catalog.profile_by_id(
+            scenario
+                .combat_kind
+                .role_objective()
+                .profile_id_for(&scenario.game_mode, scenario.combat_tier),
+        ),
+    }
 }
 
 pub fn evaluate_validated_build(
@@ -1193,6 +1360,59 @@ pub fn evaluate_validated_build_with(
     ctx: &BalanceContext,
     scenario: &ScenarioSpec,
     opener: &[u32],
+) -> RefereeReport {
+    evaluate_inner(
+        validated,
+        db,
+        profession_name,
+        weights,
+        ctx,
+        scenario,
+        opener,
+        false,
+    )
+}
+
+/// Same referee, but the realized axes are measured even when a blocking gate
+/// fails, so refused builds can be ranked against each other.
+///
+/// Costs one extra flow simulation per refused build (~150 µs vs ~60 µs), which
+/// is why the search path does NOT use it. Ranking a published corpus does:
+/// `realized_axes_no_rotation` fills only sustain, so every refused build came
+/// back as the same vector and cosine ranked an artifact.
+///
+/// `user_intent_score` and `raw_direction_score` keep their `-1.0` sentinel;
+/// read [`RefereeReport::ranked_direction_score`] for the measured number.
+pub fn evaluate_validated_build_ranked(
+    validated: &ValidatedBuild,
+    db: &GameDb,
+    profession_name: &str,
+    weights: &OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &ScenarioSpec,
+) -> RefereeReport {
+    evaluate_inner(
+        validated,
+        db,
+        profession_name,
+        weights,
+        ctx,
+        scenario,
+        &[],
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_inner(
+    validated: &ValidatedBuild,
+    db: &GameDb,
+    profession_name: &str,
+    weights: &OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &ScenarioSpec,
+    opener: &[u32],
+    always_realize: bool,
 ) -> RefereeReport {
     let (stats, modifiers) = engine::calculate_validated_stats(validated, db, profession_name, ctx);
     let derived = stats::compute_derived(&stats, profession_name);
@@ -1259,15 +1479,36 @@ pub fn evaluate_validated_build_with(
         profile,
     );
 
-    // The flow simulation is most of an evaluation's cost and nothing reads
-    // its axes for a build the gates already sent to -1.0.
-    let realized = match prepared.as_ref() {
-        Some(p) if viability.is_viable => scoring::realized_axes(
-            &engine::simulate_flow(p, weights, Some(scenario)),
-            &primary_combat,
+    // The flow simulation is most of an evaluation's cost, and the search path
+    // does not read the axes of a build the gates already sent to -1.0.
+    // `always_realize` callers RANK refused builds, so they pay for it.
+    let (realized, realized_from_flow) = match prepared.as_ref() {
+        Some(p) if viability.is_viable || always_realize => (
+            scoring::realized_axes(
+                &engine::simulate_flow(p, weights, Some(scenario)),
+                &primary_combat,
+            ),
+            true,
         ),
-        _ => scoring::realized_axes_no_rotation(&primary_combat),
+        _ => (scoring::realized_axes_no_rotation(&primary_combat), false),
     };
+    // The angle only means something when the axes were measured. A collapsed
+    // vector is sustain and five zeroes, and every build that produced no
+    // rotation would share its direction.
+    let intent_similarity =
+        realized_from_flow.then(|| crate::picks::cosine(&realized.as_array(), &weights.as_array()));
+    // The signed version: only the axes this role exists to deliver, minus
+    // the ones it exists not to. Needs the profile, so a scenario built
+    // without a role (references, tests) has no alignment to report.
+    let intent_alignment = realized_from_flow
+        .then(|| {
+            objective_profile_for(
+                scenario,
+                crate::data::objective_profiles::objective_profiles(),
+            )
+            .map(|profile| scoring::intent_alignment(profile, scenario.combat_tier, &realized))
+        })
+        .flatten();
     // What the rotation produced, scheduled toward the radar. The closed-form
     // stat score could not see a skill at all (measured 2026-09-04: 0 of 36
     // utilities moved a PvE rank).
@@ -1279,6 +1520,13 @@ pub fn evaluate_validated_build_with(
         )
     } else {
         (-1.0, -1.0, -1.0)
+    };
+    // Measured, not gated: same formula, no sentinel. Equal to
+    // `raw_direction_score` for every non-ranked caller.
+    let ranked_direction_score = if always_realize {
+        scoring::raw_realized(&realized, weights)
+    } else {
+        raw_direction_score
     };
 
     let mut quality = DataQuality::Verified;
@@ -1319,8 +1567,21 @@ pub fn evaluate_validated_build_with(
                 field: "wvw_timeline.resources".into(),
                 entity: profession_name.into(),
                 modes: vec![ctx.game_mode.label().to_string()],
-                explanation:
-                    "The active profession mechanic is outside the bounded resource ledger".into(),
+                explanation: if fight.resource_simulated {
+                    format!(
+                        "resource model incomplete for {profession_name}: {} not modelled",
+                        fight.resource_model_gaps.join(", ")
+                    )
+                } else {
+                    format!(
+                        "resource not simulated for {profession_name}: {} not modelled",
+                        if fight.resource_model_gaps.is_empty() {
+                            "the profession mechanic".to_string()
+                        } else {
+                            fight.resource_model_gaps.join(", ")
+                        }
+                    )
+                },
             });
         }
         // A refused shroud entry is a rotation fact the player can act on,
@@ -1347,6 +1608,9 @@ pub fn evaluate_validated_build_with(
         viability,
         user_intent_score,
         raw_direction_score,
+        ranked_direction_score,
+        intent_similarity,
+        intent_alignment,
         realized,
         stat_direction_score,
         quality,
@@ -1436,7 +1700,12 @@ mod tests {
                 repeatable: true,
                 resource_blocked_actions: 0,
                 resource_legal: true,
+                resource_blocked_ratio: 0.0,
+                resource_unpayable_skills: Vec::new(),
                 resource_model_complete: true,
+                resource_model_gaps: Vec::new(),
+                resource_simulated: true,
+                profession: "Warrior".into(),
                 unmodeled_sources: Vec::new(),
                 coverage: Vec::new(),
                 cleave_damage: 0.0,
@@ -1582,6 +1851,194 @@ mod tests {
         );
     }
 
+    /// A kit that cleanses entirely off-bar (`cleanse_count == 0`) passes on
+    /// its rate alone; a kit with neither bar skills nor gear still fails.
+    #[test]
+    fn offbar_cleanse_carries_a_bar_with_no_cleanse_skills() {
+        use super::{apply_offbar_cleanse, effective_cleanse_requirement};
+        use crate::validation::ValidatedItem;
+        let mut db = GameDb::empty_for_tests();
+        db.items.insert(1, sigil_item(1, "Superior Sigil of Cleansing",
+            "Remove 1 condition when you swap to this weapon while in combat. (Cooldown: 9 Seconds)"));
+        let mut scenario = make_wvw_scenario();
+        scenario.combat_tier = CombatTier::Solo;
+        let mut rot = make_viable_rotation();
+        rot.cleanse_count = 0;
+        rot.cleanse_rate_per_20s = 0.0;
+        let required = effective_cleanse_requirement(&scenario, &rot, None);
+        let combat = make_viable_combat();
+        let cleanse = |r: &ViabilityReport| {
+            r.gates
+                .iter()
+                .find(|g| g.gate == ViabilityGate::CleanseRate)
+                .cloned()
+                .unwrap()
+        };
+
+        let mut with_sigil = evaluate_viability_gates(Some(&rot), &combat, &scenario);
+        assert!(!cleanse(&with_sigil).passed, "nothing cleanses yet");
+        let geared = ValidatedBuild {
+            sigils: vec![ValidatedItem {
+                id: 1,
+                name: "Cleansing".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(
+            super::kit_cleanse_rate_from_gear(&geared, &db) >= required,
+            "fixture sigil must cover the floor"
+        );
+        apply_offbar_cleanse(&mut with_sigil, Some(&rot), &geared, &db, &scenario, None);
+        assert!(cleanse(&with_sigil).passed, "{}", cleanse(&with_sigil).note);
+
+        let mut bare = evaluate_viability_gates(Some(&rot), &combat, &scenario);
+        apply_offbar_cleanse(
+            &mut bare,
+            Some(&rot),
+            &ValidatedBuild::default(),
+            &db,
+            &scenario,
+            None,
+        );
+        assert!(
+            !cleanse(&bare).passed,
+            "no cleanse anywhere must still fail"
+        );
+    }
+
+    /// One unaffordable opening burst is how a resource profession starts a
+    /// fight; being blocked all fight, or carrying a cost above the pool's
+    /// cap, is not.
+    #[test]
+    fn resource_legality_allows_ramp_and_refuses_sustained_blocking() {
+        let mut scenario = make_wvw_scenario();
+        scenario.combat_tier = CombatTier::Solo;
+        let combat = make_viable_combat();
+        let gate = |ratio: f64, unpayable: Vec<String>| {
+            let mut rot = make_viable_rotation();
+            let fight = rot.wvw.as_mut().expect("wvw fixture");
+            fight.resource_blocked_actions = 1;
+            fight.resource_blocked_ratio = ratio;
+            fight.resource_unpayable_skills = unpayable;
+            evaluate_viability_gates(Some(&rot), &combat, &scenario)
+                .gates
+                .iter()
+                .find(|g| g.gate == ViabilityGate::ResourceLegality)
+                .cloned()
+                .expect("resource gate")
+        };
+
+        assert!(gate(0.10, Vec::new()).passed, "one blocked opening burst");
+        assert!(!gate(0.95, Vec::new()).passed, "blocked all fight");
+        let never = gate(0.0, vec!["Deadly Blades".into()]);
+        assert!(!never.passed, "cost above the cap can never be paid");
+        assert!(never.note.contains("Deadly Blades"), "{}", never.note);
+    }
+
+    /// A scenario that never named a profile is still judged by the data
+    /// floors its own combat kind, mode and tier imply. WvW Support resolves
+    /// to `WvW_Support` at Roam/Havoc scale and `WvW_Zerg_Support` at Squad
+    /// scale; references and tests used to fall back to hardcoded floors.
+    #[test]
+    fn an_unnamed_scenario_resolves_its_profile_from_the_combat_kind() {
+        use super::objective_profile_for;
+        use crate::scenario::{CombatKind, RoleObjective};
+        let catalog = crate::data::objective_profiles::objective_profiles();
+
+        let mut scenario = make_wvw_scenario();
+        scenario.combat_kind = CombatKind::Support;
+        scenario.objective_profile_id = None;
+
+        scenario.combat_tier = CombatTier::Party;
+        let party = objective_profile_for(&scenario, catalog).expect("WvW Support profile");
+        assert_eq!(party.objective_profile_id, "WvW_Support");
+        assert_eq!(
+            RoleObjective::Buffer.profile_id_for(&scenario.game_mode, CombatTier::Party),
+            "WvW_Support"
+        );
+
+        scenario.combat_tier = CombatTier::Squad;
+        let squad = objective_profile_for(&scenario, catalog).expect("WvW zerg support profile");
+        assert_eq!(squad.objective_profile_id, "WvW_Zerg_Support");
+
+        // A named id still wins, and an id that names nothing is still None.
+        scenario.objective_profile_id = Some("WvW_Roamer".into());
+        assert_eq!(
+            objective_profile_for(&scenario, catalog).map(|p| p.objective_profile_id.as_str()),
+            Some("WvW_Roamer")
+        );
+        scenario.objective_profile_id = Some("not a profile".into());
+        assert!(objective_profile_for(&scenario, catalog).is_none());
+    }
+
+    /// A profession whose resource this ledger never simulated gets an
+    /// abstention, not a free pass: the gate is marked skipped, says whose
+    /// resource is missing, and carries no weight either way.
+    #[test]
+    fn an_unsimulated_resource_skips_the_gate_instead_of_passing_it() {
+        let mut scenario = make_wvw_scenario();
+        scenario.combat_tier = CombatTier::Solo;
+        let combat = make_viable_combat();
+        let mut rot = make_viable_rotation();
+        {
+            let fight = rot.wvw.as_mut().expect("wvw fixture");
+            fight.resource_simulated = false;
+            fight.resource_model_complete = false;
+            fight.profession = "Guardian".into();
+            fight.resource_model_gaps = vec!["virtues, tomes and pages".into()];
+            // Even a bar the ledger would have refused stays unjudged.
+            fight.resource_blocked_ratio = 1.0;
+            fight.resource_unpayable_skills = vec!["Virtue of Justice".into()];
+        }
+        let report = evaluate_viability_gates(Some(&rot), &combat, &scenario);
+        let gate = report
+            .gates
+            .iter()
+            .find(|g| g.gate == ViabilityGate::ResourceLegality)
+            .expect("the gate is still reported");
+        assert!(gate.skipped, "neither pass nor fail: {}", gate.note);
+        assert!(gate.note.contains("not simulated"), "{}", gate.note);
+        assert!(
+            gate.note.contains("virtues, tomes and pages") && gate.note.contains("Guardian"),
+            "{}",
+            gate.note
+        );
+        assert!(
+            report.first_failure().is_none(),
+            "an abstention is not a failure"
+        );
+        assert_eq!(report.skipped_gates().count(), 1);
+        assert!(
+            report.is_viable,
+            "a skipped gate carries no weight toward viability"
+        );
+        assert!(
+            report.shortfall.abs() < 1e-9,
+            "and none toward shortfall: {}",
+            report.shortfall
+        );
+
+        // A modelled bar is still judged, pass or fail, on the ratio.
+        let judged = |ratio: f64| {
+            let mut rot = make_viable_rotation();
+            {
+                let fight = rot.wvw.as_mut().expect("wvw fixture");
+                fight.profession = "Revenant".into();
+                fight.resource_blocked_ratio = ratio;
+            }
+            evaluate_viability_gates(Some(&rot), &combat, &scenario)
+                .gates
+                .iter()
+                .find(|g| g.gate == ViabilityGate::ResourceLegality)
+                .cloned()
+                .expect("the gate")
+        };
+        let ok = judged(0.10);
+        assert!(!ok.skipped && ok.passed, "{}", ok.note);
+        let starved = judged(0.95);
+        assert!(!starved.skipped && !starved.passed, "{}", starved.note);
+    }
+
     fn make_rank_report(rotation: SimulationResult) -> RefereeReport {
         let mut scenario = make_wvw_scenario();
         scenario.combat_tier = CombatTier::Solo;
@@ -1601,11 +2058,49 @@ mod tests {
             },
             user_intent_score: 0.0,
             raw_direction_score: -1.0,
+            ranked_direction_score: -1.0,
+            intent_similarity: None,
+            intent_alignment: None,
             realized: Default::default(),
             stat_direction_score: -1.0,
             quality: DataQuality::Verified,
             quality_reasons: Vec::new(),
         }
+    }
+
+    /// A WvW support at party scale is ranked on the WvW timeline like
+    /// every other WvW build. It used to fall through to the PvE branch
+    /// because `is_roam_objective` is false for Support above Solo, so the
+    /// four keys that describe an ally-facing fight were zeros.
+    #[test]
+    fn a_wvw_party_support_ranks_on_the_timeline_keys() {
+        let mut rot = make_viable_rotation();
+        {
+            let fight = rot.wvw.as_mut().expect("wvw fixture");
+            fight.chain_completed = true;
+            fight.player_survived = true;
+            fight.sustain_margin = 400.0;
+            fight.ally_boon_stack_seconds = 12_000.0;
+            fight.target_reached_at_ms = Some(6_000);
+            fight.duration_ms = 20_000;
+            fight.repeatable = true;
+            fight.remaining_health_ratio = 0.9;
+        }
+        let mut report = make_rank_report(rot);
+        report.scenario.combat_tier = CombatTier::Party;
+        report.scenario.combat_kind = crate::scenario::CombatKind::Support;
+        report.user_intent_score = 0.5;
+
+        let rank = search_rank(&report);
+        // Keys 3..=8 are the timeline keys: sequence, outcome, intent,
+        // execution, tempo, repeatable+sustain. Key 9 is the raw direction
+        // score, which this fixture leaves at the -1.0 sentinel.
+        for key in 3..=8 {
+            assert!(rank[key] > 0, "key {key} is a trailing zero: {rank:?}");
+        }
+        // Support ranks on surviving and on what it gave allies.
+        assert_eq!(rank[4], 1, "survival is the outcome key for support");
+        assert_eq!(rank[6], (400.0 + 12.0_f64).round() as i64);
     }
 
     #[test]
@@ -2483,11 +2978,14 @@ mod tests {
         assert!(!g.passed);
     }
 
-    /// WvW build with no cleanse skills → non-viable, cleanse gate fails.
+    /// WvW build that cleanses nothing → non-viable, cleanse gate fails.
+    /// The rate is what the gate reads (gear can cleanse with no bar skill),
+    /// so "no cleanse" means no rate either.
     #[test]
     fn gate_wvw_no_cleanse_fails() {
         let mut rot = make_viable_rotation();
         rot.cleanse_count = 0;
+        rot.cleanse_rate_per_20s = 0.0;
         let combat = make_viable_combat();
         let scenario = make_wvw_scenario();
         let report = evaluate_viability_gates(Some(&rot), &combat, &scenario);
@@ -2623,6 +3121,9 @@ mod tests {
         assert!(gate_by_kind(&report.gates, &ViabilityGate::StabilityAccess).is_none());
     }
 
+    /// The rate floor decides the gate. The count floor is reporting only:
+    /// runes, sigils, relics and traits cleanse without a skill slot, so a
+    /// kit meeting the rate is not refused for carrying too few bar skills.
     #[test]
     fn profile_min_cleanse_count_and_rate_override_consts() {
         let mut rot = make_viable_rotation();
@@ -2643,11 +3144,9 @@ mod tests {
                 .unwrap()
                 .passed
         );
-        assert!(
-            !gate_by_kind(&by_count.gates, &ViabilityGate::CleanseRate)
-                .unwrap()
-                .passed
-        );
+        let counted = gate_by_kind(&by_count.gates, &ViabilityGate::CleanseRate).unwrap();
+        assert!(counted.passed, "count is reporting only: {}", counted.note);
+        assert!(counted.note.contains("count >=2"), "{}", counted.note);
         let g = gate_by_kind(&by_rate.gates, &ViabilityGate::CleanseRate).unwrap();
         assert!(!g.passed, "{}", g.note);
         assert!(g.note.contains("10.0"), "{}", g.note);
@@ -3569,6 +4068,9 @@ mod tests {
                 },
                 user_intent_score: 0.5,
                 raw_direction_score: raw,
+                ranked_direction_score: raw,
+                intent_similarity: None,
+                intent_alignment: None,
                 realized: Default::default(),
                 stat_direction_score: -1.0,
                 quality: DataQuality::Verified,
@@ -3982,6 +4484,45 @@ coverage: {:?}",
     /// PvE number. Pinned before the parser change (commit e531a75) and
     /// re-pinned once in T053, when the fixture's shroud bar moved from the
     /// always-available profession list to the shroud set (a fixture
+    /// The build panel renders `RefereeReport.viability` from
+    /// `evaluate_validated_build_ranked`, the same report the benchmark
+    /// meter ranks. It used to run its own `evaluate_viability_gates` with
+    /// no objective profile and without the off-bar cleanse pass, and
+    /// printed NON-VIABLE over builds the referee had passed. Ranked and
+    /// plain evaluation must therefore agree on the verdict.
+    #[test]
+    fn the_ranked_and_plain_reports_return_the_same_verdict() {
+        use crate::rotation::reaper_fixture as fx;
+        let db = fx::db();
+        let build = fx::build();
+        let (ctx, scenario) = fx::pve_scenario();
+        let weights = OptimizationWeights::default();
+        let plain =
+            super::evaluate_validated_build(&build, &db, "Necromancer", &weights, &ctx, &scenario);
+        let ranked = super::evaluate_validated_build_ranked(
+            &build,
+            &db,
+            "Necromancer",
+            &weights,
+            &ctx,
+            &scenario,
+        );
+        assert_eq!(plain.viability.is_viable, ranked.viability.is_viable);
+        let verdicts = |report: &RefereeReport| {
+            report
+                .viability
+                .gates
+                .iter()
+                .map(|g| (format!("{:?}", g.gate), g.passed, g.skipped))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            verdicts(&plain),
+            verdicts(&ranked),
+            "the panel and the meter must not disagree gate by gate"
+        );
+    }
+
     /// change: the PvE simulator never held those skills for a real build).
     #[test]
     fn pve_output_unchanged_by_conditional_tagging() {
@@ -4008,14 +4549,18 @@ coverage: {:?}",
             report.realized.control,
             report.user_intent_score,
         ];
+        // boon_support and healing are ALLY-FACING (see `realized_axes`):
+        // this Reaper buffs and heals only itself, so both are zero where
+        // they used to count its own Might and its own heal. The intent
+        // score moves with them.
         const PINNED: [f64; 7] = [
             0.026692371089119985,
             0.0,
-            0.014171428571428571,
-            0.15,
+            0.0,
+            0.0,
             0.4302897574123989,
             0.05722222222222222,
-            0.09311752151262398,
+            0.0799838072269097,
         ];
         for (i, (g, p)) in got.iter().zip(&PINNED).enumerate() {
             assert!(
@@ -4168,7 +4713,7 @@ coverage: {:?}",
         assert!(gate_by_kind(&report.gates, &ViabilityGate::ControlCoverage).is_none());
     }
 
-    /// 7. search_rank stays [i64;9]; ControlCoverage contributes at most +1 to key1 on WvW.
+    /// 7. search_rank is [i64;10]; ControlCoverage contributes at most +1 to key2 on WvW.
     #[test]
     fn ada_kent_07_search_rank_key1_plus_one_on_control_pass() {
         let combat = make_viable_combat();
@@ -4205,18 +4750,22 @@ coverage: {:?}",
             viability: pass.clone(),
             user_intent_score: 0.0,
             raw_direction_score: 0.0,
+            ranked_direction_score: 0.0,
+            intent_similarity: None,
+            intent_alignment: None,
             realized: Default::default(),
             stat_direction_score: 0.0,
             quality: DataQuality::Verified,
             quality_reasons: Vec::new(),
         });
-        assert_eq!(rank_pass.len(), 9);
+        // Key 1 is intent alignment; the passed-gate count is key 2.
+        assert_eq!(rank_pass.len(), 10);
         let passed_gates = pass.gates.iter().filter(|g| g.passed).count() as i64;
-        assert_eq!(rank_pass[1], passed_gates, "key1 is passed-gate count");
+        assert_eq!(rank_pass[2], passed_gates, "key2 is passed-gate count");
         assert!(
             gate_by_kind(&pass.gates, &ViabilityGate::ControlCoverage).is_some()
                 && gate_by_kind(&fail.gates, &ViabilityGate::ControlCoverage).is_some(),
-            "ControlCoverage present on WvW; key1 max +1 vs pre-split"
+            "ControlCoverage present on WvW; key2 max +1 vs pre-split"
         );
     }
 

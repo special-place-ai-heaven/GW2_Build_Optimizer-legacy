@@ -413,12 +413,6 @@ pub enum RejectCode {
         weapon: String,
         profession: String,
     },
-    /// Weapon requires an elite spec that is not equipped.
-    WeaponGatedBySpec {
-        slot: String,
-        weapon: String,
-        required_spec: String,
-    },
     /// Rune/sigil/relic name not in game data (all fuzzy passes failed).
     ItemNotFound { item_type: String, name: String },
     /// Gear prefix (stat name) not in itemstats.
@@ -774,10 +768,10 @@ fn validate_weapons(
 
     // response.weapons is Vec<String> like ["Set 1: Axe / Axe", "Set 2: Greatsword"],
     // or empty when using the newer field layout.
-    let (set1, set2) = parse_weapon_sets_from_response(response);
+    let (set1, set2) = parse_weapon_sets_from_response(response, profession_name);
 
-    result.weapons.set1 = validate_weapon_set(&set1, prof, db, result, "Set 1");
-    result.weapons.set2 = validate_weapon_set(&set2, prof, db, result, "Set 2");
+    result.weapons.set1 = validate_weapon_set(&set1, prof, result, "Set 1");
+    result.weapons.set2 = validate_weapon_set(&set2, prof, result, "Set 2");
     // A single land set pastes as one kit. The game stores unique types, so
     // Sword+Axe alone cannot become Sword/Axe + anything. Fill a legal second
     // set when the plate omitted it (Choya often writes Set 1 only).
@@ -912,24 +906,9 @@ fn wiki_hand_allowed(
     true
 }
 
-fn push_weapon_gated(result: &mut ValidatedBuild, label: &str, weapon: &str, required_spec: &str) {
-    result.errors.push(ValidationReject {
-        code: RejectCode::WeaponGatedBySpec {
-            slot: label.to_string(),
-            weapon: weapon.to_string(),
-            required_spec: required_spec.to_string(),
-        },
-        detail: format!(
-            "{}: '{}' requires {} (not equipped) — weapon cannot be used",
-            label, weapon, required_spec
-        ),
-    });
-}
-
 fn validate_weapon_set(
     weapons: &(Option<String>, Option<String>),
     prof: Option<&gw2_api::models::Profession>,
-    db: &GameDb,
     result: &mut ValidatedBuild,
     label: &str,
 ) -> ValidatedWeaponSet {
@@ -993,80 +972,8 @@ fn validate_weapon_set(
         }
     }
 
-    let equipped_elite = result
-        .specializations
-        .iter()
-        .find(|s| s.elite)
-        .map(|s| s.name.clone());
-    let elite_spec_ids: Vec<u32> = result
-        .specializations
-        .iter()
-        .filter(|s| s.elite)
-        .map(|s| s.spec_id)
-        .collect();
-
-    // Per-hand strip: dual Sword must not drop a legal main when only OH is gated.
-    let mut strip_mh = false;
-    let mut strip_oh = false;
-
-    if let Some(ref weapon_name) = set.main_hand {
-        let hand = wiki_main_hand(prof, weapon_name);
-        if weapon_hands::known_weapon(&prof.name, weapon_name) {
-            if let WeaponAccess::Elite(req) = weapon_hands::access(&prof.name, weapon_name, hand) {
-                if !weapon_hands::is_legal(&prof.name, weapon_name, hand, equipped_elite.as_deref())
-                {
-                    push_weapon_gated(result, label, weapon_name, &req);
-                    strip_mh = true;
-                }
-            }
-        } else if let Some(info) = prof.weapons.get(weapon_name.as_str()) {
-            if let Some(required_spec) = info.specialization {
-                if !elite_spec_ids.contains(&required_spec) {
-                    let spec_name = db
-                        .spec(required_spec)
-                        .map(|s| s.name.as_str())
-                        .unwrap_or("unknown");
-                    push_weapon_gated(result, label, weapon_name, spec_name);
-                    strip_mh = true;
-                }
-            }
-        }
-    }
-    if let Some(ref weapon_name) = set.off_hand {
-        if weapon_hands::known_weapon(&prof.name, weapon_name) {
-            if let WeaponAccess::Elite(req) =
-                weapon_hands::access(&prof.name, weapon_name, Hand::Off)
-            {
-                if !weapon_hands::is_legal(
-                    &prof.name,
-                    weapon_name,
-                    Hand::Off,
-                    equipped_elite.as_deref(),
-                ) {
-                    push_weapon_gated(result, label, weapon_name, &req);
-                    strip_oh = true;
-                }
-            }
-        } else if let Some(info) = prof.weapons.get(weapon_name.as_str()) {
-            if let Some(required_spec) = info.specialization {
-                if !elite_spec_ids.contains(&required_spec) {
-                    let spec_name = db
-                        .spec(required_spec)
-                        .map(|s| s.name.as_str())
-                        .unwrap_or("unknown");
-                    push_weapon_gated(result, label, weapon_name, spec_name);
-                    strip_oh = true;
-                }
-            }
-        }
-    }
-    if strip_mh {
-        set.main_hand = None;
-    }
-    if strip_oh {
-        set.off_hand = None;
-    }
-
+    // No elite-spec gate: Weaponmaster Training makes every elite weapon
+    // usable by every build of the profession (see `weapon_hands::is_legal`).
     set
 }
 
@@ -1816,9 +1723,86 @@ fn find_weapon<'a>(
 /// A single weapon set as (main-hand, off-hand) names.
 type WeaponSlots = (Option<String>, Option<String>);
 
+/// Pack a flat list of weapon types into two sets, by hand.
+///
+/// A plate built from published gear ids carries one bare weapon type per
+/// equipped weapon — `["Scepter", "Warhorn"]` is *one* set, not two main
+/// hands. Slotting each name into its own set put off-hand-only weapons in a
+/// main hand, where the wiki table correctly says they cannot go, and threw
+/// out legal published builds.
+///
+/// Hands come from the wiki table for this profession, so Ranger Dagger
+/// (main-hand capable) and Elementalist Focus (off-hand only) land in
+/// different slots. Weapons the table does not know fall back to the
+/// two-handed type list and otherwise to a main hand.
+fn pack_weapon_stream(names: &[String], profession: &str) -> (WeaponSlots, WeaponSlots) {
+    let mut sets: [WeaponSlots; 2] = [(None, None), (None, None)];
+    // A two-hander fills a set even though only the main slot holds a name.
+    let mut filled = [false, false];
+    let mut idx = 0usize;
+
+    for name in names {
+        let known = weapon_hands::known_weapon(profession, name);
+        let two_hand = if known {
+            !matches!(
+                weapon_hands::access(profession, name, Hand::TwoHand),
+                WeaponAccess::None
+            )
+        } else {
+            crate::weapon_budget::is_two_handed(name, None)
+        };
+        let off_only = !two_hand
+            && known
+            && matches!(
+                weapon_hands::access(profession, name, Hand::Main),
+                WeaponAccess::None
+            );
+
+        while idx < sets.len() {
+            let full = filled[idx];
+            let (main, off) = &mut sets[idx];
+            if two_hand {
+                if main.is_none() && off.is_none() {
+                    *main = Some(name.clone());
+                    filled[idx] = true;
+                    idx += 1;
+                    break;
+                }
+            } else if !full {
+                if !off_only && main.is_none() {
+                    *main = Some(name.clone());
+                    break;
+                }
+                if off.is_none() {
+                    *off = Some(name.clone());
+                    break;
+                }
+            }
+            idx += 1;
+        }
+    }
+
+    let [set1, set2] = sets;
+    (set1, set2)
+}
+
 /// Parse weapon sets from GeminiBuildResponse.
 /// Handles both old format ("Set 1: Axe / Axe") and the raw fields.
-fn parse_weapon_sets_from_response(response: &GeminiBuildResponse) -> (WeaponSlots, WeaponSlots) {
+fn parse_weapon_sets_from_response(
+    response: &GeminiBuildResponse,
+    profession: &str,
+) -> (WeaponSlots, WeaponSlots) {
+    // No labels and no "/" anywhere: a flat weapon-type stream, not one set
+    // per entry.
+    if !response.weapons.is_empty()
+        && response
+            .weapons
+            .iter()
+            .all(|w| !w.contains(':') && !w.contains('/'))
+    {
+        return pack_weapon_stream(&response.weapons, profession);
+    }
+
     let mut set1 = (None, None);
     let mut set2 = (None, None);
 
@@ -2252,7 +2236,7 @@ mod tests {
     fn test_parse_weapon_sets_from_response() {
         let mut response = GeminiBuildResponse::default();
         response.weapons = vec!["Set 1: Axe / Axe".into(), "Set 2: Greatsword".into()];
-        let (set1, set2) = parse_weapon_sets_from_response(&response);
+        let (set1, set2) = parse_weapon_sets_from_response(&response, "Warrior");
         assert_eq!(set1.0.as_deref(), Some("Axe"));
         assert_eq!(set1.1.as_deref(), Some("Axe"));
         assert_eq!(set2.0.as_deref(), Some("Greatsword"));
@@ -3195,6 +3179,37 @@ mod tests {
         assert_eq!(found.map(|i| i.id), Some(10));
     }
 
+    /// The PvP item table ships its own copy of every rune and sigil, filed by
+    /// `GameDb` since the `details.type = "Default"` fix. The two names differ
+    /// ("Sigil of Force" vs "Superior Sigil of Force"), so each resolves to its
+    /// own item — and `GameDb::load` appends the PvP ids after the sort, so the
+    /// PvE item is always the earlier element and wins every fuzzy pass.
+    #[test]
+    fn pvp_and_pve_upgrade_copies_resolve_to_their_own_item() {
+        let pve = upgrade_item(10, "Superior Sigil of Force");
+        let pvp = upgrade_item(21123, "Sigil of Force");
+        // `all_sigils()` order: PvE first, PvP appended.
+        let items = vec![&pve, &pvp];
+
+        for (needle, want) in [("Superior Sigil of Force", 10), ("Sigil of Force", 21123)] {
+            let mut result = ValidatedBuild::default();
+            let found = find_item_by_name(needle, &items, "Sigil", &mut result);
+            assert_eq!(found.map(|i| i.id), Some(want), "{needle}");
+            assert!(result.errors.is_empty(), "{needle}: {:?}", result.errors);
+        }
+
+        // A partial needle misses both exact names and reaches the "item name
+        // contains the needle" pass, which both copies satisfy. List order is
+        // what decides there, so the PvE copy wins.
+        let mut result = ValidatedBuild::default();
+        let found = find_item_by_name("of Force", &items, "Sigil", &mut result);
+        assert_eq!(
+            found.map(|i| i.id),
+            Some(10),
+            "fuzzy must prefer the PvE copy"
+        );
+    }
+
     #[test]
     fn aquatic_only_skill_rejected_on_land() {
         let mut aquatic = make_skill(30, "Tidal Surge");
@@ -3251,30 +3266,17 @@ mod tests {
         }
     }
 
+    /// An elite spec's weapon needs no elite spec: Weaponmaster Training
+    /// hands it to the whole profession. Lowercase input still resolves to
+    /// the canonical name, which is what later `prof.weapons` lookups need.
     #[test]
-    fn test_validate_weapon_set_lowercase_input_still_triggers_elite_gate() {
-        // Regression: find_weapon used to be case-insensitive but stored the
-        // LLM's input casing. Then prof.weapons.get(weapon_name) was case-
-        // sensitive and missed, silently bypassing the elite-spec weapon gate.
+    fn elite_spec_weapon_is_kept_without_that_spec() {
         let prof = make_prof_with_elite_axe();
         let weapons = (Some("axe".to_string()), None);
-        let db = empty_db_with_itemstats(vec![]);
         let mut result = ValidatedBuild::default();
-        let set = validate_weapon_set(&weapons, Some(&prof), &db, &mut result, "Set 1");
-        // Weapon must be removed because no elite spec is equipped
-        assert!(
-            set.main_hand.is_none(),
-            "gated axe should be removed; got {:?}",
-            set.main_hand
-        );
-        assert!(
-            result.errors.iter().any(|e| matches!(
-                &e.code,
-                RejectCode::WeaponGatedBySpec { weapon, .. } if weapon.eq_ignore_ascii_case("Axe")
-            )),
-            "expected WeaponGatedBySpec error; got {:?}",
-            result.errors
-        );
+        let set = validate_weapon_set(&weapons, Some(&prof), &mut result, "Set 1");
+        assert_eq!(set.main_hand.as_deref(), Some("Axe"));
+        assert!(result.errors.is_empty(), "got {:?}", result.errors);
     }
 
     #[test]
@@ -3307,12 +3309,10 @@ mod tests {
             Some("Shortbow")
         );
 
-        let db = empty_db_with_itemstats(vec![]);
         let mut result = ValidatedBuild::default();
         let set = validate_weapon_set(
             &(Some("Short Bow".into()), None),
             Some(&prof),
-            &db,
             &mut result,
             "Set 2",
         );
@@ -3382,12 +3382,10 @@ mod tests {
             icon: None,
             icon_big: None,
         };
-        let db = empty_db_with_itemstats(vec![]);
         let mut result = ValidatedBuild::default();
         let set = validate_weapon_set(
             &(Some("Trident".into()), None),
             Some(&prof),
-            &db,
             &mut result,
             "Set 2",
         );
@@ -3406,13 +3404,8 @@ mod tests {
         );
 
         let mut ok = ValidatedBuild::default();
-        let staff = validate_weapon_set(
-            &(Some("Staff".into()), None),
-            Some(&prof),
-            &db,
-            &mut ok,
-            "Set 2",
-        );
+        let staff =
+            validate_weapon_set(&(Some("Staff".into()), None), Some(&prof), &mut ok, "Set 2");
         assert_eq!(staff.main_hand.as_deref(), Some("Staff"));
         assert!(ok.errors.is_empty());
     }
@@ -3439,12 +3432,10 @@ mod tests {
             icon: None,
             icon_big: None,
         };
-        let db = empty_db_with_itemstats(vec![]);
         let mut result = ValidatedBuild::default();
         let set = validate_weapon_set(
             &(Some("Spear".into()), None),
             Some(&prof),
-            &db,
             &mut result,
             "Set 1",
         );
@@ -3496,47 +3487,32 @@ mod tests {
         }
     }
 
+    /// Guardian off-hand Sword is Willbender's, and Weaponmaster Training
+    /// lets a Firebrand hold it.
     #[test]
-    fn firebrand_dual_swords_strips_offhand() {
-        // API lie: Sword spec=None for both hands. Wiki: OH is Willbender.
+    fn firebrand_dual_swords_ok() {
         let prof = prof_with_weapons("Guardian", &[("Sword", None)]);
-        let db = empty_db_with_itemstats(vec![]);
         let mut result = ValidatedBuild::default();
         result.specializations = vec![elite_spec(62, "Firebrand")];
         let set = validate_weapon_set(
             &(Some("Sword".into()), Some("Sword".into())),
             Some(&prof),
-            &db,
             &mut result,
             "Set 1",
         );
         assert_eq!(set.main_hand.as_deref(), Some("Sword"));
-        assert!(
-            set.off_hand.is_none(),
-            "Firebrand off-hand sword must be stripped; got {:?}",
-            set.off_hand
-        );
-        assert!(
-            result.errors.iter().any(|e| matches!(
-                &e.code,
-                RejectCode::WeaponGatedBySpec { weapon, required_spec, .. }
-                    if weapon == "Sword" && required_spec == "Willbender"
-            )),
-            "expected WeaponGatedBySpec Willbender; got {:?}",
-            result.errors
-        );
+        assert_eq!(set.off_hand.as_deref(), Some("Sword"));
+        assert!(result.errors.is_empty(), "got {:?}", result.errors);
     }
 
     #[test]
     fn herald_dual_swords_ok() {
         let prof = prof_with_weapons("Revenant", &[("Sword", None)]);
-        let db = empty_db_with_itemstats(vec![]);
         let mut result = ValidatedBuild::default();
         result.specializations = vec![elite_spec(52, "Herald")];
         let set = validate_weapon_set(
             &(Some("Sword".into()), Some("Sword".into())),
             Some(&prof),
-            &db,
             &mut result,
             "Set 1",
         );
@@ -3549,45 +3525,30 @@ mod tests {
         );
     }
 
+    /// API lie: whole Dagger spec=55. Wiki: MH=Soulbeast, OH=core. Both
+    /// hands are legal for any Ranger under Weaponmaster Training.
     #[test]
-    fn ranger_dagger_dagger_without_soulbeast_keeps_offhand() {
-        // API lie: whole Dagger spec=55. Wiki: MH=Soulbeast, OH=core.
+    fn ranger_dagger_dagger_without_soulbeast_keeps_both_hands() {
         let prof = prof_with_weapons("Ranger", &[("Dagger", Some(55))]);
-        let db = empty_db_with_itemstats(vec![]);
         let mut result = ValidatedBuild::default();
         let set = validate_weapon_set(
             &(Some("Dagger".into()), Some("Dagger".into())),
             Some(&prof),
-            &db,
             &mut result,
             "Set 1",
         );
-        assert!(
-            set.main_hand.is_none(),
-            "main-hand dagger needs Soulbeast; got {:?}",
-            set.main_hand
-        );
+        assert_eq!(set.main_hand.as_deref(), Some("Dagger"));
         assert_eq!(set.off_hand.as_deref(), Some("Dagger"));
-        assert!(
-            result.errors.iter().any(|e| matches!(
-                &e.code,
-                RejectCode::WeaponGatedBySpec { weapon, required_spec, .. }
-                    if weapon == "Dagger" && required_spec == "Soulbeast"
-            )),
-            "expected WeaponGatedBySpec Soulbeast; got {:?}",
-            result.errors
-        );
+        assert!(result.errors.is_empty(), "got {:?}", result.errors);
     }
 
     #[test]
     fn ranger_sword_offhand_not_available() {
         let prof = prof_with_weapons("Ranger", &[("Sword", None)]);
-        let db = empty_db_with_itemstats(vec![]);
         let mut result = ValidatedBuild::default();
         let set = validate_weapon_set(
             &(Some("Sword".into()), Some("Sword".into())),
             Some(&prof),
-            &db,
             &mut result,
             "Set 1",
         );
@@ -3603,6 +3564,126 @@ mod tests {
                 RejectCode::WeaponNotAvailable { weapon, .. } if weapon == "Sword"
             )),
             "expected WeaponNotAvailable for Ranger sword OH; got {:?}",
+            result.errors
+        );
+    }
+
+    /// A plate built from published gear ids has no "Set 1:" labels and no
+    /// "/" — it is one bare weapon type per equipped weapon. Slotting each
+    /// into its own set put Warhorn in a main hand and threw the build out.
+    #[test]
+    fn flat_weapon_list_is_one_set_not_two_main_hands() {
+        let response = GeminiBuildResponse {
+            weapons: vec!["Scepter".into(), "Warhorn".into()],
+            ..Default::default()
+        };
+        let (set1, set2) = parse_weapon_sets_from_response(&response, "Elementalist");
+        assert_eq!(set1.0.as_deref(), Some("Scepter"));
+        assert_eq!(set1.1.as_deref(), Some("Warhorn"));
+        assert_eq!(set2, (None, None));
+    }
+
+    /// Four weapons are two sets, and the hands come from the wiki table:
+    /// Focus is off-hand only, a second Sword is not.
+    #[test]
+    fn flat_weapon_list_fills_two_sets_by_hand() {
+        let response = GeminiBuildResponse {
+            weapons: vec![
+                "Sword".into(),
+                "Focus".into(),
+                "Sword".into(),
+                "Dagger".into(),
+            ],
+            ..Default::default()
+        };
+        let (set1, set2) = parse_weapon_sets_from_response(&response, "Elementalist");
+        assert_eq!(
+            (set1.0.as_deref(), set1.1.as_deref()),
+            (Some("Sword"), Some("Focus"))
+        );
+        assert_eq!(
+            (set2.0.as_deref(), set2.1.as_deref()),
+            (Some("Sword"), Some("Dagger"))
+        );
+    }
+
+    /// A two-hander fills a set on its own.
+    #[test]
+    fn flat_weapon_list_gives_each_two_hander_its_own_set() {
+        let response = GeminiBuildResponse {
+            weapons: vec!["Hammer".into(), "Hammer".into()],
+            ..Default::default()
+        };
+        let (set1, set2) = parse_weapon_sets_from_response(&response, "Elementalist");
+        assert_eq!((set1.0.as_deref(), set1.1), (Some("Hammer"), None));
+        assert_eq!((set2.0.as_deref(), set2.1), (Some("Hammer"), None));
+    }
+
+    /// Labelled plates keep the old reading.
+    #[test]
+    fn labelled_weapon_lines_still_parse_as_written() {
+        let response = GeminiBuildResponse {
+            weapons: vec!["Set 1: Axe / Axe".into(), "Set 2: Greatsword".into()],
+            ..Default::default()
+        };
+        let (set1, set2) = parse_weapon_sets_from_response(&response, "Warrior");
+        assert_eq!(set1.0.as_deref(), Some("Axe"));
+        assert_eq!(set1.1.as_deref(), Some("Axe"));
+        assert_eq!(set2.0.as_deref(), Some("Greatsword"));
+        assert_eq!(set2.1, None);
+    }
+
+    /// Warhorn is Tempest's, and it is legal in an Elementalist off-hand.
+    #[test]
+    fn tempest_warhorn_validates() {
+        let prof = prof_with_weapons("Elementalist", &[("Dagger", None), ("Warhorn", Some(48))]);
+        let mut result = ValidatedBuild::default();
+        result.specializations = vec![elite_spec(48, "Tempest")];
+        let set = validate_weapon_set(
+            &(Some("Dagger".into()), Some("Warhorn".into())),
+            Some(&prof),
+            &mut result,
+            "Set 1",
+        );
+        assert_eq!(set.main_hand.as_deref(), Some("Dagger"));
+        assert_eq!(set.off_hand.as_deref(), Some("Warhorn"));
+        assert!(result.errors.is_empty(), "got {:?}", result.errors);
+    }
+
+    /// Warrior Warhorn is core, with no elite spec equipped at all.
+    #[test]
+    fn warrior_warhorn_validates() {
+        let prof = prof_with_weapons("Warrior", &[("Axe", None), ("Warhorn", None)]);
+        let mut result = ValidatedBuild::default();
+        let set = validate_weapon_set(
+            &(Some("Axe".into()), Some("Warhorn".into())),
+            Some(&prof),
+            &mut result,
+            "Set 1",
+        );
+        assert_eq!(set.main_hand.as_deref(), Some("Axe"));
+        assert_eq!(set.off_hand.as_deref(), Some("Warhorn"));
+        assert!(result.errors.is_empty(), "got {:?}", result.errors);
+    }
+
+    /// No Elementalist spec trains Greatsword, so no unlock reaches it.
+    #[test]
+    fn elementalist_greatsword_is_rejected() {
+        let prof = prof_with_weapons("Elementalist", &[("Greatsword", None)]);
+        let mut result = ValidatedBuild::default();
+        let set = validate_weapon_set(
+            &(Some("Greatsword".into()), None),
+            Some(&prof),
+            &mut result,
+            "Set 1",
+        );
+        assert!(set.main_hand.is_none(), "got {:?}", set.main_hand);
+        assert!(
+            result.errors.iter().any(|e| matches!(
+                &e.code,
+                RejectCode::WeaponNotAvailable { weapon, .. } if weapon == "Greatsword"
+            )),
+            "expected WeaponNotAvailable; got {:?}",
             result.errors
         );
     }

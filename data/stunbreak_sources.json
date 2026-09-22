@@ -1,0 +1,30 @@
+{
+  "_comment": "Skills that break stun in game but carry neither the API StunBreak fact nor 'break stun' wording in their description. Catalogued 2026-09-22 against https://wiki.guildwars2.com/wiki/Stun_break (the wiki's curated related-skills list, cross-checked id by id against the live skill cache). Each entry's `source` cites the wiki evidence read for that id.",
+  "schema": 1,
+  "sources": [
+    {
+      "id": 77291,
+      "name": "Gladiator's Defense",
+      "profession": "Revenant",
+      "source": "wiki.guildwars2.com/wiki/Stun_break lists it under 'Utility skills that break stun' (Legendary Entity Stance). API description: 'Break out of stun, damaging and weakening enemies close to you.' The API carries this as a NoData fact with text 'Breaks Stun' rather than a typed StunBreak fact, and the description says 'Break out of stun' (not 'breaks stun'), so neither existing detector fires."
+    },
+    {
+      "id": 5572,
+      "name": "Signet of Air",
+      "profession": "Elementalist",
+      "source": "wiki.guildwars2.com/wiki/Signet_of_Air infobox facts carry {{skill fact|breaks stun}} (version history 2019-07-16: 'This skill can now be activated to break stuns without a target'). The live API skill 5572 has no StunBreak fact and its description covers only the passive movement speed and the active blind, so neither existing detector fires. Found by scanning all 187 equipped skills in the WvW reference corpus that carry no stunbreak signal against the wiki; Signet of Air and Gladiator's Defense were the only two hits."
+    },
+    {
+      "id": 5970,
+      "name": "Toss Elixir U",
+      "profession": "Engineer",
+      "source": "wiki.guildwars2.com/wiki/Stun_break lists it under both 'Profession mechanic skills that break stun' and '...on allies' (Elixir U tool belt, ground-targeted variant). API description: 'Elixir. Toss Elixir U, breaking stuns on allies and granting them superspeed.' No StunBreak fact; the description uses 'breaking stuns' (present participle), which the text heuristic's fixed needles ('break stun'/'breaks stun'/'stun break'/'stunbreak') do not match."
+    },
+    {
+      "id": 6089,
+      "name": "Toss Elixir U",
+      "profession": "Engineer",
+      "source": "Same skill as id 5970 (Elixir U tool belt); this id is the competitive-mode split, whose shorter description ('Toss Elixir U out in front of you.') drops the stun-break wording entirely. No StunBreak fact either."
+    }
+  ]
+}

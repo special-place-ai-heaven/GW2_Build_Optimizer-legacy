@@ -45,6 +45,11 @@ pub struct SearchConfig {
     /// Wall-clock time limit (seconds).  The search aborts cleanly when this
     /// elapses so the caller always gets a result inside `time_limit_secs + ε`.
     pub time_limit_secs: u64,
+    /// Where the synced community references live, if they have been synced.
+    ///
+    /// `None` keeps the search exactly as it was: seeded from the synergy
+    /// pipeline alone. See [`meta_seeds`].
+    pub benchmarks_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for SearchConfig {
@@ -64,6 +69,7 @@ impl Default for SearchConfig {
             eval_budget: 200_000,
             patience: 3,
             time_limit_secs: 45,
+            benchmarks_dir: None,
         }
     }
 }
@@ -253,7 +259,7 @@ pub(crate) fn refine_piece_swaps_within(
         // Recomputed each round: an improving move changes what the slots hold,
         // and a lock or an empty hand is a property of the build, not the pass.
         let movable = movable_slot_prefixes(&current, &locks.gear_locks);
-        let mut best_move: Option<(ValidatedBuild, [i64; 9])> = None;
+        let mut best_move: Option<(ValidatedBuild, [i64; 10])> = None;
         let mut spent = false;
         'slots: for (slot, current_prefix) in &movable {
             for itemstat in itemstats.iter() {
@@ -630,6 +636,118 @@ fn shortfall_key(report: &RefereeReport) -> i64 {
     (report.viability.shortfall * 1_000_000.0).round() as i64
 }
 
+/// How many published references may seed the beam.
+///
+/// Each costs one plate, one validation and one referee evaluation, and the
+/// beam then has to spend neighbour budget on all of them.
+const MAX_META_SEEDS: usize = 5;
+
+/// Whether a published build satisfies every lock the player set.
+///
+/// Rejected, not repaired: the synergy seed gets its locked prefixes pinned
+/// because it is OURS to fix, but a reference is somebody else's build and
+/// pinning a Minstrel helm onto a Berserker page produces a kit neither the
+/// page nor the player asked for.
+fn seed_honors_locks(validated: &ValidatedBuild, locks: &gw2_core::types::BuildLocks) -> bool {
+    for (slot, locked) in locks.specs.iter().enumerate() {
+        let Some(required) = locked else { continue };
+        if validated.specializations.get(slot).map(|s| s.spec_id) != Some(*required) {
+            return false;
+        }
+    }
+    for (spec_id, columns) in &locks.trait_locks {
+        let Some(spec) = validated
+            .specializations
+            .iter()
+            .find(|s| s.spec_id == *spec_id)
+        else {
+            // The lock names a spec this build does not run.
+            if columns.iter().any(|c| c.is_some()) {
+                return false;
+            }
+            continue;
+        };
+        for required in columns.iter().flatten() {
+            if !spec.trait_ids.contains(required) {
+                return false;
+            }
+        }
+    }
+    for (slot, required) in &locks.gear_locks {
+        if validated.gear_slots.prefix_id(*slot) != Some(*required) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Published references, measured under the player's own scenario, as extra
+/// starting points for the beam.
+///
+/// A meta build is the most successful combination of synergies anyone has
+/// found for a job; starting the search from proven combinations as well as
+/// from our own seed costs at most [`MAX_META_SEEDS`] referee evaluations and
+/// gives the beam somewhere to mutate from that it would take many
+/// generations to reach on its own.
+///
+/// Filtered by `intent_alignment`, not by the role words on the page: a
+/// reference only seeds a run whose objective profile it actually delivers
+/// for. Nothing here decides anything - the beam mutates from these, and the
+/// referee and the baseline gate stay the judge.
+#[allow(clippy::too_many_arguments)]
+fn meta_seeds(
+    db: &GameDb,
+    profession_name: &str,
+    weights: &OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &ScenarioSpec,
+    locks: &gw2_core::types::BuildLocks,
+    benchmarks_dir: &std::path::Path,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Vec<(String, BeamCandidate)> {
+    let builds = crate::scraper::load_benchmarks(benchmarks_dir);
+    if builds.is_empty() {
+        return Vec::new();
+    }
+    let mode = scenario.game_mode.label();
+    let mut scored: Vec<(String, BeamCandidate)> = Vec::new();
+    for reference in crate::picks::candidates(&builds, profession_name, mode) {
+        if is_cancelled() {
+            return Vec::new();
+        }
+        let Some(plate) = crate::benchmark::plate_from(reference, db) else {
+            continue;
+        };
+        let validated = crate::validation::validate_gemini_build(&plate, db, profession_name);
+        if !validated.errors.is_empty() || !seed_honors_locks(&validated, locks) {
+            continue;
+        }
+        let report = referee::evaluate_validated_build_ranked(
+            &validated,
+            db,
+            profession_name,
+            weights,
+            ctx,
+            scenario,
+        );
+        if report
+            .intent_alignment
+            .is_none_or(|a| a < scoring::INTENT_ALIGNMENT_FLOOR)
+        {
+            continue;
+        }
+        scored.push((
+            format!("{} {}", reference.source, reference.role),
+            BeamCandidate { validated, report },
+        ));
+    }
+    // Descending: the beam spends its neighbour budget on the strongest
+    // proven combination first.
+    scored.sort_by_key(|(_, candidate)| std::cmp::Reverse(referee::search_rank(&candidate.report)));
+    scored.truncate(MAX_META_SEEDS);
+    scored
+}
+
 // Beam search entry point
 
 /// Run the beam/evolutionary search over complete build states.
@@ -777,6 +895,31 @@ pub fn optimize_v2_search(
         });
         beam.push(repaired);
     }
+    // Proven combinations, alongside our own seed. Appended AFTER the repair
+    // block so `beam[0]` stays the synergy seed: `seed_rank` below is the
+    // "did the search improve on what we started with" baseline, and a meta
+    // reference is not what we started with.
+    if let Some(dir) = config.benchmarks_dir.as_deref() {
+        let seeds = meta_seeds(
+            db,
+            profession_name,
+            weights,
+            ctx,
+            scenario,
+            locks,
+            dir,
+            is_cancelled,
+        );
+        if !seeds.is_empty() {
+            let named: Vec<&str> = seeds.iter().map(|(name, _)| name.as_str()).collect();
+            on_progress(OptimizeProgress {
+                stage: format!("search_v2 meta seeds: {}", named.join(", ")),
+                done: false,
+            });
+            beam.extend(seeds.into_iter().map(|(_, candidate)| candidate));
+        }
+    }
+
     let seed_rank = referee::search_rank(&beam[0].report);
     let mut last_best = seed_rank;
     let mut stale_gens = 0u32;
@@ -787,7 +930,7 @@ pub fn optimize_v2_search(
     let mut cycle_len = 1u32;
     let mut fn_generated = 0usize;
     let mut fn_admitted = 0usize;
-    let mut fn_distinct: std::collections::HashSet<[i64; 9]> = std::collections::HashSet::new();
+    let mut fn_distinct: std::collections::HashSet<[i64; 10]> = std::collections::HashSet::new();
     let mut fn_beat = 0usize;
     let mut fn_tied = 0usize;
     let mut fn_worse = 0usize;
@@ -1792,13 +1935,6 @@ fn retarget_after_elite_swap(
     weights: &OptimizationWeights,
 ) {
     let equipped: Vec<u32> = build.specializations.iter().map(|s| s.spec_id).collect();
-    let elite_ids: Vec<u32> = build
-        .specializations
-        .iter()
-        .filter(|s| s.elite)
-        .map(|s| s.spec_id)
-        .collect();
-
     if let Some((id, _)) = &build.skills.heal {
         if skill_gated_out(*id, db, &equipped) {
             build.skills.heal = None;
@@ -1821,12 +1957,8 @@ fn retarget_after_elite_swap(
     } else {
         refill_bar(build, db, &profession.name, weights);
     }
-    build.skills.profession =
-        crate::rotation::builder::profession_skills_for_build(db, &profession.name, &equipped);
-
-    let elite = equipped_elite_name(db, &elite_ids);
-    let combos = land_weapon_combos(profession, elite);
-    if !weapon_set_ok(&build.weapons.set1, profession, elite) {
+    let combos = land_weapon_combos(profession);
+    if !weapon_set_ok(&build.weapons.set1, profession) {
         build.weapons.set1 = combos
             .first()
             .map(|(mh, oh)| ValidatedWeaponSet {
@@ -1835,7 +1967,7 @@ fn retarget_after_elite_swap(
             })
             .unwrap_or_default();
     }
-    if !weapon_set_ok(&build.weapons.set2, profession, elite) {
+    if !weapon_set_ok(&build.weapons.set2, profession) {
         build.weapons.set2 = combos
             .get(1)
             .or(combos.first())
@@ -1845,6 +1977,14 @@ fn retarget_after_elite_swap(
             })
             .unwrap_or_default();
     }
+    // After the weapon fix-up: the profession bar is weapon-dependent, so it
+    // must be resolved against the sets this build ends up holding.
+    build.skills.profession = crate::rotation::builder::profession_skills_for_build(
+        db,
+        &profession.name,
+        &equipped,
+        &build.weapons,
+    );
 }
 
 /// After an elite swap: drop legends that fail `legend_available`, keep
@@ -1953,15 +2093,6 @@ fn refill_bar(
     }
 }
 
-fn equipped_elite_name<'a>(db: &'a GameDb, elite_ids: &[u32]) -> Option<&'a str> {
-    elite_ids.iter().find_map(|&id| {
-        db.specializations
-            .get(&id)
-            .filter(|s| s.elite)
-            .map(|s| s.name.as_str())
-    })
-}
-
 fn weapon_land_ok(profession: &Profession, name: &str) -> bool {
     profession
         .weapons
@@ -1969,35 +2100,25 @@ fn weapon_land_ok(profession: &Profession, name: &str) -> bool {
         .is_some_and(|info| info.land_usable(name))
 }
 
-fn weapon_set_ok(
-    set: &ValidatedWeaponSet,
-    profession: &Profession,
-    equipped_elite: Option<&str>,
-) -> bool {
+fn weapon_set_ok(set: &ValidatedWeaponSet, profession: &Profession) -> bool {
     let prof = profession.id.as_str();
     match (&set.main_hand, &set.off_hand) {
         (None, None) => true,
         (Some(mh), None) => {
             weapon_land_ok(profession, mh)
-                && (is_legal(prof, mh, Hand::TwoHand, equipped_elite)
-                    || is_legal(prof, mh, Hand::Main, equipped_elite))
+                && (is_legal(prof, mh, Hand::TwoHand) || is_legal(prof, mh, Hand::Main))
         }
         (Some(mh), Some(oh)) => {
             weapon_land_ok(profession, mh)
                 && weapon_land_ok(profession, oh)
-                && is_legal(prof, mh, Hand::Main, equipped_elite)
-                && is_legal(prof, oh, Hand::Off, equipped_elite)
+                && is_legal(prof, mh, Hand::Main)
+                && is_legal(prof, oh, Hand::Off)
         }
-        (None, Some(oh)) => {
-            weapon_land_ok(profession, oh) && is_legal(prof, oh, Hand::Off, equipped_elite)
-        }
+        (None, Some(oh)) => weapon_land_ok(profession, oh) && is_legal(prof, oh, Hand::Off),
     }
 }
 
-fn land_weapon_combos(
-    profession: &Profession,
-    equipped_elite: Option<&str>,
-) -> Vec<(Option<String>, Option<String>)> {
+fn land_weapon_combos(profession: &Profession) -> Vec<(Option<String>, Option<String>)> {
     let prof = profession.id.as_str();
     let mut two_hand = Vec::new();
     let mut main = Vec::new();
@@ -2006,13 +2127,13 @@ fn land_weapon_combos(
         if !info.land_usable(name) {
             continue;
         }
-        if is_legal(prof, name, Hand::TwoHand, equipped_elite) {
+        if is_legal(prof, name, Hand::TwoHand) {
             two_hand.push(name.clone());
         }
-        if is_legal(prof, name, Hand::Main, equipped_elite) {
+        if is_legal(prof, name, Hand::Main) {
             main.push(name.clone());
         }
-        if is_legal(prof, name, Hand::Off, equipped_elite) {
+        if is_legal(prof, name, Hand::Off) {
             off.push(name.clone());
         }
     }
@@ -2040,15 +2161,7 @@ fn swap_weapons(
     let Some(profession) = db.profession(profession_name) else {
         return Vec::new();
     };
-    let elite_ids: Vec<u32> = candidate
-        .validated
-        .specializations
-        .iter()
-        .filter(|s| s.elite)
-        .map(|s| s.spec_id)
-        .collect();
-    let elite = equipped_elite_name(db, &elite_ids);
-    let combos = land_weapon_combos(profession, elite);
+    let combos = land_weapon_combos(profession);
     let set1 = (
         candidate.validated.weapons.set1.main_hand.clone(),
         candidate.validated.weapons.set1.off_hand.clone(),
@@ -2152,6 +2265,9 @@ mod tests {
             },
             user_intent_score: 0.0,
             raw_direction_score: -1.0,
+            ranked_direction_score: -1.0,
+            intent_similarity: None,
+            intent_alignment: None,
             realized: Default::default(),
             stat_direction_score: -1.0,
             quality: DataQuality::Verified,
@@ -2187,6 +2303,7 @@ mod tests {
         report.viability.is_viable = false;
         report.viability.gates = vec![GateResult {
             gate: ViabilityGate::ProtectedExecution,
+            skipped: false,
             passed: false,
             note: "protected=0ms (minimum 2000ms secured inside the sequence)".into(),
         }];
@@ -2208,6 +2325,175 @@ mod tests {
         );
     }
 
+    /// A locked spec, trait or gear slot is a REQUIREMENT the player set. A
+    /// published reference is somebody else's build, so one that does not
+    /// already satisfy the lock is skipped rather than repaired: pinning a
+    /// Minstrel helm onto a Berserker page produces a kit neither the page
+    /// nor the player asked for.
+    #[test]
+    fn a_reference_that_breaks_a_lock_never_seeds_the_beam() {
+        use gw2_core::types::{BuildLocks, GearSlot, PrefixRef};
+
+        let mut reference = ValidatedBuild {
+            specializations: vec![ValidatedSpec {
+                spec_id: 18,
+                name: "Berserker".into(),
+                elite: true,
+                trait_ids: vec![1001, 1002, 1003],
+                trait_names: Vec::new(),
+                all_trait_ids: vec![1001, 1002, 1003],
+            }],
+            ..Default::default()
+        };
+        reference.gear_slots.set(
+            GearSlot::Helm,
+            PrefixRef {
+                itemstat_id: 161,
+                name: "Berserker's".into(),
+            },
+        );
+
+        // No locks at all: nothing to violate.
+        assert!(seed_honors_locks(&reference, &BuildLocks::default()));
+
+        // Spec lock the reference does not run.
+        let mut spec_lock = BuildLocks::default();
+        spec_lock.specs[0] = Some(43);
+        assert!(!seed_honors_locks(&reference, &spec_lock));
+        // ...and the one it does.
+        let mut same_spec = BuildLocks::default();
+        same_spec.specs[0] = Some(18);
+        assert!(seed_honors_locks(&reference, &same_spec));
+
+        // Trait lock inside a spec the reference runs.
+        let mut trait_lock = BuildLocks::default();
+        trait_lock.trait_locks.insert(18, [Some(9999), None, None]);
+        assert!(!seed_honors_locks(&reference, &trait_lock));
+        let mut held_trait = BuildLocks::default();
+        held_trait.trait_locks.insert(18, [Some(1001), None, None]);
+        assert!(seed_honors_locks(&reference, &held_trait));
+
+        // A trait lock on a spec the reference does not run at all.
+        let mut other_spec_trait = BuildLocks::default();
+        other_spec_trait
+            .trait_locks
+            .insert(43, [Some(1001), None, None]);
+        assert!(!seed_honors_locks(&reference, &other_spec_trait));
+
+        // Gear lock on a slot carrying a different prefix.
+        let mut gear_lock = BuildLocks::default();
+        gear_lock.gear_locks.insert(GearSlot::Helm, 1128);
+        assert!(!seed_honors_locks(&reference, &gear_lock));
+        // ...and on a slot the reference leaves empty.
+        let mut empty_slot = BuildLocks::default();
+        empty_slot.gear_locks.insert(GearSlot::Coat, 161);
+        assert!(!seed_honors_locks(&reference, &empty_slot));
+        let mut same_gear = BuildLocks::default();
+        same_gear.gear_locks.insert(GearSlot::Helm, 161);
+        assert!(seed_honors_locks(&reference, &same_gear));
+    }
+
+    /// A player who has never synced gets exactly the search they had before.
+    #[test]
+    fn without_synced_benchmarks_the_search_is_unchanged() {
+        assert!(
+            SearchConfig::default().benchmarks_dir.is_none(),
+            "meta seeding must be opt-in: the default config reads no corpus"
+        );
+        // An empty folder is "synced nothing", which must also be silent
+        // rather than an error or a panic.
+        let dir = std::env::temp_dir().join("gw2bo_meta_seed_empty_probe");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let db = empty_db();
+        let ctx = BalanceContext::new(gw2_core::types::GameMode::WvW);
+        let scenario = ScenarioSpec::from_balance_context(&ctx);
+        let seeds = meta_seeds(
+            &db,
+            "Warrior",
+            &OptimizationWeights::preset_power_dps(),
+            &ctx,
+            &scenario,
+            &gw2_core::types::BuildLocks::default(),
+            &dir,
+            &|| false,
+        );
+        assert!(seeds.is_empty(), "an empty corpus seeds nothing");
+    }
+
+    /// Published references that deliver what the run is for become extra
+    /// starting points for the beam. Cache-backed: a published plate needs the
+    /// real `GameDb` and the player's own synced corpus. Prints and returns
+    /// without `dev.cfg`.
+    #[test]
+    fn synced_references_that_fit_the_request_seed_the_beam() {
+        let Ok(addon_dir) = gw2_api::dev_config::addons_dir() else {
+            println!("no dev.cfg: nothing to check");
+            return;
+        };
+        let addon_dir = addon_dir.join("gw2_build_optimizer");
+        let cache = gw2_api::cache::DataCache::new(addon_dir.join("cache"));
+        let Ok(db) = crate::gamedb::GameDb::load(&cache) else {
+            println!("game data not cached: nothing to check");
+            return;
+        };
+
+        let mode = gw2_core::types::GameMode::WvW;
+        let ctx = BalanceContext::new(mode.clone());
+        let role = crate::scenario::RoleObjective::Buffer;
+        let tier = crate::scenario::CombatTier::Party;
+        let weights = role.to_weights_for(&mode, tier);
+        let scenario = ScenarioSpec {
+            combat_tier: tier,
+            combat_kind: role.combat_kind_for_weights(&weights),
+            objective_profile_id: Some(role.profile_id_for(&mode, tier).to_string()),
+            ..ScenarioSpec::from_balance_context(&ctx)
+        };
+
+        let seeds = meta_seeds(
+            &db,
+            "Warrior",
+            &weights,
+            &ctx,
+            &scenario,
+            &gw2_core::types::BuildLocks::default(),
+            &addon_dir,
+            &|| false,
+        );
+        if seeds.is_empty() {
+            println!("corpus has no Warrior WvW reference that fits a support request");
+            return;
+        }
+        assert!(
+            seeds.len() <= MAX_META_SEEDS,
+            "the beam must not be flooded: {} seeds",
+            seeds.len()
+        );
+        for (name, candidate) in &seeds {
+            let aligned = candidate
+                .report
+                .intent_alignment
+                .expect("a seed is only kept when its alignment was measured");
+            assert!(
+                aligned >= scoring::INTENT_ALIGNMENT_FLOOR,
+                "{name} seeds the beam at {aligned}, under the floor"
+            );
+            assert!(
+                !candidate.validated.specializations.is_empty(),
+                "{name} seeded an empty build"
+            );
+        }
+        // Best first, so the beam spends its neighbour budget on the strongest
+        // proven combination before the weaker ones.
+        let ranks: Vec<[i64; 10]> = seeds
+            .iter()
+            .map(|(_, c)| referee::search_rank(&c.report))
+            .collect();
+        assert!(
+            ranks.windows(2).all(|w| w[0] >= w[1]),
+            "seeds are not ordered best first: {ranks:?}"
+        );
+    }
+
     #[test]
     fn finish_search_empty_beam_still_errors() {
         let err = finish_search(Vec::new()).unwrap_err();
@@ -2222,6 +2508,7 @@ mod tests {
         lower.viability.is_viable = false;
         lower.viability.gates = vec![GateResult {
             gate: ViabilityGate::ProtectedExecution,
+            skipped: false,
             passed: false,
             note: "protected=0ms".into(),
         }];
@@ -2261,11 +2548,13 @@ mod tests {
         closer.viability.gates = vec![
             GateResult {
                 gate: ViabilityGate::StabilityAccess,
+                skipped: false,
                 passed: true,
                 note: String::new(),
             },
             GateResult {
                 gate: ViabilityGate::EncounterOutcome,
+                skipped: false,
                 passed: false,
                 note: String::new(),
             },
@@ -2294,6 +2583,108 @@ mod tests {
             "expected empty neighbors from empty DB, got {}",
             neighbors.len()
         );
+    }
+
+    /// PvP-only runes and sigils are in `db.runes`/`db.sigils` since the
+    /// `details.type = "Default"` fix, so the operators that build the search's
+    /// candidate sets have to keep them out of a PvE or WvW build. They do, by
+    /// the `name.contains("Superior")` filter: the PvP item table's copies are
+    /// "Rune of X"/"Sigil of X" with no tier word. That filter is NOT mode-aware
+    /// — it excludes the PvP copies in every mode, PvP included, which is the
+    /// behaviour asserted here. PvP builds do not go through these operators
+    /// (they use the amulet system), and the PvP copies exist in `GameDb` only
+    /// so published PvP references can be plated and named.
+    #[test]
+    fn pvp_only_upgrades_never_enter_a_candidate_set() {
+        let mut db = empty_db();
+        let mut sigil_item = |id: u32, name: &str, detail: &str, pvp: bool| {
+            let item = Item {
+                id,
+                name: name.to_string(),
+                description: None,
+                icon: None,
+                item_type: "UpgradeComponent".to_string(),
+                rarity: "Exotic".to_string(),
+                level: 60,
+                vendor_value: None,
+                chat_link: None,
+                default_skin: None,
+                flags: Vec::new(),
+                game_types: if pvp {
+                    vec!["Pvp".to_string(), "PvpLobby".to_string()]
+                } else {
+                    vec!["Pve".to_string(), "Wvw".to_string()]
+                },
+                restrictions: Vec::new(),
+                details: Some(ItemDetails {
+                    detail_type: Some(detail.to_string()),
+                    weight_class: None,
+                    defense: None,
+                    damage_type: None,
+                    min_power: None,
+                    max_power: None,
+                    suffix: None,
+                    bonuses: Vec::new(),
+                    infusion_upgrade_flags: Vec::new(),
+                    infusion_slots: Vec::new(),
+                    attribute_adjustment: None,
+                    infix_upgrade: None,
+                    suffix_item_id: None,
+                    secondary_suffix_item_id: None,
+                    stat_choices: Vec::new(),
+                }),
+            };
+            db.items.insert(id, item);
+        };
+        // PvE copies first, PvP appended — the order `GameDb::load` produces.
+        sigil_item(10, "Superior Sigil of Force", "Sigil", false);
+        sigil_item(21123, "Sigil of Force", "Default", true);
+        sigil_item(20, "Superior Rune of the Scholar", "Rune", false);
+        sigil_item(21092, "Rune of the Scholar", "Default", true);
+        db.sigils = vec![10, 21123];
+        db.runes = vec![20, 21092];
+
+        // Four filled sigil seats, the shape `swap_sigil_slots` mutates.
+        let seed = ValidatedBuild {
+            sigils: (0..4)
+                .map(|_| ValidatedItem {
+                    id: 99,
+                    name: "Superior Sigil of Bloodlust".into(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        for mode in [GameMode::PvE, GameMode::WvW, GameMode::PvP] {
+            let mut candidate = make_candidate(seed.clone());
+            candidate.report.scenario.game_mode = mode.clone();
+
+            let rune_ids: Vec<u32> = swap_rune(&candidate, &db)
+                .iter()
+                .filter_map(|b| b.rune.as_ref().map(|r| r.id))
+                .collect();
+            assert!(
+                rune_ids.contains(&20),
+                "{mode:?}: the PvE rune must be a candidate, got {rune_ids:?}"
+            );
+            assert!(
+                !rune_ids.contains(&21092),
+                "{mode:?}: PvP-only rune leaked into the candidate set"
+            );
+
+            let sigil_ids: Vec<u32> = swap_sigil_slots(&candidate, &db)
+                .iter()
+                .flat_map(|b| b.sigils.iter().map(|s| s.id))
+                .collect();
+            assert!(
+                sigil_ids.contains(&10),
+                "{mode:?}: the PvE sigil must be a candidate, got {sigil_ids:?}"
+            );
+            assert!(
+                !sigil_ids.contains(&21123),
+                "{mode:?}: PvP-only sigil leaked into the candidate set"
+            );
+        }
     }
 
     /// With 2 Superior runes in the DB, generate_neighbors should produce
@@ -2846,6 +3237,7 @@ mod tests {
                 // Exercises budget/deadline, not patience.
                 patience: u32::MAX,
                 time_limit_secs: 30,
+                benchmarks_dir: None,
             },
             &mut |_| {},
             &|| false,
@@ -3014,6 +3406,7 @@ mod tests {
             // Exercises determinism under a fixed budget, not patience.
             patience: u32::MAX,
             time_limit_secs: 30,
+            benchmarks_dir: None,
         };
 
         let run = || {
@@ -3070,6 +3463,7 @@ mod tests {
             // Exercises locks under a fixed budget, not patience.
             patience: u32::MAX,
             time_limit_secs: 30,
+            benchmarks_dir: None,
         };
 
         let best = optimize_v2_search(
@@ -3279,7 +3673,7 @@ mod tests {
             icon: None,
             icon_big: None,
         };
-        let mains: Vec<_> = land_weapon_combos(&prof, None)
+        let mains: Vec<_> = land_weapon_combos(&prof)
             .into_iter()
             .filter_map(|(m, _)| m)
             .collect();
@@ -3310,22 +3704,6 @@ mod tests {
             skills_by_palette: vec![],
             icon: None,
             icon_big: None,
-        }
-    }
-
-    fn elite_spec(id: u32, name: &str, profession: &str) -> gw2_api::models::Specialization {
-        gw2_api::models::Specialization {
-            id,
-            name: name.into(),
-            profession: profession.into(),
-            elite: true,
-            minor_traits: Vec::new(),
-            major_traits: vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
-            weapon_trait: None,
-            icon: None,
-            background: None,
-            profession_icon: None,
-            profession_icon_big: None,
         }
     }
 
@@ -3362,53 +3740,40 @@ mod tests {
         profession_with("Ranger", weapons)
     }
 
+    /// Weaponmaster Training: an elite's weapon is offered to the whole
+    /// profession, so a Revenant is offered Renegade Shortbow and Herald
+    /// Shield whatever it equips.
     #[test]
-    fn land_weapon_combos_herald_dual_swords_not_renegade_shortbow() {
-        let prof = revenant_weapons();
-        let mut db = empty_db();
-        db.specializations
-            .insert(3, elite_spec(3, "Herald", "Revenant"));
-        let elite = equipped_elite_name(&db, &[3]);
-        assert_eq!(elite, Some("Herald"));
-        let combos = land_weapon_combos(&prof, elite);
+    fn land_weapon_combos_offer_every_elite_weapon_of_the_profession() {
+        let combos = land_weapon_combos(&revenant_weapons());
         assert!(combos.contains(&pair("Sword", Some("Sword"))));
         assert!(combos.contains(&pair("Sword", Some("Axe"))));
         assert!(combos.contains(&pair("Staff", None)));
         assert!(combos.contains(&pair("Sword", Some("Shield"))));
-        assert!(!combos.contains(&pair("Shortbow", None)));
-        assert!(!combos.iter().any(|(m, _)| m.as_deref() == Some("Shortbow")));
+        assert!(combos.contains(&pair("Shortbow", None)));
     }
 
+    /// The per-hand table still decides: Guardian Sword is off-hand only via
+    /// Willbender, which Weaponmaster Training unlocks, and Focus is off-hand
+    /// only for everyone.
     #[test]
-    fn land_weapon_combos_core_revenant_has_no_shield_or_shortbow() {
-        let combos = land_weapon_combos(&revenant_weapons(), None);
-        assert!(combos.contains(&pair("Sword", Some("Sword"))));
-        assert!(!combos.contains(&pair("Shortbow", None)));
-        assert!(!combos.iter().any(|(_, o)| o.as_deref() == Some("Shield")));
-    }
-
-    #[test]
-    fn land_weapon_combos_firebrand_no_dual_swords() {
-        let combos = land_weapon_combos(&guardian_sword_kit(), Some("Firebrand"));
+    fn land_weapon_combos_guardian_sword_pairs_by_hand() {
+        let combos = land_weapon_combos(&guardian_sword_kit());
         assert!(combos.contains(&pair("Sword", None)));
         assert!(combos.contains(&pair("Sword", Some("Focus"))));
-        assert!(!combos.contains(&pair("Sword", Some("Sword"))));
-    }
-
-    #[test]
-    fn land_weapon_combos_willbender_may_dual_swords() {
-        let combos = land_weapon_combos(&guardian_sword_kit(), Some("Willbender"));
         assert!(combos.contains(&pair("Sword", Some("Sword"))));
+        assert!(!combos.iter().any(|(m, _)| m.as_deref() == Some("Focus")));
     }
 
+    /// A hand the wiki table gives nobody stays shut: Ranger Sword has no
+    /// off-hand row, and no unlock adds one.
     #[test]
-    fn land_weapon_combos_ranger_core_offhand_dagger_not_main() {
-        let combos = land_weapon_combos(&ranger_lying_api(), None);
+    fn land_weapon_combos_ranger_sword_is_never_an_off_hand() {
+        let combos = land_weapon_combos(&ranger_lying_api());
         assert!(
             combos.contains(&pair("Axe", Some("Dagger")))
                 || combos.contains(&pair("Sword", Some("Dagger")))
         );
-        assert!(!combos.iter().any(|(m, _)| m.as_deref() == Some("Dagger")));
         assert!(!combos.iter().any(|(_, o)| o.as_deref() == Some("Sword")));
     }
 

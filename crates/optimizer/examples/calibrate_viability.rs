@@ -10,10 +10,8 @@
 
 use std::collections::BTreeMap;
 
-use gw2_optimizer::benchmark::BenchmarkBuild;
+use gw2_optimizer::benchmark::plate_from;
 use gw2_optimizer::gamedb::GameDb;
-use gw2_optimizer::prompts::GeminiBuildResponse;
-use gw2_optimizer::scenario::{CombatKind, CombatTier, ScenarioSpec};
 
 fn main() {
     let only_mode = std::env::args().nth(1);
@@ -76,6 +74,8 @@ fn main() {
     // number can be chased back to a build.
     let mut tally: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     let mut examples: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Gates that judged nothing, by gate: counted apart from pass and fail.
+    let mut skipped_gates: BTreeMap<String, u32> = BTreeMap::new();
     let mut by_role: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     // (gate, job family) -> (passed, failed). One number per gate hides the
     // thing that decides whether a gate is describing the game: a gate can
@@ -92,6 +92,10 @@ fn main() {
     let mut unusable = 0u32;
     let mut no_plate = 0u32;
     let mut bad_examples: Vec<String> = Vec::new();
+    // Every distinct validation error text, with counts: a rejection class
+    // is either our model being wrong or the site's data being wrong, and one
+    // example each cannot tell you which is the big one.
+    let mut reject_tally: BTreeMap<String, u32> = BTreeMap::new();
     let mut scored = 0u32;
     let mut with_opener = 0u32;
 
@@ -109,6 +113,9 @@ fn main() {
             gw2_optimizer::validation::validate_gemini_build(&plate, &db, &build.profession);
         if !validated.errors.is_empty() {
             unusable += 1;
+            for e in &validated.errors {
+                *reject_tally.entry(e.detail.clone()).or_default() += 1;
+            }
             if bad_examples.len() < 5 {
                 bad_examples.push(format!(
                     "{} {} [{}] {}",
@@ -117,7 +124,7 @@ fn main() {
             }
             continue;
         }
-        let scenario = scenario_for(build);
+        let scenario = gw2_optimizer::benchmark::published_scenario(build);
         let weights = gw2_optimizer::scoring::OptimizationWeights::default();
         let ctx = gw2_optimizer::balance::BalanceContext::new(scenario.game_mode.clone());
         // The page's own rotation line, when it wrote one — the referee then
@@ -166,6 +173,12 @@ fn main() {
         let mut all_passed = true;
         for gate in &report.viability.gates {
             let key = format!("{:?}", gate.gate);
+            // An abstention is not a pass: counting it as one inflates the
+            // pass rate of a gate that judged nothing.
+            if gate.skipped {
+                *skipped_gates.entry(key).or_default() += 1;
+                continue;
+            }
             let fam = by_gate_family
                 .entry((key.clone(), family.clone()))
                 .or_default();
@@ -195,19 +208,23 @@ fn main() {
         } else {
             role.1 += 1;
         }
-        // `is_viable` is every gate; `blocks()` is the measured set that may
-        // refuse a build. The gap between them is builds the referee scores at
-        // the -1.0 sentinel on the authority of a gate it has already
-        // published as having no authority.
-        if report
-            .viability
-            .gates
-            .iter()
-            .all(|g| g.passed || !g.gate.blocks())
-        {
+        // `is_viable` is the blocking set only - see `ViabilityReport::is_viable`.
+        // Reading it as "every gate" printed one number twice. The gap between
+        // the two lines is the builds only a gate `blocks()` already publishes
+        // as having no authority would refuse.
+        debug_assert_eq!(
+            report.viability.is_viable,
+            report
+                .viability
+                .gates
+                .iter()
+                .all(|g| g.passed || g.skipped || !g.gate.blocks()),
+            "is_viable is the blocking-gate set, abstentions aside"
+        );
+        if report.viability.is_viable {
             viable_blocking_only += 1;
         }
-        if report.viability.is_viable {
+        if all_passed {
             viable_all_gates += 1;
         }
     }
@@ -219,6 +236,17 @@ fn main() {
     for note in &bad_examples {
         println!("   rejected: {note}");
     }
+    if !reject_tally.is_empty() {
+        let mut rows: Vec<(&String, &u32)> = reject_tally.iter().collect();
+        rows.sort_by_key(|(text, count)| (std::cmp::Reverse(**count), (*text).clone()));
+        println!(
+            "
+validation errors, most common first:"
+        );
+        for (text, count) in rows {
+            println!("  {count:>4}  {text}");
+        }
+    }
     println!();
     let pct_of_scored = |n: u32| {
         if scored > 0 {
@@ -228,12 +256,12 @@ fn main() {
         }
     };
     println!(
-        "is_viable (every gate):      {viable_all_gates:>4}/{scored} {:>5.0}%",
+        "every gate:                  {viable_all_gates:>4}/{scored} {:>5.0}%",
         pct_of_scored(viable_all_gates)
     );
     println!(
-        "blocking gates only:         {viable_blocking_only:>4}/{scored} {:>5.0}%   \
-         <- the rest are scored -1.0 by a gate blocks() says cannot refuse",
+        "is_viable (blocking gates):  {viable_blocking_only:>4}/{scored} {:>5.0}%   \
+         <- the rest score -1.0; the gap above is gates blocks() cannot refuse with",
         pct_of_scored(viable_blocking_only)
     );
     println!();
@@ -337,157 +365,18 @@ fn main() {
         );
     }
 
+    if !skipped_gates.is_empty() {
+        println!("\nabstained (model does not simulate what the gate reads):");
+        for (gate, count) in &skipped_gates {
+            println!("  {gate:<24} {count:>4} builds not judged");
+        }
+    }
+
     println!("\nfailing examples:");
     for (gate, notes) in &examples {
         println!("  == {gate}");
         for note in notes {
             println!("     {note}");
         }
-    }
-}
-
-/// A published build as a plate, in the same shape the model answers in.
-fn plate_from(build: &BenchmarkBuild, db: &GameDb) -> Option<GeminiBuildResponse> {
-    let p = &build.published;
-    if p.specs.is_empty() {
-        return None;
-    }
-    let specializations: Vec<(String, Vec<String>)> = p
-        .specs
-        .iter()
-        .filter_map(|line| {
-            let spec = db.specializations.get(&line.id)?;
-            let traits: Vec<String> = line
-                .trait_ids
-                .iter()
-                .filter_map(|id| db.traits.get(id).map(|t| t.name.clone()))
-                .collect();
-            Some((spec.name.clone(), traits))
-        })
-        .collect();
-    if specializations.len() != 3 {
-        return None;
-    }
-    let name = |id: Option<u32>| {
-        id.and_then(|id| db.items.get(&id))
-            .map(|i| i.name.clone())
-            .unwrap_or_default()
-    };
-    const WEAPONS: [&str; 17] = [
-        "axe",
-        "dagger",
-        "mace",
-        "pistol",
-        "scepter",
-        "sword",
-        "focus",
-        "shield",
-        "torch",
-        "warhorn",
-        "greatsword",
-        "hammer",
-        "longbow",
-        "rifle",
-        "shortbow",
-        "staff",
-        "spear",
-    ];
-    let weapons: Vec<String> = p
-        .gear
-        .iter()
-        .map(|g| g.slot.clone())
-        .filter(|s| WEAPONS.contains(&s.to_lowercase().as_str()))
-        .collect();
-    // Heal, three utilities and elite. Sites vary on whether they mark these
-    // up at all — GuildJen mostly does not — but nearly every page publishes
-    // a chat code, and the code carries them as palette ids. Weapons decide
-    // skills 1-5 and are resolved from the profession; 6-0 are chosen, and
-    // this is where the choice is written down.
-    let skills = published_skills(p, db);
-    Some(GeminiBuildResponse {
-        specializations,
-        weapons,
-        skills,
-        rune: name(p.rune_id),
-        sigils: p
-            .sigil_ids
-            .iter()
-            .filter_map(|id| db.items.get(id).map(|i| i.name.clone()))
-            .collect(),
-        relic: name(p.relic_id),
-        stat_prefix: p
-            .dominant_stat()
-            .unwrap_or_else(|| build.gear_prefix.clone()),
-        ..Default::default()
-    })
-}
-
-/// The slot bar, labelled the way a plate labels it.
-///
-/// `validation::parse_skill_names_from_response` reads `Heal: `, `Utils: `
-/// and `Elite: ` prefixes rather than a bare list, so this has to speak the
-/// same shape. Where the ids come from is `ProviderBuild::slot_skills`.
-fn published_skills(p: &gw2_optimizer::providers::ProviderBuild, db: &GameDb) -> Vec<String> {
-    let slots = p.slot_skills(db);
-    let name = |slot: Option<&Option<u32>>| {
-        slot.and_then(|s| *s)
-            .and_then(|id| db.skills.get(&id))
-            .map(|s| s.name.clone())
-    };
-    let mut lines = Vec::new();
-    if let Some(heal) = name(slots.first()) {
-        lines.push(format!("Heal: {heal}"));
-    }
-    let utils: Vec<String> = slots
-        .iter()
-        .skip(1)
-        .take(3)
-        .filter_map(|slot| name(Some(slot)))
-        .collect();
-    if !utils.is_empty() {
-        lines.push(format!("Utils: {}", utils.join(", ")));
-    }
-    if let Some(elite) = name(slots.get(4)) {
-        lines.push(format!("Elite: {elite}"));
-    }
-    lines
-}
-
-/// The scenario a published build was written for, as near as its own labels say.
-fn scenario_for(build: &BenchmarkBuild) -> ScenarioSpec {
-    let mode = match build.mode.as_str() {
-        "WvW" => gw2_core::types::GameMode::WvW,
-        "PvP" => gw2_core::types::GameMode::PvP,
-        _ => gw2_core::types::GameMode::PvE,
-    };
-    let role = build.role.to_lowercase();
-    let kind = if role.contains("heal") || role.contains("support") {
-        CombatKind::Support
-    } else if role.contains("commander") {
-        CombatKind::Commander
-    } else if role.contains("disable") || role.contains("boonstrip") {
-        CombatKind::Disabler
-    } else if role.contains("condi") {
-        CombatKind::CondiRamp
-    } else if role.contains("roam") || role.contains("duel") || role.contains("assassin") {
-        CombatKind::Harasser
-    } else {
-        CombatKind::StrikeSpike
-    };
-    let tier = if role.contains("zerg") || role.contains("cloud") || role.contains("raid") {
-        CombatTier::Squad
-    } else if role.contains("havoc") || role.contains("party") || role.contains("fractal") {
-        CombatTier::Party
-    } else {
-        CombatTier::Solo
-    };
-    // Built from the balance context so every field the optimizer sets is
-    // set the same way here — then the mode, scale and job the site itself
-    // published are laid over it.
-    let ctx = gw2_optimizer::balance::BalanceContext::new(mode);
-    ScenarioSpec {
-        combat_tier: tier,
-        combat_kind: kind,
-        ..ScenarioSpec::from_balance_context(&ctx)
     }
 }

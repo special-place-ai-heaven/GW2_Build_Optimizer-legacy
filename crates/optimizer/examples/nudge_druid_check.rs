@@ -102,6 +102,7 @@ fn main() {
         &scenario,
         &gw2_core::types::BuildLocks::default(),
         None,
+        None,
         &mut noop,
         &|| false,
     )

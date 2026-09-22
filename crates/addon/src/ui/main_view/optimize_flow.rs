@@ -130,11 +130,7 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
     let weights = state.main.weights.clone();
     let selected_role = state.main.selected_role;
     let build_locks = state.main.build_locks.clone();
-    let combat_tier = match game_mode {
-        gw2_core::types::GameMode::WvW => state.main.combat_tier,
-        gw2_core::types::GameMode::PvP => gw2_optimizer::scenario::CombatTier::Solo,
-        gw2_core::types::GameMode::PvE => gw2_optimizer::scenario::CombatTier::Party,
-    };
+    let combat_tier = combat_tier_for(&game_mode, state.main.combat_tier);
     // Capture locked elite spec name for the Improve Build label.
     let locked_spec_name: Option<String> =
         build_locks.specs.get(2).and_then(|s| *s).and_then(|id| {
@@ -189,34 +185,8 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                 let db = db.ok_or("GameDb not loaded")?;
 
                 // Build a mode + tier-aware scenario for the referee and optimize_v2.
-                let scenario = {
-                    use gw2_optimizer::scenario::{
-                        OptimizationTarget, ScenarioSpec, TargetProfile,
-                    };
-                    let combat_kind = selected_role
-                        .map(|r| r.combat_kind_for_weights(&weights))
-                        .unwrap_or_else(|| {
-                            if weights.condition > weights.power {
-                                gw2_optimizer::scenario::CombatKind::CondiRamp
-                            } else {
-                                gw2_optimizer::scenario::CombatKind::StrikeSpike
-                            }
-                        });
-                    ScenarioSpec {
-                        game_mode: balance_ctx.game_mode.clone(),
-                        combat_tier,
-                        combat_kind,
-                        target_profile: TargetProfile::Single,
-                        optimization_target: OptimizationTarget {
-                            label: balance_ctx.game_mode.label().to_string(),
-                        },
-                        patch_id: Some(balance_ctx.patch_id.clone()),
-                        objective_profile_id: selected_role.map(|r| {
-                            r.profile_id_for(&balance_ctx.game_mode, combat_tier)
-                                .to_string()
-                        }),
-                    }
-                };
+                let scenario =
+                    scenario_for_run(&balance_ctx, combat_tier, selected_role, &weights);
 
                 // Improve always-better baseline (spec §12.4): rank the
                 // user's OWN current gear under this run's weights so a worse
@@ -246,6 +216,9 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                         &scenario,
                         &build_locks,
                         llm_ref,
+                        // Proven combinations seed the beam alongside our own
+                        // seed. Never synced means the search is unchanged.
+                        Some(addon_dir.as_path()),
                         &mut |progress: gw2_optimizer::engine::OptimizeProgress| {
                             if token_v2.is_cancelled() {
                                 return;
@@ -290,8 +263,9 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                                 &scenario,
                                 selected_role,
                                 improve_label_override(outcome, locked_spec_name.as_deref()),
-                                &addon_dir,
+                                Some(&addon_dir),
                                 &weights,
+                                &balance_ctx,
                             );
                             keep_loadout_pets(&mut suggestion, &current_pets);
                             return Ok(vec![suggestion]);
@@ -357,8 +331,9 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                                 &scenario,
                                 selected_role,
                                 improve_label_override(outcome, locked_spec_name.as_deref()),
-                                &addon_dir,
+                                Some(&addon_dir),
                                 &weights,
+                                &balance_ctx,
                             );
                             keep_loadout_pets(&mut suggestion, &current_pets);
                             return Ok(vec![suggestion]);
@@ -408,8 +383,9 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                             ImproveOutcome::KeptCurrentGear,
                             locked_spec_name.as_deref(),
                         ),
-                        &addon_dir,
+                        Some(&addon_dir),
                         &weights,
+                        &balance_ctx,
                     );
                     keep_loadout_pets(&mut suggestion, &current_pets);
                     return Ok(vec![suggestion]);
@@ -536,6 +512,8 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                 crate::state::with_state(|s| {
                     s.main.optimizing = false;
                     s.main.comparison.loading = false;
+                    // Leaving "Stopping..." behind would outlive the stop.
+                    s.main.optimize_stage.clear();
                 });
             }
         }));
@@ -976,6 +954,59 @@ fn capture_improve_baseline(
     BaselineCapture::Ranked(Box::new(ImproveBaseline { validated, report }))
 }
 
+/// Cancel the optimize run in flight.
+///
+/// Same mechanism the chat's Stop uses: `cancel_and_renew` cancels the token
+/// every worker on this run holds and hands out a fresh one, so the next run
+/// is unaffected. The pick-evaluation token is deliberately NOT touched -
+/// measuring a published reference is not the run the player asked to stop.
+///
+/// The flags stay set: the worker's own cancelled path clears `optimizing`
+/// and `comparison.loading` when it actually winds down, which is what keeps
+/// the banner honest. It adds no suggestion and shows no error.
+pub(super) fn stop_optimization(state: &mut AddonState) {
+    if !state.main.optimizing {
+        return;
+    }
+    state.cancel_and_renew();
+    // The progress callbacks all return early once the token is cancelled, so
+    // nothing overwrites this until the worker clears the flag.
+    state.main.optimize_stage = t("status.stopping");
+    nexus::log::log(
+        nexus::log::LogLevel::Warning,
+        "GW2 Build Optimizer",
+        "optimization stopped by the player",
+    );
+}
+
+/// The scenario an optimize run is judged under.
+///
+/// Shared with the community-reference tabs in `provider_picks`: a published
+/// build is only comparable to the player's own once both were measured in
+/// the same scenario, so there is exactly one place that builds it.
+pub(super) fn scenario_for_run(
+    ctx: &BalanceContext,
+    combat_tier: gw2_optimizer::scenario::CombatTier,
+    selected_role: Option<gw2_optimizer::scenario::RoleObjective>,
+    weights: &OptimizationWeights,
+) -> ScenarioSpec {
+    // One builder, in the library, so the picks panel, the example and the
+    // corpus test cannot drift into asking different questions.
+    ScenarioSpec::for_request(ctx, combat_tier, selected_role, weights)
+}
+
+/// The combat scale a mode is judged at.
+pub(super) fn combat_tier_for(
+    game_mode: &gw2_core::types::GameMode,
+    wvw_tier: gw2_optimizer::scenario::CombatTier,
+) -> gw2_optimizer::scenario::CombatTier {
+    match game_mode {
+        gw2_core::types::GameMode::WvW => wvw_tier,
+        gw2_core::types::GameMode::PvP => gw2_optimizer::scenario::CombatTier::Solo,
+        gw2_core::types::GameMode::PvE => gw2_optimizer::scenario::CombatTier::Party,
+    }
+}
+
 /// Re-materialise the player's own ranked build as something servable.
 fn kept_baseline_result(
     baseline: &ImproveBaseline,
@@ -1014,16 +1045,10 @@ fn apply_improve_baseline_gate(
     ctx: &BalanceContext,
     scenario: &ScenarioSpec,
 ) -> (gw2_optimizer::engine::SynergyResult, ImproveOutcome) {
-    let baseline = match baseline {
-        BaselineCapture::NotRequested => return (result, ImproveOutcome::Ungated),
-        BaselineCapture::Unavailable(reason) => {
-            let mut result = result;
-            result.quality_reasons.push(reason.clone());
-            return (result, ImproveOutcome::Ungated);
-        }
-        BaselineCapture::Ranked(baseline) => baseline.as_ref(),
-    };
-    let result_report = gw2_optimizer::referee::evaluate_validated_build(
+    // Ranked, not the search entry point: the serve path is not the beam's
+    // hot loop, and a refused result still owes the player a real similarity
+    // number instead of the collapsed axes' `None`.
+    let result_report = gw2_optimizer::referee::evaluate_validated_build_ranked(
         &result.validated,
         db,
         profession_name,
@@ -1031,6 +1056,77 @@ fn apply_improve_baseline_gate(
         ctx,
         scenario,
     );
+    let floor = gw2_optimizer::scoring::INTENT_ALIGNMENT_FLOOR;
+    let off_intent = off_intent(result_report.intent_alignment, floor);
+
+    let baseline = match baseline {
+        BaselineCapture::NotRequested => {
+            let mut result = result;
+            if let Some(sim) = off_intent {
+                note_off_intent(&mut result, sim, floor, profession_name, ctx);
+            }
+            return (result, ImproveOutcome::Ungated);
+        }
+        BaselineCapture::Unavailable(reason) => {
+            let mut result = result;
+            // Not only a quality reason: those render in a hover tooltip on
+            // the quality badge, so an Improve run whose always-better
+            // guarantee lapsed looked exactly like one where it held. The
+            // player is being served an ungated build and has to be told in
+            // text they cannot miss.
+            push_explanation(&mut result, &reason.explanation);
+            result.quality_reasons.push(reason.clone());
+            gate_log(
+                nexus::log::LogLevel::Warning,
+                format!(
+                    "Improve baseline gate disabled, serving an ungated result: {}",
+                    reason.explanation
+                ),
+            );
+            // No baseline to keep, so an off-intent result is still served -
+            // with the number on it, so the player can see what they got.
+            if let Some(sim) = off_intent {
+                note_off_intent(&mut result, sim, floor, profession_name, ctx);
+            }
+            return (result, ImproveOutcome::Ungated);
+        }
+        BaselineCapture::Ranked(baseline) => baseline.as_ref(),
+    };
+    // Intent before rank: a result that produces almost none of what was
+    // asked for is the wrong build, not a lesser one, so it never replaces
+    // gear that works. The always-better gate below cannot see this - it
+    // compares HOW WELL, and a hammer build with 30 Healing Power can
+    // outrank a Minstrel healer while producing no support output at all.
+    if let Some(sim) = refuses_for_intent(off_intent, baseline.report.viability.is_viable) {
+        gate_log(
+                nexus::log::LogLevel::Warning,
+                format!(
+                    "Improve role-fit gate: result aligns {sim:.2} with the requested intent (floor {floor:.2}); the player's current build aligns {}; serving their build",
+                    baseline
+                        .report
+                        .intent_alignment
+                        .map(|a| format!("{a:.2}"))
+                        .unwrap_or_else(|| "unmeasured".into()),
+                ),
+            );
+        let mut kept = kept_baseline_result(baseline, db, profession_name, ctx, scenario);
+        let text = tf(
+            "improve.intent_mismatch_kept",
+            &[
+                ("sim", &format!("{sim:.2}")),
+                ("floor", &format!("{floor:.2}")),
+            ],
+        );
+        push_explanation(&mut kept, &text);
+        kept.quality_reasons
+            .push(gw2_optimizer::data::quality::DataQualityReason {
+                field: "improve.intent".into(),
+                entity: profession_name.into(),
+                modes: vec![ctx.game_mode.label().to_string()],
+                explanation: text,
+            });
+        return (kept, ImproveOutcome::KeptCurrentGear);
+    }
     if beats_baseline(
         &gw2_optimizer::referee::search_rank(&result_report),
         &gw2_optimizer::referee::search_rank(&baseline.report),
@@ -1058,9 +1154,85 @@ fn apply_improve_baseline_gate(
     }
 }
 
+/// The measured alignment of a result that delivers too little of what the
+/// role exists for to serve, or `None` when it clears the floor.
+///
+/// `intent_alignment`, not a cosine and not a weighted total: both are
+/// dominated by what every build has in common. Measured over the 740-row
+/// corpus the angle ranked damage references ABOVE support ones for a support
+/// request, because sustain is large for everything. Scoring only the focus
+/// axes takes that common mode out, and the avoid term makes the measure
+/// signed - a build can be worse than nothing for a role.
+///
+/// `None` in means `None` out: no objective profile, or axes that were never
+/// measured. Refusing a build for having no data would be the wrong refusal.
+fn off_intent(alignment: Option<f64>, floor: f64) -> Option<f64> {
+    alignment.filter(|a| *a < floor)
+}
+
+/// The similarity to refuse a result at, or `None` to let the rank gate decide.
+///
+/// Both halves matter. An off-intent result is only REFUSED when there is
+/// working gear to keep instead: with no viable baseline the off-intent
+/// result is the best there is, and withholding it would leave the player
+/// with nothing rather than with a build plus a caveat.
+fn refuses_for_intent(off_intent: Option<f64>, baseline_viable: bool) -> Option<f64> {
+    off_intent.filter(|_| baseline_viable)
+}
+
+/// Append `text` to a served result's explanation, once.
+///
+/// The explanation is the one place the player cannot miss. Quality reasons
+/// render in a hover tooltip on the quality badge, and a tooltip nobody hovers
+/// is not being told.
+fn push_explanation(result: &mut gw2_optimizer::engine::SynergyResult, text: &str) {
+    let explanation = &mut result.validated.explanation;
+    if explanation.contains(text) {
+        return;
+    }
+    if !explanation.is_empty() {
+        explanation.push_str(
+            "
+
+",
+        );
+    }
+    explanation.push_str(text);
+}
+
+/// Mark a served result that points away from what was asked for.
+///
+/// Only reached when there is no viable baseline to keep instead: the result
+/// is the best there is, and the player is told what it measures rather than
+/// being handed it silently.
+fn note_off_intent(
+    result: &mut gw2_optimizer::engine::SynergyResult,
+    sim: f64,
+    floor: f64,
+    profession_name: &str,
+    ctx: &BalanceContext,
+) {
+    let text = tf(
+        "improve.intent_mismatch",
+        &[
+            ("sim", &format!("{sim:.2}")),
+            ("floor", &format!("{floor:.2}")),
+        ],
+    );
+    push_explanation(result, &text);
+    result
+        .quality_reasons
+        .push(gw2_optimizer::data::quality::DataQualityReason {
+            field: "improve.intent".into(),
+            entity: profession_name.into(),
+            modes: vec![ctx.game_mode.label().to_string()],
+            explanation: text,
+        });
+}
+
 /// Lexicographic strictly-greater comparison of referee ranks. Equal ranks
 /// mean the optimizer matched but did not beat the current gear.
-pub(super) fn beats_baseline(result_rank: &[i64; 9], baseline_rank: &[i64; 9]) -> bool {
+pub(super) fn beats_baseline(result_rank: &[i64; 10], baseline_rank: &[i64; 10]) -> bool {
     result_rank > baseline_rank
 }
 
@@ -1352,6 +1524,105 @@ mod tests {
         );
     }
 
+    /// A build the referee refused must never be served over the player's
+    /// working gear. `search_rank` carries viability as key 0, so the
+    /// lexicographic compare in [`beats_baseline`] already guarantees it -
+    /// this pins that, because the guarantee lives in the KEY ORDER and a
+    /// later key added above viability would silently remove it.
+    #[test]
+    fn a_refused_result_can_never_replace_a_viable_baseline() {
+        let db = gw2_optimizer::gamedb::GameDb::empty_for_tests();
+        let ctx = test_ctx();
+        let scenario = test_scenario();
+        let report = gw2_optimizer::referee::evaluate_validated_build(
+            &gw2_optimizer::validation::ValidatedBuild::default(),
+            &db,
+            "Guardian",
+            &OptimizationWeights::preset_power_dps(),
+            &ctx,
+            &scenario,
+        );
+        assert_eq!(
+            gw2_optimizer::referee::search_rank(&report)[0],
+            i64::from(report.viability.is_viable),
+            "viability must stay key 0 of the rank, or the gate below is empty"
+        );
+
+        // Refused, and better on every other key there is.
+        let refused = [
+            0,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+        ];
+        // Viable, and worse on every other key there is.
+        let viable = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert!(
+            !beats_baseline(&refused, &viable),
+            "a refused result outranked working gear"
+        );
+        assert!(beats_baseline(&viable, &refused));
+    }
+
+    /// A result that delivers too little of what the role exists for never
+    /// replaces working gear, and is served with the number on it when there
+    /// is no working gear to keep. This is the in-game case the invariant
+    /// exists for: a WvW Havoc Support Improve served a hammer build at 30
+    /// Healing Power with no cleanse, which outranked a Minstrel healer on
+    /// how WELL it performed while delivering none of the support the role is
+    /// written for.
+    #[test]
+    fn an_off_intent_result_never_replaces_working_gear() {
+        let floor = gw2_optimizer::scoring::INTENT_ALIGNMENT_FLOOR;
+
+        // Below the floor is off-intent; at or above it is not.
+        assert_eq!(off_intent(Some(floor - 0.01), floor), Some(floor - 0.01));
+        assert_eq!(off_intent(Some(floor), floor), None);
+        assert_eq!(off_intent(Some(floor + 1.0), floor), None);
+        // Signed: delivering more of what the role avoids than of what it is
+        // for is worse than delivering nothing, and must read that way.
+        assert_eq!(off_intent(Some(-0.4), floor), Some(-0.4));
+        // Never measured is not the same as measured badly. No objective
+        // profile, or no rotation, is not grounds to refuse a build.
+        assert_eq!(off_intent(None, floor), None);
+
+        // Refused only when there is working gear to keep instead.
+        assert_eq!(refuses_for_intent(Some(-0.4), true), Some(-0.4));
+        assert_eq!(
+            refuses_for_intent(Some(-0.4), false),
+            None,
+            "with no viable baseline the off-intent result is all there is -              serve it with the caveat rather than leaving the player nothing"
+        );
+        assert_eq!(refuses_for_intent(None, true), None);
+    }
+
+    /// The alignment key sits directly under viability, so a build written
+    /// for a different role loses however much better it performs.
+    #[test]
+    fn intent_alignment_outranks_every_performance_key() {
+        let on_intent = [1, 900_000, 0, 0, 0, 0, 0, 0, 0, 0];
+        let off_intent_but_better = [
+            1,
+            -400_000,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+            i64::MAX,
+        ];
+        assert!(!beats_baseline(&off_intent_but_better, &on_intent));
+        assert!(beats_baseline(&on_intent, &off_intent_but_better));
+    }
+
     #[test]
     fn failed_baseline_is_visible() {
         let db = gw2_optimizer::gamedb::GameDb::empty_for_tests();
@@ -1398,6 +1669,13 @@ mod tests {
             "served result carries no improve.baseline reason: {:?}",
             served.quality_reasons
         );
+        // A tooltip the player never hovers is not being told. The lapse has
+        // to reach the explanation text too.
+        assert!(
+            served.validated.explanation.contains("NOT guaranteed"),
+            "the ungate reason never reached the explanation: {:?}",
+            served.validated.explanation
+        );
 
         // A New Build run has nothing to explain and must stay quiet.
         let (clean, clean_outcome) = apply_improve_baseline_gate(
@@ -1416,6 +1694,10 @@ mod tests {
                 .iter()
                 .any(|r| r.field == "improve.baseline"),
             "New Build must not be told its baseline failed"
+        );
+        assert!(
+            !clean.validated.explanation.contains("NOT guaranteed"),
+            "New Build must not carry an ungate note either"
         );
     }
 
@@ -1685,7 +1967,7 @@ mod tests {
     #[test]
     fn equal_rank_keeps_user_gear() {
         let rank = [
-            1i64, 6, 900_000, 400_000, 500_000, 200_000, 700, 1_000_000, 10,
+            1i64, 900_000, 6, 400_000, 500_000, 200_000, 700, 1_000_000, 10, 5,
         ];
         assert!(!beats_baseline(&rank, &rank));
     }
@@ -1694,8 +1976,8 @@ mod tests {
     fn lower_rank_keeps_user_gear() {
         // Losing on an early key is decisive regardless of later dominance.
         assert!(!beats_baseline(
-            &[1, 5, 999_999, 999_999, 999_999, 999_999, 999_999, 999_999, 999],
-            &[1, 6, 0, 0, 0, 0, 0, 0, 0]
+            &[1, 900_000, 5, 999_999, 999_999, 999_999, 999_999, 999_999, 999_999, 999],
+            &[1, 900_000, 6, 0, 0, 0, 0, 0, 0, 0]
         ));
     }
 
@@ -1703,16 +1985,16 @@ mod tests {
     fn later_key_breaks_leading_tie() {
         // WvW-shaped ranks: intent tied, raw direction decides.
         assert!(beats_baseline(
-            &[1, 6, 1, 1, 500_000, 250_000, 700, 1_000_000, 10],
-            &[1, 6, 1, 1, 500_000, 240_000, 700, 1_000_000, 9]
+            &[1, 900_000, 6, 1, 1, 500_000, 250_000, 700, 1_000_000, 10],
+            &[1, 900_000, 6, 1, 1, 500_000, 240_000, 700, 1_000_000, 9]
         ));
     }
 
     #[test]
     fn earlier_key_wins_over_bigger_later_key() {
         assert!(beats_baseline(
-            &[1, 6, 300_000, -50, 0, 100, 0, 0, -50],
-            &[1, 6, 299_000, 0, 0, 999_999, 0, 0, 999]
+            &[1, 900_000, 6, 300_000, -50, 0, 100, 0, 0, -50],
+            &[1, 900_000, 6, 299_000, 0, 0, 999_999, 0, 0, 999]
         ));
     }
 

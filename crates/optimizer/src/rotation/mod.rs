@@ -45,6 +45,13 @@ pub struct RotationSkill {
     pub next_chain: Option<u32>,
     /// Whether this skill is a stunbreak.
     pub is_stunbreak: bool,
+    /// The skill reaches ALLIES, not just its owner: the API publishes a
+    /// "Number of Allied Targets", "Allied Healing", "Allied Heal per
+    /// Pulse" or "Allied Target Radius" fact for it (147 skills do).
+    /// Healing and boons from a skill that does not are self-facing, which
+    /// is survival rather than support. Categories are deliberately NOT
+    /// used: `"Nothing Can Save You!"` is a shout aimed at foes.
+    pub reaches_allies: bool,
     /// Weapon set this skill belongs to (0=always available, 1=set1, 2=set2,
     /// [`SHROUD_SET`]=only while in shroud). Non-weapon skills
     /// (heal/utility/elite) use 0.

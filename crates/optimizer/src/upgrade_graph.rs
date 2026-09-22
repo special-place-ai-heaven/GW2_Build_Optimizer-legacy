@@ -601,6 +601,14 @@ fn canonical_key(name: &str) -> String {
         .replace("major sigil of ", "sigil:")
         .replace("superior sigil of the ", "sigil:")
         .replace("superior sigil of ", "sigil:")
+        // Untiered: the PvP item table's copies, "Rune of X"/"Sigil of X".
+        // Last, so the tiered prefixes above have already been rewritten.
+        // `item_rank` ranks these below Superior, so the PvE item stays the
+        // graph node and the PvP copy only collapses into it.
+        .replace("rune of the ", "rune:")
+        .replace("rune of ", "rune:")
+        .replace("sigil of the ", "sigil:")
+        .replace("sigil of ", "sigil:")
 }
 
 fn item_rank(name: &str) -> u8 {

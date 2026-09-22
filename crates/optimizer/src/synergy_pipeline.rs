@@ -648,23 +648,6 @@ fn select_weapons(
     weights: &OptimizationWeights,
 ) {
     for candidate in candidates.iter_mut() {
-        let elite_spec_ids: Vec<u32> = candidate
-            .spec_ids
-            .iter()
-            .filter(|&&id| {
-                db.specializations
-                    .get(&id)
-                    .map(|s| s.elite)
-                    .unwrap_or(false)
-            })
-            .copied()
-            .collect();
-        let elite = elite_spec_ids.iter().find_map(|id| {
-            db.specializations
-                .get(id)
-                .filter(|s| s.elite)
-                .map(|s| s.name.as_str())
-        });
         let prof_name = profession.id.as_str();
 
         let available: Vec<(&str, bool)> = profession
@@ -672,16 +655,11 @@ fn select_weapons(
             .iter()
             .filter(|(name, info)| {
                 info.land_usable(name)
-                    && (is_legal(prof_name, name, Hand::TwoHand, elite)
-                        || is_legal(prof_name, name, Hand::Main, elite)
-                        || is_legal(prof_name, name, Hand::Off, elite))
+                    && (is_legal(prof_name, name, Hand::TwoHand)
+                        || is_legal(prof_name, name, Hand::Main)
+                        || is_legal(prof_name, name, Hand::Off))
             })
-            .map(|(name, _)| {
-                (
-                    name.as_str(),
-                    is_legal(prof_name, name, Hand::TwoHand, elite),
-                )
-            })
+            .map(|(name, _)| (name.as_str(), is_legal(prof_name, name, Hand::TwoHand)))
             .collect();
 
         // Cache per-weapon synergy scores once. Each weapon was previously scored
@@ -702,7 +680,7 @@ fn select_weapons(
         let mut best_set1_score = f64::NEG_INFINITY;
 
         for &(weapon, is_2h) in &available {
-            let is_main = is_legal(prof_name, weapon, Hand::Main, elite);
+            let is_main = is_legal(prof_name, weapon, Hand::Main);
             if is_2h {
                 // Two-handed weapon as set 1
                 let score = weapon_scores[weapon];
@@ -713,7 +691,7 @@ fn select_weapons(
             } else if is_main {
                 // Main-hand + each wiki-legal off-hand (including same-type dual wield)
                 for &(off_weapon, off_2h) in &available {
-                    if off_2h || !is_legal(prof_name, off_weapon, Hand::Off, elite) {
+                    if off_2h || !is_legal(prof_name, off_weapon, Hand::Off) {
                         continue;
                     }
 
@@ -743,7 +721,7 @@ fn select_weapons(
                 continue; // Don't reuse set 1's primary weapon in set 2
             }
 
-            let is_main = is_legal(prof_name, weapon, Hand::Main, elite);
+            let is_main = is_legal(prof_name, weapon, Hand::Main);
 
             if is_2h {
                 let score = weapon_scores[weapon];
@@ -753,7 +731,7 @@ fn select_weapons(
                 }
             } else if is_main {
                 for &(off_weapon, off_2h) in &available {
-                    if off_2h || !is_legal(prof_name, off_weapon, Hand::Off, elite) {
+                    if off_2h || !is_legal(prof_name, off_weapon, Hand::Off) {
                         continue;
                     }
 
@@ -1468,6 +1446,7 @@ fn build_synergy_result(
             db,
             profession_name,
             &candidate.spec_ids,
+            &validated.weapons,
         ),
     };
     validated.legends = candidate.legends.clone();
@@ -2683,8 +2662,10 @@ mod land_weapon_tests {
         db
     }
 
+    /// Guardian off-hand Sword is Willbender's, and Weaponmaster Training
+    /// hands it to a Firebrand too — see `weapon_hands::is_legal`.
     #[test]
-    fn select_weapons_firebrand_does_not_dual_wield_swords() {
+    fn select_weapons_firebrand_may_dual_wield_swords() {
         let mut weapons = std::collections::HashMap::new();
         weapons.insert("Sword".into(), weapon(&["Mainhand", "Offhand"]));
         let prof = Profession {
@@ -2705,7 +2686,7 @@ mod land_weapon_tests {
         select_weapons(&mut candidates, &prof, &db, &OptimizationWeights::default());
         let (s1m, s1o, _, _) = &candidates[0].weapons;
         assert_eq!(s1m.as_deref(), Some("Sword"));
-        assert_ne!(s1o.as_deref(), Some("Sword"));
+        assert_eq!(s1o.as_deref(), Some("Sword"));
     }
 
     #[test]

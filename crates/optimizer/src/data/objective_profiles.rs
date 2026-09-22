@@ -62,6 +62,80 @@ pub struct AxisWeights {
     pub control: f64,
 }
 
+/// The direction a role serves at one group size.
+///
+/// The weights alone say how much each axis is worth, which is not the same
+/// as what the role is for: WvW_Support weights sustain 0.55 above healing
+/// 0.25, so "nearest to the support weights" measured out as a bruiser
+/// across the whole corpus. Focus names the direction, avoid names what
+/// delivering cannot earn credit for, and the two are read by
+/// [`crate::scoring::intent_alignment`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IntentRow {
+    /// Axis keys (`power`, `condition`, `boon_support`, `healing`,
+    /// `sustain`, `control`) this role exists to deliver at this scale.
+    #[serde(default)]
+    pub focus: Vec<String>,
+    /// Axis keys delivering which says nothing good about this role. A
+    /// build that heals its party is not thereby a better zerg DPS.
+    #[serde(default)]
+    pub avoid: Vec<String>,
+    /// How much of its own survival this role has to carry at this scale:
+    /// `strict` alone, `moderate` in a havoc group, `shared` in a squad.
+    /// Documentation for the gate calibration; nothing reads it yet.
+    #[serde(default)]
+    pub self_reliance: String,
+}
+
+/// One [`IntentRow`] per group size.
+///
+/// The same role is a different job at a different scale: alone you carry
+/// your own cleanse and your own sustain, in a zerg the squad carries them
+/// and what is left is your contribution to it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IntentMatrix {
+    #[serde(default)]
+    pub solo: IntentRow,
+    #[serde(default)]
+    pub party: IntentRow,
+    #[serde(default)]
+    pub squad: IntentRow,
+}
+
+impl IntentMatrix {
+    /// The row for a group size.
+    pub fn row(&self, tier: crate::scenario::CombatTier) -> &IntentRow {
+        match tier {
+            crate::scenario::CombatTier::Solo => &self.solo,
+            crate::scenario::CombatTier::Party => &self.party,
+            crate::scenario::CombatTier::Squad => &self.squad,
+        }
+    }
+
+    /// The three rows with their names, for tests and dumps.
+    pub fn rows(&self) -> [(&'static str, &IntentRow); 3] {
+        [
+            ("solo", &self.solo),
+            ("party", &self.party),
+            ("squad", &self.squad),
+        ]
+    }
+}
+
+impl AxisWeights {
+    /// The six axes in [`crate::scoring::AXIS_KEYS`] order.
+    pub fn as_array(&self) -> [f64; 6] {
+        [
+            self.power,
+            self.condition,
+            self.boon_support,
+            self.healing,
+            self.sustain,
+            self.control,
+        ]
+    }
+}
+
 /// Normalization constants for each scoring axis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizationConstants {
@@ -108,6 +182,9 @@ pub struct ViabilityGateConfig {
 pub struct ObjectiveProfile {
     pub objective_profile_id: String,
     pub axis_weights: AxisWeights,
+    /// What this role is FOR, by group size. See [`IntentRow`].
+    #[serde(default)]
+    pub intent: IntentMatrix,
     pub weight_budget: f64,
     pub normalization_constants: NormalizationConstants,
     /// Boon type → relative priority (0.0–1.0).
@@ -357,6 +434,109 @@ fn validate_profile(profile: &ObjectiveProfile, mode: &str) -> Result<(), Object
 
 #[cfg(test)]
 mod tests {
+
+    /// Every (profile, group size) row declares a direction, and the two
+    /// lists never contradict each other.
+    ///
+    /// The axis names are the `scoring::AXIS_KEYS`, so a typo is a silently
+    /// ignored axis rather than a parse error - which is exactly the failure
+    /// a data test is for.
+    #[test]
+    fn every_intent_row_declares_a_focus_and_no_axis_is_both() {
+        const AXES: [&str; 6] = [
+            "power",
+            "condition",
+            "boon_support",
+            "healing",
+            "sustain",
+            "control",
+        ];
+        /// Roles that focus healing and still hit things on purpose.
+        ///
+        /// A commander leads a squad: it carries boons and stays up, and
+        /// what damage it does is not the reason it is in the group, but
+        /// punishing it for hitting anything would file a tag behind a
+        /// backline healer for a commander request. Hybrid support says in
+        /// its own name that it does both.
+        const MAY_FOCUS_HEALING_AND_POWER: [&str; 4] = [
+            "WvW_Commander",
+            "PvE_Commander",
+            "PvP_Commander",
+            "PvE_Hybrid_Support",
+        ];
+        /// Roles whose Solo row deliberately does NOT focus sustain.
+        ///
+        /// The glass cannons: a roamer or a burst assassin forgoes sustain
+        /// on purpose and dies to anything that lands, which is the trade
+        /// that makes the build. Scoring them for sustaining would file
+        /// every bruiser above every assassin for an assassin request.
+        const NO_SOLO_SUSTAIN: [&str; 5] = [
+            "WvW_Roamer",
+            "PvE_Harasser",
+            "PvP_Harasser",
+            "PvP_Burst",
+            "PvP_Condi",
+        ];
+        for file in objective_profiles().files.values() {
+            for profile in &file.profiles {
+                let id = &profile.objective_profile_id;
+                for (tier, row) in profile.intent.rows() {
+                    assert!(
+                        !row.focus.is_empty(),
+                        "{id} [{tier}] declares no focus axis - a role with no                          direction cannot be matched against"
+                    );
+                    for axis in row.focus.iter().chain(row.avoid.iter()) {
+                        assert!(
+                            AXES.contains(&axis.as_str()),
+                            "{id} [{tier}]: unknown axis {axis:?}"
+                        );
+                    }
+                    for axis in &row.focus {
+                        assert!(
+                            !row.avoid.contains(axis),
+                            "{id} [{tier}]: {axis} is both focus and avoid"
+                        );
+                    }
+                    assert!(
+                        !row.self_reliance.is_empty(),
+                        "{id} [{tier}]: no self-reliance expectation"
+                    );
+                }
+                // A role that exists to keep other people alive is not
+                // scored for hitting things. Read off the row rather than
+                // the profile's name: a name is exactly the evidence this
+                // path does not trust, and PvP_Sustain is the PvP healer
+                // chip while PvE_Hybrid_Support is not a support at all.
+                for (tier, row) in profile.intent.rows() {
+                    let heals = row.focus.iter().any(|a| a == "healing");
+                    if heals && !MAY_FOCUS_HEALING_AND_POWER.contains(&id.as_str()) {
+                        assert!(
+                            row.avoid.iter().any(|a| a == "power"),
+                            "{id} [{tier}] focuses healing and must avoid power \
+                             (add it to MAY_FOCUS_HEALING_AND_POWER with a reason \
+                             if it genuinely does both)"
+                        );
+                    }
+                }
+                // Alone, everything that is not a support or a declared
+                // glass cannon has to survive on its own.
+                let solo = profile.intent.row(crate::scenario::CombatTier::Solo);
+                // Read off the row rather than the name: PvP_Sustain is the
+                // PvP healer chip, and a name is exactly the evidence this
+                // path does not trust.
+                let supportish = solo
+                    .focus
+                    .iter()
+                    .any(|a| a == "healing" || a == "boon_support");
+                if !supportish && !NO_SOLO_SUSTAIN.contains(&id.as_str()) {
+                    assert!(
+                        solo.focus.iter().any(|a| a == "sustain"),
+                        "{id} [solo] must focus sustain - alone there is nobody                          else to carry it (add it to NO_SOLO_SUSTAIN with a                          reason if the role forgoes sustain on purpose)"
+                    );
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]

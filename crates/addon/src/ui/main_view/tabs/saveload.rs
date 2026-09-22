@@ -906,6 +906,9 @@ fn saved_to_suggestion(
         rotation: None,
         viability: None,
         benchmark_delta: None,
+        // Not measured against the community here, so nothing to say about
+        // whether the corpus is on disk.
+        benchmarks_synced: false,
         data_quality: gw2_optimizer::data::DataQuality::Verified,
         quality_reasons: vec![],
         coverage_note: None,

@@ -330,15 +330,7 @@ fn format_skill_entry(out: &mut String, skill: &Skill) {
     }
 
     // Stun break flag
-    let has_stunbreak = skill.facts.iter().any(|f| {
-        matches!(
-            f,
-            Fact::StunBreak {
-                value: Some(true),
-                ..
-            }
-        )
-    });
+    let has_stunbreak = crate::rotation::builder::skill_breaks_stun(skill);
     if has_stunbreak {
         out.push_str("    ★ STUN BREAK\n");
     }

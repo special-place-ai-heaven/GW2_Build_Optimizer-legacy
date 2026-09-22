@@ -46,6 +46,12 @@ pub struct BuildSuggestion {
     /// Benchmark delta vs closest community reference build.
     /// None when no benchmark data has been scraped yet.
     pub benchmark_delta: Option<gw2_optimizer::benchmark::BenchmarkDelta>,
+    /// Whether any community builds were on disk when this was evaluated.
+    ///
+    /// `benchmark_delta: None` has two very different causes and the overlay
+    /// named the wrong one: never synced, or synced but nothing published for
+    /// this profession and role could be scored in this scenario.
+    pub benchmarks_synced: bool,
     /// Data quality assessment from the optimizer pipeline.
     pub data_quality: gw2_optimizer::data::DataQuality,
     /// Human-readable reasons for quality degradation (empty when Verified).
@@ -1214,19 +1220,62 @@ fn render_data_quality_badge(ui: &Ui, suggestion: &BuildSuggestion) {
     }
 }
 
+/// The amber the viability report already uses for a gate that did not pass.
+const OTHER_ROLE_WARNING: [f32; 4] = [1.0, 0.7, 0.2, 1.0];
+
+/// Same amber, for a reference card that did not pass its gates either.
+pub(crate) const DEMOTED_PICK: [f32; 4] = OTHER_ROLE_WARNING;
+
+/// The published role out of a reference tab's summary.
+///
+/// `adopt_pick_tab` writes the site's own role string first and appends the
+/// weapons after a middot, so the role is everything before it.
+fn published_role(build_summary: &str) -> &str {
+    build_summary
+        .split(" \u{00b7} ")
+        .next()
+        .unwrap_or(build_summary)
+        .trim()
+}
+
 fn render_benchmark_delta(ui: &Ui, suggestion: &BuildSuggestion) {
+    // A published reference IS the yardstick. Scoring it against itself
+    // printed "no benchmark data" on a tab that is benchmark data.
+    if !suggestion.source_url.is_empty() {
+        if ui.collapsing_header(t("bench.header"), TreeNodeFlags::DEFAULT_OPEN) {
+            ui.text(format!(
+                "  {}",
+                tf(
+                    "bench.is_reference",
+                    &[
+                        ("site", &title_case(&site_name(&suggestion.source_url))),
+                        ("role", published_role(&suggestion.build_summary)),
+                    ],
+                )
+            ));
+        }
+        return;
+    }
     match &suggestion.benchmark_delta {
         None => {
-            // No data — show subtle hint in collapsed section
+            // Never synced and "synced, but nothing here could be scored"
+            // are different problems; only the first is fixed in Settings.
             if ui.collapsing_header(t("bench.header"), TreeNodeFlags::empty()) {
-                ui.text_colored(
-                    crate::ui::theme::pal().muted,
-                    format!("  {}", t("bench.none")),
-                );
-                ui.text_colored(
-                    crate::ui::theme::pal().muted,
-                    format!("  {}", t("bench.sync_hint")),
-                );
+                if suggestion.benchmarks_synced {
+                    ui.text_colored(
+                        crate::ui::theme::pal().muted,
+                        format!("  {}", t("bench.no_scorable")),
+                    );
+                } else {
+                    ui.text_colored(
+                        crate::ui::theme::pal().muted,
+                        format!("  {}", t("bench.none")),
+                    );
+                    ui.text_colored(
+                        crate::ui::theme::pal().muted,
+                        format!("  {}", t("bench.sync_hint")),
+                    );
+                }
             }
         }
         Some(delta) => {
@@ -1240,28 +1289,112 @@ fn render_benchmark_delta(ui: &Ui, suggestion: &BuildSuggestion) {
             } else {
                 ([1.0, 0.3, 0.2, 1.0], "bench.far_below")
             };
-            let status = t(status_key);
-
-            let header = tf(
-                "fmt.vs_meta",
-                &[
-                    ("src", &title_case(&delta.source)),
-                    ("pct", &format!("{:.0}", pct)),
-                    ("status", &status),
-                ],
-            );
+            // A reference for a different job scores honestly under the
+            // player's weights but is not a like-for-like comparison, so the
+            // header drops the on-par/far-below word rather than claiming
+            // this build beat a meta build it was never measured against.
+            let header = if delta.role_matched {
+                tf(
+                    "fmt.vs_meta",
+                    &[
+                        ("src", &title_case(&delta.source)),
+                        ("pct", &format!("{:.0}", pct)),
+                        ("status", &t(status_key)),
+                    ],
+                )
+            } else {
+                tf(
+                    "fmt.vs_meta_other_role",
+                    &[
+                        ("src", &title_case(&delta.source)),
+                        ("role", &delta.role),
+                        ("pct", &format!("{:.0}", pct)),
+                    ],
+                )
+            };
 
             if ui.collapsing_header(&header, TreeNodeFlags::DEFAULT_OPEN) {
+                if delta.role_matched {
+                    ui.text_colored(
+                        col,
+                        format!(
+                            "  {}",
+                            tf("fmt.pct_ref", &[("pct", &format!("{:.0}", pct))])
+                        ),
+                    );
+                } else {
+                    ui.text_colored(
+                        OTHER_ROLE_WARNING,
+                        format!("  {}", t("bench.other_role_title")),
+                    );
+                    ui.text(format!(
+                        "  {}",
+                        tf(
+                            "bench.other_role",
+                            &[("role_hint", &delta.requested_role), ("role", &delta.role),],
+                        )
+                    ));
+                }
+                // Fine print in the matched case; part of the warning when
+                // the reference does a different job.
                 ui.text_colored(
-                    col,
+                    if delta.role_matched {
+                        crate::ui::theme::pal().muted
+                    } else {
+                        crate::ui::theme::pal().cream
+                    },
                     format!(
                         "  {}",
-                        tf("fmt.pct_ref", &[("pct", &format!("{:.0}", pct))])
+                        tf(
+                            // The role is the whole point of the number, so
+                            // name it when we have one.
+                            if delta.requested_role.trim().is_empty() {
+                                "bench.basis"
+                            } else {
+                                "bench.basis_role"
+                            },
+                            &[
+                                ("role_hint", &delta.requested_role),
+                                ("ref", &format!("{:.2}", delta.ref_score)),
+                                ("ours", &format!("{:.2}", delta.our_score)),
+                            ],
+                        )
                     ),
                 );
+                // Both scores are measured output whether or not the gates
+                // passed, so say which side was refused instead of dropping
+                // the comparison. A published page is written for its own
+                // scale, so a failed reference gate is normal.
+                if !delta.ref_viable || !delta.our_viable {
+                    let word = |ok: bool| {
+                        if ok {
+                            t("bench.gate_passed")
+                        } else {
+                            t("bench.gate_failed")
+                        }
+                    };
+                    ui.text_colored(
+                        crate::ui::theme::pal().muted,
+                        format!(
+                            "  {}",
+                            tf(
+                                "bench.gate_caveat",
+                                &[
+                                    ("ref", &word(delta.ref_viable)),
+                                    ("ours", &word(delta.our_viable)),
+                                ],
+                            )
+                        ),
+                    );
+                }
                 ui.spacing();
 
                 // Score bar
+                let bar_col = if delta.role_matched {
+                    col
+                } else {
+                    OTHER_ROLE_WARNING
+                };
                 let bar_width = ui.content_region_avail()[0] - 16.0;
                 let filled = (bar_width * (pct / 100.0).min(1.0) as f32).max(0.0);
                 let pos = ui.cursor_screen_pos();
@@ -1279,7 +1412,7 @@ fn render_benchmark_delta(ui: &Ui, suggestion: &BuildSuggestion) {
                     draw.add_rect(
                         [pos[0] + 8.0, pos[1] + 2.0],
                         [pos[0] + 8.0 + filled, pos[1] + 14.0],
-                        col,
+                        bar_col,
                     )
                     .filled(true)
                     .build();
@@ -1326,7 +1459,7 @@ fn format_combat_live(metrics: Option<&CombatMetrics>) -> String {
     }
 }
 
-fn viability_gate_label(gate: &gw2_optimizer::ViabilityGate) -> &'static str {
+pub(crate) fn viability_gate_label(gate: &gw2_optimizer::ViabilityGate) -> &'static str {
     use gw2_optimizer::ViabilityGate::*;
     match gate {
         StunbreakCount => "Stunbreaks",
@@ -1373,7 +1506,14 @@ fn render_viability_report(ui: &Ui, report: &ViabilityReport) {
         ui.spacing();
         for gate in &report.gates {
             // Overlay fonts have no colour emoji; ✅/❌ become "?".
-            let (icon, col): (&str, [f32; 4]) = if gate.passed {
+            //
+            // A skipped gate reports `passed` so that every "list the
+            // failures" caller stays correct, and it was being drawn as a
+            // green OK - a claim we never checked, shown as a pass. It is
+            // its own muted row.
+            let (icon, col): (&str, [f32; 4]) = if gate.skipped {
+                ("--", crate::ui::theme::pal().muted)
+            } else if gate.passed {
                 ("OK", [0.4, 0.9, 0.4, 1.0])
             } else {
                 ("NO", [1.0, 0.3, 0.2, 1.0])

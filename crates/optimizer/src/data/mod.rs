@@ -19,6 +19,7 @@ pub mod quality;
 pub mod rotation_profiles;
 pub mod shroud;
 pub mod slot_budgets;
+pub mod stunbreak_sources;
 pub mod universal_formulas;
 pub mod weapon_hands;
 
@@ -192,6 +193,9 @@ pub fn initialize() -> DataState {
         errors.extend(errs);
     }
     if let Err(errs) = weapon_hands::try_load_weapon_hands() {
+        errors.extend(errs);
+    }
+    if let Err(errs) = stunbreak_sources::try_load_stunbreak_sources() {
         errors.extend(errs);
     }
 

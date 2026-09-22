@@ -539,6 +539,7 @@ mod tests {
             effects,
             next_chain: None,
             is_stunbreak: false,
+            reaches_allies: false,
             weapon_set: 0,
             categories: Vec::new(),
             slot_name: None,

@@ -2,6 +2,28 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## 1.14.39 - 2026-09-22
+
+Reliable matching and an honest simulator. SCHEMA CHANGE = Y (objective profiles gain per-scale `intent` rows; benchmark rows gain `benchmarks_synced`; new `data/stunbreak_sources.json`).
+
+- Intent is directional: every objective profile declares focus and avoid axes per scale (solo/party/squad); `scoring::intent_alignment` with one calibrated floor replaces every label- or cosine-based rule.
+- Provider cards: shown on the Improve tab; chosen by measured alignment only, one per site, none when nothing is close; persist across tab switches; failing gates named on the card; abstentions shown muted.
+- vs-meta meter: both sides refereed under the same weights and simulator; reference chosen by the same alignment rule; viability caveat when either side fails a gate.
+- Improve never serves an off-intent or non-viable result over a viable current build; an unavailable baseline is explained, not hidden.
+- Meta-seeded search: aligned published builds enter the beam as seeds (locks respected).
+- Referee: real measured axes for refused builds on the ranking path; `ranked_direction_score`; the panel renders the referee's viability (no divergent duplicate).
+- Ammo skills amortise `Count Recharge / Maximum Count`; healing and boon axes count ally-facing output only; WvW rank keys run at every scale.
+- Resource models per wiki: Revenant legend swap and upkeep, Mesmer illusions from API categories, Bladesworn Flow, Warrior adrenaline by bars, Thief Preparedness; unmodelled resources abstain by name.
+- Gates: ResourceLegality is a starvation ratio with an unpayable hard fail; CleanseRate lets off-bar rate satisfy the floor; StunbreakCount reads descriptions and a wiki-catalogued table.
+- Validator: flat published weapon lists packed by hand; elite weapons legal without the spec (Weaponmaster); PvP sigils/runes filed structurally. Published-build rejects: WvW 57->5, PvE 192->16.
+- Corpus acceptance suite: 740 synced builds as fixtures; card outcomes, refusal and unplatable budgets per profession, ratcheting; one shared `ScenarioSpec::for_request` for addon, tests and examples.
+- UI: Stop on the Improve banner; reference tabs fully evaluated off the render thread.
+- Docs: `docs/doctrine.md`, `docs/sprints/008-data-driven-simulator.md`.
+
+## 1.14.38 - 2026-09-22
+
+Superseded by 1.14.39 the same day; changes folded in above.
+
 ## 1.14.37 - 2026-09-22
 
 Full-code-review remediation FCR-20260922T145300Z-ccc85e1: 10 findings closed. SCHEMA CHANGE = N.

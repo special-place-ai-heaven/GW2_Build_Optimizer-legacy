@@ -65,6 +65,111 @@ pub const AXIS_KEYS: [&str; 6] = [
     "control",
 ];
 
+/// How much a build is punished for delivering what its role says to avoid.
+///
+/// One unit: an avoided axis fully delivered cancels a fully delivered
+/// focus axis. The lever on "a zerg DPS that heals is still a zerg DPS"
+/// versus "a healer is not a DPS at all".
+pub const AVOID_PENALTY: f64 = 1.0;
+
+/// How well a measured build serves the DIRECTION a role is written for.
+///
+/// ```text
+/// alignment = SUM(focus) w_i a_i / SUM(focus) w_i  -  AVOID_PENALTY * mean(a_j over avoid)
+/// ```
+///
+/// `a` is the referee's realized axes (fractions of the realized norms,
+/// roughly 0..1) and `w` the profile's own axis weights, so the focus term
+/// is a weighted achievement of exactly the axes the role exists to
+/// deliver, and the avoid term subtracts what it exists not to.
+///
+/// Why not the angle between the weights and the axes, and why not the
+/// weighted score over all six: both are dominated by what every build has
+/// in common. Measured over the 740-row corpus, the cosine ranked
+/// damage-labelled references ABOVE support-labelled ones for a support
+/// request (median 0.786 against 0.762), because sustain is large for
+/// everything and the support profile weights sustain 0.55 over healing
+/// 0.25. Scoring only the focus axes takes the common mode out of the
+/// comparison, and the avoid term is what makes the measure signed: a build
+/// can be worse than nothing for a role, not merely less good.
+///
+/// The row is chosen by GROUP SIZE: the same role is a different job alone
+/// and in a squad. Solo rows focus the axes you have to carry yourself;
+/// squad rows drop them, because the squad carries them, and focus what you
+/// contribute to it.
+///
+/// Zero focus weight (a focus axis the profile happens to weight 0) falls
+/// back to an unweighted mean of the focus axes rather than dividing by
+/// zero. No focus axes at all scores 0.0, which the data test forbids.
+pub fn intent_alignment(
+    profile: &crate::data::objective_profiles::ObjectiveProfile,
+    tier: crate::scenario::CombatTier,
+    realized: &RealizedAxes,
+) -> f64 {
+    let realized = realized.as_array();
+    let row = profile.intent.row(tier);
+    let axis = |key: &str| AXIS_KEYS.iter().position(|k| *k == key);
+    let weight = |i: usize| profile.axis_weights.as_array()[i];
+
+    let focus: Vec<usize> = row.focus.iter().filter_map(|k| axis(k)).collect();
+    if focus.is_empty() {
+        return 0.0;
+    }
+    let weight_sum: f64 = focus.iter().map(|i| weight(*i)).sum();
+    let delivered = if weight_sum > 0.0 {
+        focus.iter().map(|i| weight(*i) * realized[*i]).sum::<f64>() / weight_sum
+    } else {
+        focus.iter().map(|i| realized[*i]).sum::<f64>() / focus.len() as f64
+    };
+
+    let avoid: Vec<usize> = row.avoid.iter().filter_map(|k| axis(k)).collect();
+    let penalty = if avoid.is_empty() {
+        0.0
+    } else {
+        AVOID_PENALTY * avoid.iter().map(|i| realized[*i]).sum::<f64>() / avoid.len() as f64
+    };
+    delivered - penalty
+}
+
+/// How aligned a measured build has to be before it is worth offering.
+///
+/// Calibrated on the player's synced corpus (740 rows) with real game data,
+/// after RC-1 and RC-2 landed, under the WvW Buffer/Support intent at Party
+/// tier: every WvW reference refereed, alignment read off the measured
+/// axes, split by what the PAGE claims the build is
+/// (`examples/closest_builds.rs`, `PICKS_FLOOR=1`).
+///
+/// | published | n | p10 | median | p90 |
+/// |---|---|---|---|---|
+/// | support words | 22 | -0.007 | +0.028 | +0.210 |
+/// | damage words | 113 | -0.115 | -0.034 | +0.017 |
+///
+/// The sweep over candidate floors, as a fraction of each population kept:
+///
+/// | floor | support kept | damage kept |
+/// |---|---|---|
+/// | -0.05 | 100% | 63% |
+/// | 0.00 | 73% | 18% |
+/// | +0.02 | 59% | 10% |
+/// | +0.05 | 36% | 6% |
+/// | +0.20 | 18% | 1% |
+///
+/// 0.0 separates the two populations best (support minus damage = 55
+/// points, against 49 at +0.02 and 37 at -0.05) and it is the only value
+/// that means something on its own: a build that delivers more of what the
+/// role is for than of what the role is written to avoid. Everything above
+/// it is a taste for fewer, better cards.
+///
+/// The split is by published WORDS, which is a diagnostic population and
+/// not ground truth - the site's label is exactly the evidence this path
+/// refuses to select on. It is used here because the question the floor
+/// answers is "does the measurement agree with what people publish".
+///
+/// One floor for every consumer - the picks cards, the "vs meta" meter and
+/// the optimizer's own off-intent check - because they all ask the same
+/// question of the same two vectors.
+pub const INTENT_ALIGNMENT_FLOOR: f64 = 0.0;
+
 /// Default total weight budget. Now loaded from objective profile data at runtime.
 /// This constant is kept for backward compatibility with code that doesn't have
 /// a profile available yet.
