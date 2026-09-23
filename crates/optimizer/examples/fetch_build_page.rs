@@ -145,6 +145,9 @@ fn main() {
         "  parsed as guildjen: {:?}",
         gw2_optimizer::providers::guildjen::parse(&html)
     );
+    let (benchmark_dps, log_url) = gw2_optimizer::providers::snowcrows::benchmark(&html);
+    println!("  benchmark_dps (snowcrows): {benchmark_dps:?}");
+    println!("  log_url       (snowcrows): {log_url:?}");
 
     if let Some(path) = out {
         let mut f = std::fs::File::create(&path).expect("create");

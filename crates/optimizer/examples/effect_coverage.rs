@@ -62,7 +62,12 @@ Sources the simulator cannot execute yet: {todo}"
         for source in profession_sources(&db, &profession) {
             println!(
                 "{} {} {} {}: {:?} {}",
-                source.slot, source.id, source.specialization, source.name, source.verdict, source.reason
+                source.slot,
+                source.id,
+                source.specialization,
+                source.name,
+                source.verdict,
+                source.reason
             );
         }
     }

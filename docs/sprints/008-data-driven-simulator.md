@@ -16,12 +16,12 @@ Source of truth: GW2 API facts + wiki pages, written as
 
 | Number | Now | Target |
 |---|---|---|
-| Minor traits with a record / executable (not a placeholder) | 169 / 243, executable 34 | 243 / 243 executable |
+| Minor traits with a record / executable (not a placeholder) | 209 / 243, executable 95, abstaining 10 (2026-09-23: Ele 22/1/4, Engi 18/2/7, Guardian 17/3/7, Ranger 14/4/9 exec/abst/cov of 27, none 0) | 243 / 243 executable |
 | Major traits with a record / executable | 529 / 729, executable 121 | 729 / 729 executable |
 | Rune tier lines / sigils / relics executable | 2 of 642 lines / 7 of 81 / 4 of 128 | all |
 | Profession-mechanic skills / elite skills executable | 1 of 367 / 0 of 133 | all with a proc or effect |
 | Coverage placeholders still typed `Passive` (schema artifact) | 0 (582 migrated to NotApplicable, 2026-09-22) | 0, guarded by validation rule 15 |
-| Minor-trait records that are flat "Passive" but the wiki describes a trigger, interval, combat state or weapon condition | 145 unclassified | 0 (each is either genuinely passive, with the wiki line cited, or a real trigger record) |
+| Minor-trait records that are flat "Passive" but the wiki describes a trigger, interval, combat state or weapon condition | 0 for Ele/Engi/Guardian/Ranger (every remaining coverage block names the trigger or field the format lacks); other four professions not yet read | 0 (each is either genuinely passive, with the wiki line cited, or a real trigger record) |
 | Rune, sigil, relic effects modelled as records (not text parse) | 2 / 3 / 1 records | every tier bonus and proc that the wiki lists |
 | Records lacking duration, ICD or stacking where the wiki gives one | measure | 0 |
 
@@ -30,7 +30,45 @@ example that prints the table above; the corpus suite gains a test that the
 counts do not regress.
 
 Order: Elementalist, Engineer, Guardian, Ranger (the four that abstain), then
-Warrior, Mesmer, Revenant, Thief; Necromancer is the reference (27/27).
+Warrior, Mesmer, Revenant, Thief; Necromancer is the reference (27/27 with a
+record; 10/27 executable, so it is a reference for record style, not for the
+number).
+
+Increment log:
+
+- 2026-09-23, minors for Ele/Engi/Guardian/Ranger: 779 -> 889 WvW records,
+  582 -> 581 coverage blocks (ratchet in `gate1_coverage_only_ratchets_down`).
+  `effect_coverage` prints per-profession exec/abst/cov/none and, with a
+  profession argument, one line per trait with the abstain reason. Review
+  (`review_minor_records`, 183 records) found the WvW numbers right, nine
+  data findings (fixed) and one engine bug (fixed: a trait's parsed always-on
+  Percent fact and its executed Conditional record both applied; the timeline
+  now divides out the trait's share, test
+  `wvw_params_divides_out_trait_percent_with_executed_conditional`).
+
+Engine gaps the review measured (counted Executable, never run). The next
+engine increment (single-writer) closes these before more professions are
+authored, or the executable column overstates:
+
+| Gap | Shape | Where |
+|---|---|---|
+| E2 | `Conditional` loads only strike / crit records with a `prerequisite`; gated stat records (SelfBoon, InCombat, HealthThreshold gates with no prerequisite; FlatStat / IncomingStrikeMultiplier on attunement) never run | `wvw_timeline.rs` record loading (~1271-1310, 1383) |
+| E3 | `OnHealthThreshold` loads only `StrikeDamagePct` | ~1314 |
+| E4 | `Passive` records carrying `gates` or `scale` are skipped | ~1204 |
+| E5 | timed `ConditionDamagePct` procs have no branch (Twice as Vicious 2127:1, 2356:1) | `trigger_procs` ~3872/3935 |
+| E6 | `MechanicUnlock` has no consumer (33 records, 19 sources) | none yet |
+| E7 | `FlatStat` / `StatConversion` records name no attribute, so no engine can execute them | format |
+| E8 | `is_attuned` counts a Weaver's off-hand for core traits | `attunement.rs:102` |
+| E9 | `AppliesBoon` with a non-boon `status_kind` (auras, Elemental Empowerment) fires as an inert marker scaled by boon duration | timeline |
+| E10 | fact parser sums 3- and 4-way API splits and takes PvE values in WvW (Electric Discharge +100 crit damage, Pure of Sight ~+42 %, Laser's Edge ~+45 %, Vow of the Untamed ~+51 %) | `combat.rs` `absorb_pair` |
+
+Format gaps the builders named (each is a coverage block today): on-weapon-swap,
+on-struck, on-ally-healed, on-kill, on-combo / on-aura, first-strike-after-
+combat-entry, endurance-regen category, barrier category, recharge-reduction
+category, distance scale with a floor, "either boon" gates, per-virtue / single-
+skill scope, pet-side stats and boon targets, heat / astral force / unleashed /
+Photon Forge / Radiant Forge / Celestial Avatar state, distinct-condition-count
+scale, "others only" healing.
 
 ## Gate 2: the state machine runs on data
 
@@ -55,6 +93,44 @@ calibrate prints no abstentions; fixtures pin the wiki numbers.
 
 Acceptance: `EXPECTED_REFUSALS` / `EXPECTED_UNPLATABLE` budgets ratchet down
 to these numbers; each remaining row carries its cause.
+
+### Gate 3b: fidelity against combat logs (added 2026-09-23)
+
+Gate pass rates say whether the referee agrees with the corpus; they do not say
+whether the simulator's numbers are the game's. The ground truth for that is
+arcdps logs parsed by Elite Insights: per-skill casts and hits, boon uptimes,
+cleanses, damage taken, downs, per player, per fight. `fidelity/` reads such a
+log, rebuilds each squad player's kit (spec, weapons, bar and opener from the
+log; traits from a chat code when one is supplied, else from the nearest
+validator-clean published build, every field with its provenance), runs it
+through the addon's own path (plate, validate, scenario, referee, flow sim) and
+prints per-observable errors and bands per (profession, mode, observable).
+Instrument: `cargo run -p gw2-optimizer --example log_compare -- <log|dir>`;
+suite: `crates/optimizer/tests/fidelity_logs.rs`; fixtures: three trimmed
+logs under `tests/fixtures/ei_logs/` (one Snow Crows golem log with its chat
+code, two WvW party logs).
+
+A log carries no traits, gear or chat code (verified against the EI model and
+the EVTC format), so WvW players without a supplied code are compared on
+corpus traits and the band partly measures distance from meta. Chat codes per
+log go in `codes.json`.
+
+Baseline (run 3 after review fixes, 11 of 11 squad players compared, bands keyed by elite spec; `EXPECTED_FIDELITY` ships
+empty and is seeded from the next run after the items below):
+
+| Finding | Number | Cause | Next |
+|---|---|---|---|
+| Golem Power Reaper DPS | ours 12.5k vs log 42.5k; shroud skills 0 for us, 15 of 20 log skills present | two causes multiplied: the golem grants all boons and 25 might while the sim is self-only, and the flow simulation never enters shroud (`rotation/simulator.rs` only swaps sets 1 and 2; shroud entry exists only in the WvW timeline; Lich Form likewise) | simulator: shroud entry in the flow sim (single-writer engine increment); benchmark boon assumptions into the flow sim |
+| WvW `dps_engaged` | one fight overshoots +67 % to +396 %, the other undershoots 27-75 % | not one cause: the simulator hits a target 100 % of 60 s (logs engage 27-46 % of active time, weapon skills connect 66-88 %), roaming neighbours chosen for zerg players, no miss/evade model, one simulator outlier (Spinal Shivers at 34 % of a Reaper's damage) | consume the fight profile (`fight_profile::extract`: availability, hit rate per class, incoming DPS, CC/min) as scenario data; supply chat codes for WvW fixtures |
+| PvE boon uptimes | scored against the player's self-generated share (EI `generated`): Quickness self 0.48 vs ours 0.10, Might self 9.9 vs ours 5.8 stacks; the golem's external boons (total 1.0 / 25) are printed beside, not scored | the simulator is self-only and its flow run never enters shroud | feed the benchmark's boon assumptions into the flow sim; re-measure after shroud |
+| `skill_share` TVD | 0.58-0.96 across WvW bands | the two items above plus name joins | re-measure after both |
+| `condi_fraction` | Engineer .005, Necromancer PvE .003, Mesmer .02 median | duration-free, the honest signal today | seed the ratchet on this and on uptimes once PvE boons are handled |
+
+Fight profiles the logs yielded (WvW party, 77-84 s): target availability
+0.27 / 0.46; incoming 1.8-1.9k DPS; CC received 1.9 / 5.2 per minute; strips
+received 11 per minute; downs 0.9-1.0 per player-minute. These are the numbers
+the scripted `WvwProfile::for_scenario` pressure cycle and the every-hit-lands
+assumption are to be replaced with.
 
 ## Gate 4: intent and matching
 

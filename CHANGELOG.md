@@ -2,6 +2,17 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## 1.14.40 - 2026-09-23
+
+Sprint 008 Gate 1, increment 2: minor-trait effect records for Elementalist, Engineer, Guardian and Ranger. SCHEMA CHANGE = N.
+
+- 110 new WvW effect records (779 -> 889), every one citing its wiki line with WvW numbers; the four professions have no unrecorded minor trait left (executable 34 -> 95 across all minors; remaining coverage blocks each name the trigger or field the format lacks).
+- Fix: a trait's always-on Percent fact and its executed Conditional record were both applied in the WvW timeline (Radiant Power, Symbolic Exposure, Pyromancer's Training, Shaped Charge); the trait's share is now divided out, like rune clauses.
+- `effect_coverage` prints per-profession executable / abstaining / coverage / none counts and, given a profession, one line per trait with its abstain reason.
+- Sprint plan records the engine gaps the review measured (records counted executable that the timeline never runs) as the next increment.
+- Fidelity harness: `fidelity/` reads Elite Insights combat logs, rebuilds each squad player's kit with provenance, runs it through the addon's own path and prints per-observable error bands; `log_compare` example, `fidelity_logs` suite, three trimmed log fixtures; fight profiles (target availability, hit rates, incoming pressure) extracted from real WvW fights. First baseline: the flow simulation never enters shroud for a golem Power Reaper (12.5k vs 42.5k), and WvW damage overshoots because every hit lands; both recorded in the sprint plan as the next engine work.
+- Snow Crows scraper captures the published benchmark DPS and the dps.report log link per build.
+
 ## 1.14.39 - 2026-09-22
 
 Reliable matching and an honest simulator. SCHEMA CHANGE = Y (objective profiles gain per-scale `intent` rows; benchmark rows gain `benchmarks_synced`; new `data/stunbreak_sources.json`).

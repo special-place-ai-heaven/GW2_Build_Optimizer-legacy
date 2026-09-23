@@ -55,6 +55,13 @@ pub struct BenchmarkBuild {
     /// scrape-time guess.
     #[serde(skip_serializing_if = "ProviderBuild::is_empty")]
     pub published: ProviderBuild,
+    /// The page's own measured DPS (Snowcrows "Last Benchmark Max"); other
+    /// sources publish none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_dps: Option<f64>,
+    /// The dps.report log behind `benchmark_dps`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_url: Option<String>,
 }
 
 /// Score delta between the optimizer's result and a community reference build.

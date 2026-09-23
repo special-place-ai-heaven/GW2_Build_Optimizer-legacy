@@ -3414,25 +3414,6 @@
       }
     },
     {
-      "effect_id": "trait:1010:coverage",
-      "source_type": "Trait",
-      "source_id": 1010,
-      "source_name": "Opening Strike",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Opening_Strike (read 2026-09-13: first strike on combat enter)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "opening strike"
-      }
-    },
-    {
       "effect_id": "trait:986:coverage",
       "source_type": "Trait",
       "source_id": 986,
@@ -3449,25 +3430,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "pet swap"
-      }
-    },
-    {
-      "effect_id": "trait:1009:coverage",
-      "source_type": "Trait",
-      "source_id": 1009,
-      "source_name": "Alpha Focus",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Alpha_Focus (read 2026-09-13: Opening Strike cripples)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "opening strike"
       }
     },
     {
@@ -3490,25 +3452,6 @@
       }
     },
     {
-      "effect_id": "trait:1011:coverage",
-      "source_type": "Trait",
-      "source_id": 1011,
-      "source_name": "Precise Strike",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Precise_Strike (read 2026-09-13: Opening Strike crit chance)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "opening strike"
-      }
-    },
-    {
       "effect_id": "trait:1698:coverage",
       "source_type": "Trait",
       "source_id": 1698,
@@ -3525,44 +3468,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "recharge"
-      }
-    },
-    {
-      "effect_id": "trait:1055:coverage",
-      "source_type": "Trait",
-      "source_id": 1055,
-      "source_name": "Rejuvenation",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Rejuvenation (read 2026-09-13: Beast skills grant regeneration around ranger)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "pet"
-      }
-    },
-    {
-      "effect_id": "trait:1056:coverage",
-      "source_type": "Trait",
-      "source_id": 1056,
-      "source_name": "Fortifying Bond",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Fortifying_Bond (read 2026-09-13: boons shared with pet)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "pet"
       }
     },
     {
@@ -3623,25 +3528,6 @@
       }
     },
     {
-      "effect_id": "trait:1080:coverage",
-      "source_type": "Trait",
-      "source_id": 1080,
-      "source_name": "Tail Wind",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Tail_Wind (read 2026-09-13: swiftness on weapon swap)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "weapon swap"
-      }
-    },
-    {
       "effect_id": "trait:1067:coverage",
       "source_type": "Trait",
       "source_id": 1067,
@@ -3680,25 +3566,6 @@
       }
     },
     {
-      "effect_id": "trait:1083:coverage",
-      "source_type": "Trait",
-      "source_id": 1083,
-      "source_name": "Furious Grip",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Furious_Grip (read 2026-09-13: fury on weapon swap)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "weapon swap"
-      }
-    },
-    {
       "effect_id": "trait:1064:coverage",
       "source_type": "Trait",
       "source_id": 1064,
@@ -3715,25 +3582,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "weapon swap"
-      }
-    },
-    {
-      "effect_id": "trait:1096:coverage",
-      "source_type": "Trait",
-      "source_id": 1096,
-      "source_name": "Natural Vigor",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Natural_Vigor (read 2026-09-13: endurance recovery +25%)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "endurance"
       }
     },
     {
@@ -3772,25 +3620,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "incoming condition"
-      }
-    },
-    {
-      "effect_id": "trait:1090:coverage",
-      "source_type": "Trait",
-      "source_id": 1090,
-      "source_name": "Companion's Defense",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Companion%27s_Defense (read 2026-09-13: protection on dodge for you and pet)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "dodge"
       }
     },
     {
@@ -3989,40 +3818,6 @@
       }
     },
     {
-      "effect_id": "trait:1992:0",
-      "source_type": "Trait",
-      "source_id": 1992,
-      "source_name": "Natural Mender",
-      "category": "OutgoingHealingPct",
-      "value": 15.0,
-      "stacking_rule": "Additive",
-      "trigger_rule": "Passive",
-      "uptime_model": {
-        "kind": "AlwaysOn"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Natural_Mender (read 2026-09-13: +15% healing to others in WvW/PvP; astral force while out of celestial is NeedsMechanic)"
-    },
-    {
-      "effect_id": "trait:1992:coverage",
-      "source_type": "Trait",
-      "source_id": 1992,
-      "source_name": "Natural Mender",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Natural_Mender (read 2026-09-13: astral force each interval while not in celestial avatar)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "celestial avatar"
-      }
-    },
-    {
       "effect_id": "trait:2058:coverage",
       "source_type": "Trait",
       "source_id": 2058,
@@ -4039,25 +3834,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "celestial avatar"
-      }
-    },
-    {
-      "effect_id": "trait:2359:coverage",
-      "source_type": "Trait",
-      "source_id": 2359,
-      "source_name": "Teachings of the Tengu",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Teachings_of_the_Tengu (read 2026-09-13: Cyclone Bow and Wind Force / Hawkeye)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "wind force"
       }
     },
     {
@@ -4156,25 +3932,6 @@
       }
     },
     {
-      "effect_id": "trait:2341:coverage",
-      "source_type": "Trait",
-      "source_id": 2341,
-      "source_name": "Jetstream",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Jetstream (read 2026-09-13: base movement speed; Hawkeye superspeed)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "wind force"
-      }
-    },
-    {
       "effect_id": "trait:2425:coverage",
       "source_type": "Trait",
       "source_id": 2425,
@@ -4229,25 +3986,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "arrows"
-      }
-    },
-    {
-      "effect_id": "trait:2151:coverage",
-      "source_type": "Trait",
-      "source_id": 2151,
-      "source_name": "Elevated Bond",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Elevated_Bond (read 2026-09-13: Stances access and beastmode merge)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "transform"
       }
     },
     {
@@ -4346,25 +4084,6 @@
       }
     },
     {
-      "effect_id": "trait:2127:coverage",
-      "source_type": "Trait",
-      "source_id": 2127,
-      "source_name": "Twice as Vicious",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Twice_as_Vicious (read 2026-09-13: disable grants timed strike/condition damage)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "disable trigger"
-      }
-    },
-    {
       "effect_id": "trait:2128:coverage",
       "source_type": "Trait",
       "source_id": 2128,
@@ -4381,25 +4100,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "stance duration"
-      }
-    },
-    {
-      "effect_id": "trait:2268:coverage",
-      "source_type": "Trait",
-      "source_id": 2268,
-      "source_name": "Unleashed Power",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Unleashed_Power (read 2026-09-13: Cantrips and Unleash; pet unleashed skills)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "unleash"
       }
     },
     {
@@ -8038,98 +7738,6 @@
       }
     },
     {
-      "effect_id": "trait:604:0",
-      "source_type": "Trait",
-      "source_id": 604,
-      "source_name": "Virtue of Resolution",
-      "category": "AppliesBoon",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnSkillUse",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Virtue_of_Resolution (read 2026-09-13: Resolution 3 s when you activate a Virtue; resolution duration increase is NeedsMechanic boon extension)",
-      "status_operation": {
-        "operation_type": "AppliesBoon",
-        "target_side": "self",
-        "status_kind": "Resolution",
-        "amount_mode": "Stacks",
-        "amount_value": 1.0,
-        "target_scope": "self",
-        "base_duration_ms": 3000
-      },
-      "trigger_scope": {
-        "Category": "Virtue"
-      }
-    },
-    {
-      "effect_id": "trait:604:coverage",
-      "source_type": "Trait",
-      "source_id": 604,
-      "source_name": "Virtue of Resolution",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Virtue_of_Resolution (read 2026-09-13: Resolution you grant has +25% duration)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "boon extension"
-      }
-    },
-    {
-      "effect_id": "trait:2222:0",
-      "source_type": "Trait",
-      "source_id": 2222,
-      "source_name": "Righteous Sprint",
-      "category": "AppliesBoon",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnSkillUse",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Righteous_Sprint (read 2026-09-13: Swiftness 5 s when you activate a Virtue; +25% movement speed is NeedsMechanic movement skill)",
-      "status_operation": {
-        "operation_type": "AppliesBoon",
-        "target_side": "self",
-        "status_kind": "Swiftness",
-        "amount_mode": "Stacks",
-        "amount_value": 1.0,
-        "target_scope": "self",
-        "base_duration_ms": 5000
-      },
-      "trigger_scope": {
-        "Category": "Virtue"
-      }
-    },
-    {
-      "effect_id": "trait:2222:coverage",
-      "source_type": "Trait",
-      "source_id": 2222,
-      "source_name": "Righteous Sprint",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Righteous_Sprint (read 2026-09-13: +25% movement speed)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "movement skill"
-      }
-    },
-    {
       "effect_id": "trait:2105:0",
       "source_type": "Trait",
       "source_id": 2105,
@@ -8265,25 +7873,6 @@
       }
     },
     {
-      "effect_id": "trait:564:coverage",
-      "source_type": "Trait",
-      "source_id": 564,
-      "source_name": "Vigorous Precision",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Vigorous_Precision (read 2026-09-13: Vigor at end of dodge roll)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "dodge"
-      }
-    },
-    {
       "effect_id": "trait:1899:coverage",
       "source_type": "Trait",
       "source_id": 1899,
@@ -8352,25 +7941,6 @@
       }
     },
     {
-      "effect_id": "trait:1685:coverage",
-      "source_type": "Trait",
-      "source_id": 1685,
-      "source_name": "Purity of Body",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Purity_of_Body (read 2026-09-13: Virtue 2 passive also regenerates endurance)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "endurance"
-      }
-    },
-    {
       "effect_id": "trait:1682:coverage",
       "source_type": "Trait",
       "source_id": 1682,
@@ -8387,44 +7957,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "vitality scaling"
-      }
-    },
-    {
-      "effect_id": "trait:572:coverage",
-      "source_type": "Trait",
-      "source_id": 572,
-      "source_name": "Justice is Blind",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Justice_is_Blind (read 2026-09-13: Light aura and blind on Virtue 1 activate)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "virtues"
-      }
-    },
-    {
-      "effect_id": "trait:571:coverage",
-      "source_type": "Trait",
-      "source_id": 571,
-      "source_name": "Renewed Justice",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Renewed_Justice (read 2026-09-13: Virtue 1 renewed on foe kill)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "kill"
       }
     },
     {
@@ -8466,25 +7998,6 @@
       }
     },
     {
-      "effect_id": "trait:582:coverage",
-      "source_type": "Trait",
-      "source_id": 582,
-      "source_name": "Valorous Defense",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Valorous_Defense (read 2026-09-13: Aegis when struck below 50% health)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "incoming strike"
-      }
-    },
-    {
       "effect_id": "trait:581:coverage",
       "source_type": "Trait",
       "source_id": 581,
@@ -8523,25 +8036,6 @@
       }
     },
     {
-      "effect_id": "trait:594:coverage",
-      "source_type": "Trait",
-      "source_id": 594,
-      "source_name": "Steadfast Courage",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Steadfast_Courage (read 2026-09-13: Protection when aegis blocks an attack)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "aegis"
-      }
-    },
-    {
       "effect_id": "trait:584:coverage",
       "source_type": "Trait",
       "source_id": 584,
@@ -8574,25 +8068,6 @@
       },
       "evidence_level": "Factual",
       "source": "https://wiki.guildwars2.com/wiki/Communal_Defenses (read 2026-09-13: Blocking grants aegis to nearby allies)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "block"
-      }
-    },
-    {
-      "effect_id": "trait:583:coverage",
-      "source_type": "Trait",
-      "source_id": 583,
-      "source_name": "Might of the Protector",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Might_of_the_Protector (read 2026-09-13: Might when you block attacks)",
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "block"
@@ -8751,25 +8226,6 @@
       }
     },
     {
-      "effect_id": "trait:648:coverage",
-      "source_type": "Trait",
-      "source_id": 648,
-      "source_name": "Zealot's Resolution",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Zealot%27s_Resolution (read 2026-09-13: Lesser Symbol of Resolution when striking below health threshold)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "trait skill"
-      }
-    },
-    {
       "effect_id": "trait:563:coverage",
       "source_type": "Trait",
       "source_id": 563,
@@ -8808,25 +8264,6 @@
       }
     },
     {
-      "effect_id": "trait:649:coverage",
-      "source_type": "Trait",
-      "source_id": 649,
-      "source_name": "Symbolic Avenger",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Symbolic_Avenger (read 2026-09-13: Strike damage stacks when Symbols hit)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "symbols"
-      }
-    },
-    {
       "effect_id": "trait:637:coverage",
       "source_type": "Trait",
       "source_id": 637,
@@ -8843,25 +8280,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "aegis"
-      }
-    },
-    {
-      "effect_id": "trait:1848:coverage",
-      "source_type": "Trait",
-      "source_id": 1848,
-      "source_name": "Virtuous Action",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Virtuous_Action (read 2026-09-13: Virtues become physical aspects; access to Traps)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "traps"
       }
     },
     {
@@ -8946,25 +8364,6 @@
       }
     },
     {
-      "effect_id": "trait:2089:coverage",
-      "source_type": "Trait",
-      "source_id": 2089,
-      "source_name": "Purity of Word",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Purity_of_Word (read 2026-09-13: Virtues become Tomes; access to Mantras; page regen)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "tomes"
-      }
-    },
-    {
       "effect_id": "trait:2075:coverage",
       "source_type": "Trait",
       "source_id": 2075,
@@ -9000,25 +8399,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "pages"
-      }
-    },
-    {
-      "effect_id": "trait:2062:coverage",
-      "source_type": "Trait",
-      "source_id": 2062,
-      "source_name": "Swift Scholar",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Swift_Scholar (read 2026-09-13: Equipping a Virtue/Tome grants quickness; third tome skill grants pages)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "tomes"
       }
     },
     {
@@ -9117,25 +8497,6 @@
       }
     },
     {
-      "effect_id": "trait:2381:coverage",
-      "source_type": "Trait",
-      "source_id": 2381,
-      "source_name": "Luminary",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Luminary (read 2026-09-13: Access to Radiant Forge and stance skills)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "radiant forge"
-      }
-    },
-    {
       "effect_id": "trait:2417:coverage",
       "source_type": "Trait",
       "source_id": 2417,
@@ -9231,25 +8592,6 @@
       }
     },
     {
-      "effect_id": "trait:2435:coverage",
-      "source_type": "Trait",
-      "source_id": 2435,
-      "source_name": "Radiant Armaments",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Radiant_Armaments (read 2026-09-13: Bonus by radiant weapon; lingers after forge exit)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "radiant forge"
-      }
-    },
-    {
       "effect_id": "trait:2368:coverage",
       "source_type": "Trait",
       "source_id": 2368,
@@ -9307,25 +8649,6 @@
       }
     },
     {
-      "effect_id": "trait:2200:coverage",
-      "source_type": "Trait",
-      "source_id": 2200,
-      "source_name": "Willbender Training",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Willbender_Training (read 2026-09-13: Virtues become movement-based; access to Physical skills)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "physical"
-      }
-    },
-    {
       "effect_id": "trait:2197:coverage",
       "source_type": "Trait",
       "source_id": 2197,
@@ -9380,25 +8703,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "shadowstep"
-      }
-    },
-    {
-      "effect_id": "trait:2189:coverage",
-      "source_type": "Trait",
-      "source_id": 2189,
-      "source_name": "Lethal Tempo",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Lethal_Tempo (read 2026-09-13: Damage stacks on virtue activate or passive trigger)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "virtues"
       }
     },
     {
@@ -9520,60 +8824,6 @@
       }
     },
     {
-      "effect_id": "trait:508:0",
-      "source_type": "Trait",
-      "source_id": 508,
-      "source_name": "Reconstruction Enclosure",
-      "category": "AppliesBoon",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnSkillUse",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Reconstruction_Enclosure (read 2026-09-13: Protection 3 s to nearby allies (5 targets) when you use a heal skill)",
-      "status_operation": {
-        "operation_type": "AppliesBoon",
-        "target_side": "Ally",
-        "status_kind": "Protection",
-        "amount_mode": "Stacks",
-        "amount_value": 1.0,
-        "target_scope": "NearbyAllies",
-        "base_duration_ms": 3000,
-        "target_count": 5
-      },
-      "trigger_scope": {
-        "Slot": "Heal"
-      }
-    },
-    {
-      "effect_id": "trait:518:0",
-      "source_type": "Trait",
-      "source_id": 518,
-      "source_name": "Cleansing Synergy",
-      "category": "RemovesCondition",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnSkillUse",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Cleansing_Synergy (read 2026-09-13: Heal skill: Cleansing Pulse removes 1 condition from nearby allies; pulse regeneration is on the skill page)",
-      "status_operation": {
-        "operation_type": "RemovesCondition",
-        "target_side": "Ally",
-        "status_kind": "Any",
-        "amount_mode": "Count",
-        "amount_value": 1.0,
-        "target_scope": "NearbyAllies"
-      },
-      "trigger_scope": {
-        "Slot": "Heal"
-      }
-    },
-    {
       "effect_id": "trait:1930:0",
       "source_type": "Trait",
       "source_id": 1930,
@@ -9622,84 +8872,6 @@
         "amount_value": 1.0,
         "target_scope": "SingleTarget",
         "base_duration_ms": 4000
-      }
-    },
-    {
-      "effect_id": "trait:515:0",
-      "source_type": "Trait",
-      "source_id": 515,
-      "source_name": "Serrated Steel",
-      "category": "AppliesCondition",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnCrit",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Serrated_Steel (read 2026-09-13: 33% chance on crit: Bleeding 1 s in WvW/PvP; bleeding duration increase is NeedsMechanic condition duration)",
-      "status_operation": {
-        "operation_type": "AppliesCondition",
-        "target_side": "Enemy",
-        "status_kind": "Bleeding",
-        "amount_mode": "Stacks",
-        "amount_value": 1.0,
-        "target_scope": "SingleTarget",
-        "base_duration_ms": 1000
-      },
-      "proc_chance": 0.33
-    },
-    {
-      "effect_id": "trait:1979:0",
-      "source_type": "Trait",
-      "source_id": 1979,
-      "source_name": "Optimized Activation",
-      "category": "AppliesBoon",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnSkillUse",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Optimized_Activation (read 2026-09-13: Vigor 2 s in WvW/PvP when you use a tool belt skill; Mech Command / Morph share the tool-belt slot)",
-      "status_operation": {
-        "operation_type": "AppliesBoon",
-        "target_side": "self",
-        "status_kind": "Vigor",
-        "amount_mode": "Stacks",
-        "amount_value": 1.0,
-        "target_scope": "self",
-        "base_duration_ms": 2000
-      },
-      "trigger_scope": {
-        "Slot": "Toolbelt"
-      }
-    },
-    {
-      "effect_id": "trait:1872:0",
-      "source_type": "Trait",
-      "source_id": 1872,
-      "source_name": "Mechanized Deployment",
-      "category": "RemovesCondition",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnSkillUse",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Mechanized_Deployment (read 2026-09-13: Tool belt skills remove 1 condition; 15% tool-belt recharge is NeedsMechanic recharge)",
-      "status_operation": {
-        "operation_type": "RemovesCondition",
-        "target_side": "self",
-        "status_kind": "Any",
-        "amount_mode": "Count",
-        "amount_value": 1.0,
-        "target_scope": "self"
-      },
-      "trigger_scope": {
-        "Slot": "Toolbelt"
       }
     },
     {
@@ -9890,25 +9062,6 @@
       }
     },
     {
-      "effect_id": "trait:468:coverage",
-      "source_type": "Trait",
-      "source_id": 468,
-      "source_name": "Hidden Flask",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Hidden_Flask (read 2026-09-13: Drink Lesser Elixir B when struck below 75% health)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "trait skill"
-      }
-    },
-    {
       "effect_id": "trait:509:coverage",
       "source_type": "Trait",
       "source_id": 509,
@@ -9944,25 +9097,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "incoming healing"
-      }
-    },
-    {
-      "effect_id": "trait:487:coverage",
-      "source_type": "Trait",
-      "source_id": 487,
-      "source_name": "Transmute",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Transmute (read 2026-09-13: Drink Lesser Elixir C when you use a healing skill)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "trait skill"
       }
     },
     {
@@ -10004,25 +9138,6 @@
       }
     },
     {
-      "effect_id": "trait:432:coverage",
-      "source_type": "Trait",
-      "source_id": 432,
-      "source_name": "Explosive Entrance",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Explosive_Entrance (read 2026-09-13: First attack on combat entry explodes; refreshes after dodge)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "dodge"
-      }
-    },
-    {
       "effect_id": "trait:514:coverage",
       "source_type": "Trait",
       "source_id": 514,
@@ -10055,25 +9170,6 @@
       },
       "evidence_level": "Factual",
       "source": "https://wiki.guildwars2.com/wiki/Short_Fuse (read 2026-09-13: Fury when you hit with an explosion; ICD 3 s)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "explosion"
-      }
-    },
-    {
-      "effect_id": "trait:517:coverage",
-      "source_type": "Trait",
-      "source_id": 517,
-      "source_name": "Steel-Packed Powder",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Steel-Packed_Powder (read 2026-09-13: Explosions cause vulnerability)",
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "explosion"
@@ -10479,25 +9575,6 @@
       }
     },
     {
-      "effect_id": "trait:2377:coverage",
-      "source_type": "Trait",
-      "source_id": 2377,
-      "source_name": "Experimental Union",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Experimental_Union (read 2026-09-13: Elite unlock: morph skills replace tool belt; evolve merge)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "morph"
-      }
-    },
-    {
       "effect_id": "trait:2434:coverage",
       "source_type": "Trait",
       "source_id": 2434,
@@ -10574,25 +9651,6 @@
       }
     },
     {
-      "effect_id": "trait:2356:coverage",
-      "source_type": "Trait",
-      "source_id": 2356,
-      "source_name": "Willing Host",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Willing_Host (read 2026-09-13: Using a morph skill increases your damage for a duration)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "morph"
-      }
-    },
-    {
       "effect_id": "trait:2387:coverage",
       "source_type": "Trait",
       "source_id": 2387,
@@ -10628,25 +9686,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "evolve"
-      }
-    },
-    {
-      "effect_id": "trait:2158:coverage",
-      "source_type": "Trait",
-      "source_id": 2158,
-      "source_name": "Photon Projector",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Photon_Projector (read 2026-09-13: Elite unlock: Photon Forge replaces tool belt 5; Exceed skills)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "photon forge"
       }
     },
     {
@@ -10783,25 +9822,6 @@
       }
     },
     {
-      "effect_id": "trait:2291:coverage",
-      "source_type": "Trait",
-      "source_id": 2291,
-      "source_name": "Mechanical Genius",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Mechanical_Genius (read 2026-09-13: Elite unlock: Jade Mech fights at your side)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "mech"
-      }
-    },
-    {
       "effect_id": "trait:2282:coverage",
       "source_type": "Trait",
       "source_id": 2282,
@@ -10834,25 +9854,6 @@
       },
       "evidence_level": "Factual",
       "source": "https://wiki.guildwars2.com/wiki/Mech_Arms:_High-Impact_Drivers (read 2026-09-13: Unlocks Explosive Knuckle; mech attacks generate ally might)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "mech"
-      }
-    },
-    {
-      "effect_id": "trait:2266:coverage",
-      "source_type": "Trait",
-      "source_id": 2266,
-      "source_name": "Mech Fighter",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Mech_Fighter (read 2026-09-13: Mech uses Rocket Punch on weapon skill 3; toughness/vitality inherit)",
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "mech"
@@ -10897,25 +9898,6 @@
       }
     },
     {
-      "effect_id": "trait:2267:coverage",
-      "source_type": "Trait",
-      "source_id": 2267,
-      "source_name": "Exigency Protocols",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Exigency_Protocols (read 2026-09-13: Mech below half health gains damage reduction and regeneration)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "mech"
-      }
-    },
-    {
       "effect_id": "trait:2292:coverage",
       "source_type": "Trait",
       "source_id": 2292,
@@ -10951,25 +9933,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "mech"
-      }
-    },
-    {
-      "effect_id": "trait:1959:coverage",
-      "source_type": "Trait",
-      "source_id": 1959,
-      "source_name": "Function Gyro",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Function_Gyro (read 2026-09-13: Elite unlock: Function Gyro replaces tool belt 5; Gyro skills)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "gyros"
       }
     },
     {
@@ -11011,25 +9974,6 @@
       }
     },
     {
-      "effect_id": "trait:2014:coverage",
-      "source_type": "Trait",
-      "source_id": 2014,
-      "source_name": "Speed of Synergy",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Speed_of_Synergy (read 2026-09-13: Heal grants superspeed around you; heal tool-belt grants personal superspeed)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "movement skill"
-      }
-    },
-    {
       "effect_id": "trait:1954:coverage",
       "source_type": "Trait",
       "source_id": 1954,
@@ -11065,25 +10009,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "gyros"
-      }
-    },
-    {
-      "effect_id": "trait:1877:coverage",
-      "source_type": "Trait",
-      "source_id": 1877,
-      "source_name": "Impact Savant",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Impact_Savant (read 2026-09-13: Percentage of strike damage converted into barrier)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "barrier"
       }
     },
     {
@@ -11326,34 +10251,6 @@
       }
     },
     {
-      "effect_id": "trait:1948:0",
-      "source_type": "Trait",
-      "source_id": 1948,
-      "source_name": "Hardy Conduit",
-      "category": "AppliesBoon",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnSkillUse",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Hardy_Conduit (read 2026-09-13: Overloads: Protection 3 s in WvW to nearby allies (radius 300, 5 targets); protection effectiveness increase is NeedsMechanic)",
-      "status_operation": {
-        "operation_type": "AppliesBoon",
-        "target_side": "Ally",
-        "status_kind": "Protection",
-        "amount_mode": "Stacks",
-        "amount_value": 1.0,
-        "target_scope": "NearbyAllies",
-        "base_duration_ms": 3000,
-        "target_count": 5
-      },
-      "trigger_scope": {
-        "Category": "Overload"
-      }
-    },
-    {
       "effect_id": "trait:2170:0",
       "source_type": "Trait",
       "source_id": 2170,
@@ -11557,30 +10454,6 @@
       }
     },
     {
-      "effect_id": "trait:268:0",
-      "source_type": "Trait",
-      "source_id": 268,
-      "source_name": "Arcane Prowess",
-      "category": "AppliesBoon",
-      "value": 1.0,
-      "stacking_rule": "NonStacking",
-      "trigger_rule": "OnAttunementSwap",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Arcane_Prowess (read 2026-09-13: Fury 2 s in WvW when you switch attunements)",
-      "status_operation": {
-        "operation_type": "AppliesBoon",
-        "target_side": "self",
-        "status_kind": "Fury",
-        "amount_mode": "Stacks",
-        "amount_value": 1.0,
-        "target_scope": "self",
-        "base_duration_ms": 2000
-      }
-    },
-    {
       "effect_id": "trait:253:coverage",
       "source_type": "Trait",
       "source_id": 253,
@@ -11594,25 +10467,6 @@
       },
       "evidence_level": "Factual",
       "source": "https://wiki.guildwars2.com/wiki/Arcane_Precision (read 2026-09-13: Critical strikes inflict an attunement-based condition)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "attunement"
-      }
-    },
-    {
-      "effect_id": "trait:264:coverage",
-      "source_type": "Trait",
-      "source_id": 264,
-      "source_name": "Elemental Attunement",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Elemental_Attunement (read 2026-09-13: Grant a boon to nearby allies when changing attunements)",
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "attunement"
@@ -11722,25 +10576,6 @@
       }
     },
     {
-      "effect_id": "trait:278:coverage",
-      "source_type": "Trait",
-      "source_id": 278,
-      "source_name": "Stone Flesh",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Stone_Flesh (read 2026-09-13: Strike damage taken reduced while attuned to earth)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "attunement"
-      }
-    },
-    {
       "effect_id": "trait:289:coverage",
       "source_type": "Trait",
       "source_id": 289,
@@ -11804,25 +10639,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "endurance"
-      }
-    },
-    {
-      "effect_id": "trait:280:coverage",
-      "source_type": "Trait",
-      "source_id": 280,
-      "source_name": "Geomancer's Training",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Geomancer%27s_Training (read 2026-09-13: Reduced recharge on earth weapon skills; nearby incoming strike reduction)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "recharge"
       }
     },
     {
@@ -11921,25 +10737,6 @@
       }
     },
     {
-      "effect_id": "trait:318:coverage",
-      "source_type": "Trait",
-      "source_id": 318,
-      "source_name": "Sunspot",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Sunspot (read 2026-09-13: Fire aura and damage nearby foes when you attune to fire; also on overload)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "attunement"
-      }
-    },
-    {
       "effect_id": "trait:340:coverage",
       "source_type": "Trait",
       "source_id": 340,
@@ -11972,25 +10769,6 @@
       },
       "evidence_level": "Factual",
       "source": "https://wiki.guildwars2.com/wiki/Pyromancer%27s_Puissance (read 2026-09-13: Might while using skills attuned to fire; Flame Expulsion on leave/overload)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "attunement"
-      }
-    },
-    {
-      "effect_id": "trait:350:coverage",
-      "source_type": "Trait",
-      "source_id": 350,
-      "source_name": "Soothing Mist",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Soothing_Mist (read 2026-09-13: You and nearby allies recover health while attuned to water)",
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "attunement"
@@ -12035,25 +10813,6 @@
       }
     },
     {
-      "effect_id": "trait:1676:coverage",
-      "source_type": "Trait",
-      "source_id": 1676,
-      "source_name": "Aquamancer's Training",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Aquamancer%27s_Training (read 2026-09-13: Increased healing to other allies; reduced recharge on water weapon skills)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "recharge"
-      }
-    },
-    {
       "effect_id": "trait:362:coverage",
       "source_type": "Trait",
       "source_id": 362,
@@ -12089,25 +10848,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "aura"
-      }
-    },
-    {
-      "effect_id": "trait:2227:coverage",
-      "source_type": "Trait",
-      "source_id": 2227,
-      "source_name": "Depth of Elements",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Depth_of_Elements (read 2026-09-13: Elemental energy on strike imbues Jade Sphere; access to Augments)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "jade sphere"
       }
     },
     {
@@ -12168,25 +10908,6 @@
       }
     },
     {
-      "effect_id": "trait:2250:coverage",
-      "source_type": "Trait",
-      "source_id": 2250,
-      "source_name": "Elemental Empowerment",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Elemental_Empowerment (read 2026-09-13: Gain Elemental Empowerment stacks while in combat)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "elemental empowerment"
-      }
-    },
-    {
       "effect_id": "trait:2247:coverage",
       "source_type": "Trait",
       "source_id": 2247,
@@ -12241,25 +10962,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "jade sphere"
-      }
-    },
-    {
-      "effect_id": "trait:2231:coverage",
-      "source_type": "Trait",
-      "source_id": 2231,
-      "source_name": "Elemental Epitome",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Elemental_Epitome (read 2026-09-13: Attunement aura on combo; Elemental Empowerment when you grant yourself an aura)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "combo"
       }
     },
     {
@@ -12320,25 +11022,6 @@
       }
     },
     {
-      "effect_id": "trait:2344:coverage",
-      "source_type": "Trait",
-      "source_id": 2344,
-      "source_name": "Evocation",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Evocation (read 2026-09-13: Specialize in an element; familiar and reduced attunement recharge)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "familiar"
-      }
-    },
-    {
       "effect_id": "trait:2415:coverage",
       "source_type": "Trait",
       "source_id": 2415,
@@ -12355,25 +11038,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "meditations"
-      }
-    },
-    {
-      "effect_id": "trait:2382:coverage",
-      "source_type": "Trait",
-      "source_id": 2382,
-      "source_name": "Enhanced Potency",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Enhanced_Potency (read 2026-09-13: Improve a boon based on your familiar)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "familiar"
       }
     },
     {
@@ -12434,25 +11098,6 @@
       }
     },
     {
-      "effect_id": "trait:2351:coverage",
-      "source_type": "Trait",
-      "source_id": 2351,
-      "source_name": "Familiar's Prowess",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Familiar%27s_Prowess (read 2026-09-13: Temporary bonus after using a familiar skill)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "familiar"
-      }
-    },
-    {
       "effect_id": "trait:2335:coverage",
       "source_type": "Trait",
       "source_id": 2335,
@@ -12507,25 +11152,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "familiar"
-      }
-    },
-    {
-      "effect_id": "trait:2025:coverage",
-      "source_type": "Trait",
-      "source_id": 2025,
-      "source_name": "Singularity",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Singularity (read 2026-09-13: Attain singularity by remaining in an attunement; overload access; shouts)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "overload"
       }
     },
     {
@@ -12624,25 +11250,6 @@
       }
     },
     {
-      "effect_id": "trait:2109:coverage",
-      "source_type": "Trait",
-      "source_id": 2109,
-      "source_name": "Weaver",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Weaver (read 2026-09-13: Elite specialization unlock; dual attunement and dual attacks)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "dual attack"
-      }
-    },
-    {
       "effect_id": "trait:2165:coverage",
       "source_type": "Trait",
       "source_id": 2165,
@@ -12697,25 +11304,6 @@
       "coverage": {
         "class": "NeedsMechanic",
         "mechanic": "dual attack"
-      }
-    },
-    {
-      "effect_id": "trait:2081:coverage",
-      "source_type": "Trait",
-      "source_id": 2081,
-      "source_name": "Elemental Polyphony",
-      "category": "FlatStat",
-      "value": null,
-      "stacking_rule": "Additive",
-      "trigger_rule": "NotApplicable",
-      "uptime_model": {
-        "kind": "Unknown"
-      },
-      "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Elemental_Polyphony (read 2026-09-13: Attributes based on current attunement; both when dual attuned)",
-      "coverage": {
-        "class": "NeedsMechanic",
-        "mechanic": "attunement"
       }
     },
     {
@@ -15938,6 +14526,3742 @@
         "class": "NeedsMechanic",
         "mechanic": "dodge"
       }
+    },
+    {
+      "effect_id": "trait:1948:0",
+      "source_type": "Trait",
+      "source_id": 1948,
+      "source_name": "Hardy Conduit",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hardy_Conduit (read 2026-09-13: Overloads: Protection 3 s in WvW to nearby allies (radius 300, 5 targets); protection effectiveness increase is NeedsMechanic)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Protection",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 3000,
+        "target_count": 5
+      },
+      "trigger_scope": {
+        "Category": "Overload"
+      }
+    },
+    {
+      "effect_id": "trait:268:0",
+      "source_type": "Trait",
+      "source_id": 268,
+      "source_name": "Arcane Prowess",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Arcane_Prowess (read 2026-09-13: Fury 2 s in WvW when you switch attunements)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Fury",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 2000
+      }
+    },
+    {
+      "effect_id": "trait:264:0",
+      "source_type": "Trait",
+      "source_id": 264,
+      "source_name": "Elemental Attunement",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Attunement (read 2026-09-23: attuning to fire: Might 6 s in WvW to nearby allies, 5 targets, radius 240)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Might",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 6000,
+        "target_count": 5
+      },
+      "trigger_scope": {
+        "Status": "Fire"
+      }
+    },
+    {
+      "effect_id": "trait:264:1",
+      "source_type": "Trait",
+      "source_id": 264,
+      "source_name": "Elemental Attunement",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Attunement (read 2026-09-23: attuning to water: Regeneration 5 s in WvW to nearby allies, 5 targets, radius 240)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Regeneration",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 5000,
+        "target_count": 5
+      },
+      "trigger_scope": {
+        "Status": "Water"
+      }
+    },
+    {
+      "effect_id": "trait:264:2",
+      "source_type": "Trait",
+      "source_id": 264,
+      "source_name": "Elemental Attunement",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Attunement (read 2026-09-23: attuning to air: Swiftness 8 s in WvW to nearby allies, 5 targets, radius 240)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Swiftness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 8000,
+        "target_count": 5
+      },
+      "trigger_scope": {
+        "Status": "Air"
+      }
+    },
+    {
+      "effect_id": "trait:264:3",
+      "source_type": "Trait",
+      "source_id": 264,
+      "source_name": "Elemental Attunement",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Attunement (read 2026-09-23: attuning to earth: Protection 4 s in WvW to nearby allies, 5 targets, radius 240)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Protection",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 4000,
+        "target_count": 5
+      },
+      "trigger_scope": {
+        "Status": "Earth"
+      }
+    },
+    {
+      "effect_id": "trait:278:0",
+      "source_type": "Trait",
+      "source_id": 278,
+      "source_name": "Stone Flesh",
+      "category": "IncomingStrikeMultiplier",
+      "value": 0.93,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Stone_Flesh (read 2026-09-23: strike damage taken reduced 7% while attuned to earth)",
+      "prerequisite": {
+        "attunement": "Earth"
+      }
+    },
+    {
+      "effect_id": "trait:280:0",
+      "source_type": "Trait",
+      "source_id": 280,
+      "source_name": "Geomancer's Training",
+      "category": "IncomingStrikeMultiplier",
+      "value": 0.9,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Geomancer%27s_Training (read 2026-09-23: strike damage from foes within range 360 reduced 10%)",
+      "gates": [
+        {
+          "Proximity": {
+            "radius": 360.0,
+            "min_targets": 1
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:280:coverage",
+      "source_type": "Trait",
+      "source_id": 280,
+      "source_name": "Geomancer's Training",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Geomancer%27s_Training (read 2026-09-23: earth weapon skills recharge reduced 20%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "recharge"
+      }
+    },
+    {
+      "effect_id": "trait:318:0",
+      "source_type": "Trait",
+      "source_id": 318,
+      "source_name": "Sunspot",
+      "category": "ProcEffect",
+      "value": 0.1,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Sunspot (read 2026-09-23: trait skill Sunspot: damage coefficient 0.1 in WvW, cannot critical hit, 5 targets, radius 180, combat only, when attuning to fire)",
+      "inner_category": "StrikeDamagePct",
+      "gates": [
+        "InCombat"
+      ],
+      "trigger_scope": {
+        "Status": "Fire"
+      }
+    },
+    {
+      "effect_id": "trait:318:1",
+      "source_type": "Trait",
+      "source_id": 318,
+      "source_name": "Sunspot",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Sunspot (read 2026-09-23: trait skill Sunspot: Fire Aura 3 s, combat only, when attuning to fire)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Fire Aura",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 3000
+      },
+      "gates": [
+        "InCombat"
+      ],
+      "trigger_scope": {
+        "Status": "Fire"
+      }
+    },
+    {
+      "effect_id": "trait:350:0",
+      "source_type": "Trait",
+      "source_id": 350,
+      "source_name": "Soothing Mist",
+      "category": "Heal",
+      "value": 240.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Periodic",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Soothing_Mist (read 2026-09-23: Soothing Mist 10 s heals 800 (0.5) in WvW/PvP, applied every 3 s while attuned to water, 5 targets, radius 600; value is three seconds of it: 800/10*3 = 240, 0.5/10*3 = 0.15)",
+      "internal_cooldown": 3.0,
+      "prerequisite": {
+        "attunement": "Water"
+      },
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Healing (area)",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Party",
+        "target_count": 5
+      },
+      "healing_power_coefficient": 0.15,
+      "derived_from": [
+        800.0,
+        0.5,
+        10.0,
+        3.0
+      ]
+    },
+    {
+      "effect_id": "trait:1676:coverage:1",
+      "source_type": "Trait",
+      "source_id": 1676,
+      "source_name": "Aquamancer's Training",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Aquamancer%27s_Training (read 2026-09-23: healing to other allies effectiveness increased 20% in WvW)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "healing to others only"
+      }
+    },
+    {
+      "effect_id": "trait:1676:coverage",
+      "source_type": "Trait",
+      "source_id": 1676,
+      "source_name": "Aquamancer's Training",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Aquamancer%27s_Training (read 2026-09-23: water weapon skills recharge reduced 20%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "recharge"
+      }
+    },
+    {
+      "effect_id": "trait:2227:0",
+      "source_type": "Trait",
+      "source_id": 2227,
+      "source_name": "Depth of Elements",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "jade sphere"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Depth_of_Elements (read 2026-09-23: elemental energy on strike imbues the Jade Sphere (combo fields, boons to allies in the area); recharge 15; access to Augments)"
+    },
+    {
+      "effect_id": "trait:2250:0",
+      "source_type": "Trait",
+      "source_id": 2250,
+      "source_name": "Elemental Empowerment",
+      "category": "AppliesBoon",
+      "value": 3.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Periodic",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Empowerment (read 2026-09-23: Elemental Empowerment 3 stacks 15 s (+1% all stats each) while in combat, maximum 10 stacks, recharge 15)",
+      "internal_cooldown": 15.0,
+      "effect_duration": 15.0,
+      "max_stacks": 10,
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Elemental Empowerment",
+        "amount_mode": "Stacks",
+        "amount_value": 3.0,
+        "target_scope": "self",
+        "base_duration_ms": 15000
+      },
+      "gates": [
+        "InCombat"
+      ]
+    },
+    {
+      "effect_id": "trait:2231:coverage",
+      "source_type": "Trait",
+      "source_id": 2231,
+      "source_name": "Elemental Epitome",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Epitome (read 2026-09-23: attunement aura when you combo (fire 4 s, frost 2 s WvW, shocking 3 s, magnetic 3 s), recharge 10 per attunement; Elemental Empowerment 15 s when you grant yourself an aura)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-combo-finisher trigger; on-self-aura trigger"
+      }
+    },
+    {
+      "effect_id": "trait:2344:0",
+      "source_type": "Trait",
+      "source_id": 2344,
+      "source_name": "Evocation",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "familiar"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Evocation (read 2026-09-23: select an element to specialize in, greatly reducing its recharge; gain a familiar charged by 6 weapon skills (3 matching); access to meditation skills)"
+    },
+    {
+      "effect_id": "trait:2382:coverage",
+      "source_type": "Trait",
+      "source_id": 2382,
+      "source_name": "Enhanced Potency",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Enhanced_Potency (read 2026-09-23: boon improved by the selected familiar: might +10 condition damage (WvW), regeneration +20% healing, fury +10% critical chance (WvW), protection -33% incoming condition damage (WvW))",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "familiar selection"
+      }
+    },
+    {
+      "effect_id": "trait:2351:coverage",
+      "source_type": "Trait",
+      "source_id": 2351,
+      "source_name": "Familiar's Prowess",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Familiar%27s_Prowess (read 2026-09-23: 5 s bonus after a familiar skill: Ignite +10% condition damage (WvW), Splash +15% outgoing healing, Zap +5% damage, Calcify -10% incoming damage (WvW))",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "familiar skill trigger"
+      }
+    },
+    {
+      "effect_id": "trait:2025:0",
+      "source_type": "Trait",
+      "source_id": 2025,
+      "source_name": "Singularity",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "overload"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Singularity (read 2026-09-23: remain in an attunement 6 s to attain singularity, then overload it; access to Shouts)"
+    },
+    {
+      "effect_id": "trait:2109:0",
+      "source_type": "Trait",
+      "source_id": 2109,
+      "source_name": "Weaver",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "dual attunement",
+          "replaces": "single attunement"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Weaver_(trait) (read 2026-09-23: active attunement applied to the main hand, old attunement to the off hand; access to Dual Attack and Stance)"
+    },
+    {
+      "effect_id": "trait:2109:coverage",
+      "source_type": "Trait",
+      "source_id": 2109,
+      "source_name": "Weaver",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Weaver_(trait) (read 2026-09-23: attunement recharge time 4 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "recharge"
+      }
+    },
+    {
+      "effect_id": "trait:2081:0",
+      "source_type": "Trait",
+      "source_id": 2081,
+      "source_name": "Elemental Polyphony",
+      "category": "FlatStat",
+      "value": 120.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Polyphony (read 2026-09-23: Power 120 in WvW while attuned to fire (either hand))",
+      "prerequisite": {
+        "attunement": "Fire"
+      }
+    },
+    {
+      "effect_id": "trait:2081:1",
+      "source_type": "Trait",
+      "source_id": 2081,
+      "source_name": "Elemental Polyphony",
+      "category": "FlatStat",
+      "value": 120.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Polyphony (read 2026-09-23: Healing Power 120 in WvW while attuned to water (either hand))",
+      "prerequisite": {
+        "attunement": "Water"
+      }
+    },
+    {
+      "effect_id": "trait:2081:2",
+      "source_type": "Trait",
+      "source_id": 2081,
+      "source_name": "Elemental Polyphony",
+      "category": "FlatStat",
+      "value": 120.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Polyphony (read 2026-09-23: Ferocity 120 in WvW while attuned to air (either hand))",
+      "prerequisite": {
+        "attunement": "Air"
+      }
+    },
+    {
+      "effect_id": "trait:2081:3",
+      "source_type": "Trait",
+      "source_id": 2081,
+      "source_name": "Elemental Polyphony",
+      "category": "FlatStat",
+      "value": 120.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Polyphony (read 2026-09-23: Condition Damage 120 in WvW while attuned to earth (either hand))",
+      "prerequisite": {
+        "attunement": "Earth"
+      }
+    },
+    {
+      "effect_id": "trait:221:0",
+      "source_type": "Trait",
+      "source_id": 221,
+      "source_name": "Zephyr's Speed",
+      "category": "CritChancePct",
+      "value": 5.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Zephyr%27s_Speed_(elementalist) (read 2026-09-23: critical chance increase 5; +5% active regardless of attunement since 2022-06-30)"
+    },
+    {
+      "effect_id": "trait:221:coverage",
+      "source_type": "Trait",
+      "source_id": 221,
+      "source_name": "Zephyr's Speed",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Zephyr%27s_Speed_(elementalist) (read 2026-09-23: movement speed increase 25 while attuned to air; movement speed is not simulated)",
+      "coverage": {
+        "class": "PassiveNoEffect"
+      }
+    },
+    {
+      "effect_id": "trait:222:0",
+      "source_type": "Trait",
+      "source_id": 222,
+      "source_name": "Electric Discharge",
+      "category": "ProcEffect",
+      "value": 0.05,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Electric_Discharge (read 2026-09-23: damage coefficient 0.05 in WvW, 1 target, combat only, when attuning to air)",
+      "inner_category": "StrikeDamagePct",
+      "gates": [
+        "InCombat"
+      ],
+      "trigger_scope": {
+        "Status": "Air"
+      }
+    },
+    {
+      "effect_id": "trait:222:1",
+      "source_type": "Trait",
+      "source_id": 222,
+      "source_name": "Electric Discharge",
+      "category": "AppliesCondition",
+      "value": 8.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Electric_Discharge (read 2026-09-23: vulnerability 8 stacks 6 s in WvW, 1 target, combat only, when attuning to air)",
+      "status_operation": {
+        "operation_type": "AppliesCondition",
+        "target_side": "Enemy",
+        "status_kind": "Vulnerability",
+        "amount_mode": "Stacks",
+        "amount_value": 8.0,
+        "target_scope": "SingleTarget",
+        "base_duration_ms": 6000,
+        "target_count": 1
+      },
+      "gates": [
+        "InCombat"
+      ],
+      "trigger_scope": {
+        "Status": "Air"
+      }
+    },
+    {
+      "effect_id": "trait:223:0",
+      "source_type": "Trait",
+      "source_id": 223,
+      "source_name": "Aeromancer's Training",
+      "category": "FlatStat",
+      "value": 150.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Aeromancer%27s_Training (read 2026-09-23: Ferocity 150)"
+    },
+    {
+      "effect_id": "trait:223:1",
+      "source_type": "Trait",
+      "source_id": 223,
+      "source_name": "Aeromancer's Training",
+      "category": "FlatStat",
+      "value": 150.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Aeromancer%27s_Training (read 2026-09-23: additional Ferocity 150 while attuned to air)",
+      "prerequisite": {
+        "attunement": "Air"
+      }
+    },
+    {
+      "effect_id": "trait:223:coverage",
+      "source_type": "Trait",
+      "source_id": 223,
+      "source_name": "Aeromancer's Training",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Aeromancer%27s_Training (read 2026-09-23: air weapon skills recharge reduced 20%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "recharge"
+      }
+    },
+    {
+      "effect_id": "trait:2004:0",
+      "source_type": "Trait",
+      "source_id": 2004,
+      "source_name": "Elemental Enchantment",
+      "category": "FlatStat",
+      "value": 120.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Enchantment (read 2026-09-23: Concentration 120 in WvW)"
+    },
+    {
+      "effect_id": "trait:2004:coverage",
+      "source_type": "Trait",
+      "source_id": 2004,
+      "source_name": "Elemental Enchantment",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Enchantment (read 2026-09-23: attunement recharge reduced 15%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "recharge"
+      }
+    },
+    {
+      "effect_id": "trait:279:0",
+      "source_type": "Trait",
+      "source_id": 279,
+      "source_name": "Earthen Blast",
+      "category": "ProcEffect",
+      "value": 0.1,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Earthen_Blast (read 2026-09-23: damage coefficient 0.1 in WvW, cannot critical hit, 5 targets, radius 240, combat only, when attuning to earth)",
+      "inner_category": "StrikeDamagePct",
+      "gates": [
+        "InCombat"
+      ],
+      "trigger_scope": {
+        "Status": "Earth"
+      }
+    },
+    {
+      "effect_id": "trait:279:1",
+      "source_type": "Trait",
+      "source_id": 279,
+      "source_name": "Earthen Blast",
+      "category": "AppliesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Earthen_Blast (read 2026-09-23: crippled 3 s, 5 targets, radius 240, combat only, when attuning to earth)",
+      "status_operation": {
+        "operation_type": "AppliesCondition",
+        "target_side": "Enemy",
+        "status_kind": "Crippled",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Area",
+        "base_duration_ms": 3000,
+        "target_count": 5
+      },
+      "gates": [
+        "InCombat"
+      ],
+      "trigger_scope": {
+        "Status": "Earth"
+      }
+    },
+    {
+      "effect_id": "trait:279:coverage",
+      "source_type": "Trait",
+      "source_id": 279,
+      "source_name": "Earthen Blast",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Earthen_Blast (read 2026-09-23: barrier 1302 (0.75 healing power) in WvW when attuning to earth)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "barrier"
+      }
+    },
+    {
+      "effect_id": "trait:319:0",
+      "source_type": "Trait",
+      "source_id": 319,
+      "source_name": "Pyromancer's Training",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Pyromancer%27s_Training (read 2026-09-23: strike damage increase 10% to burning foes in WvW)",
+      "inner_category": "StrikeDamagePct",
+      "prerequisite": {
+        "foe_condition": "Burning"
+      }
+    },
+    {
+      "effect_id": "trait:319:coverage",
+      "source_type": "Trait",
+      "source_id": 319,
+      "source_name": "Pyromancer's Training",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Pyromancer%27s_Training (read 2026-09-23: fire weapon skills recharge reduced 20%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "recharge"
+      }
+    },
+    {
+      "effect_id": "trait:320:0",
+      "source_type": "Trait",
+      "source_id": 320,
+      "source_name": "Empowering Flame",
+      "category": "FlatStat",
+      "value": 150.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Empowering_Flame (read 2026-09-23: Power 150 while in fire attunement)",
+      "prerequisite": {
+        "attunement": "Fire"
+      }
+    },
+    {
+      "effect_id": "trait:1938:0",
+      "source_type": "Trait",
+      "source_id": 1938,
+      "source_name": "Gathered Focus",
+      "category": "FlatStat",
+      "value": 120.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Gathered_Focus (read 2026-09-23: Concentration 120 in WvW)"
+    },
+    {
+      "effect_id": "trait:351:0",
+      "source_type": "Trait",
+      "source_id": 351,
+      "source_name": "Healing Ripple",
+      "category": "Heal",
+      "value": 1042.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnAttunementSwap",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Healing_Ripple (read 2026-09-23: heal 1042 (0.75 healing power) in WvW, 5 targets, radius 240, when attuning to water)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Healing (area)",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Party",
+        "target_count": 5
+      },
+      "healing_power_coefficient": 0.75,
+      "trigger_scope": {
+        "Status": "Water"
+      }
+    },
+    {
+      "effect_id": "trait:2077:0",
+      "source_type": "Trait",
+      "source_id": 2077,
+      "source_name": "Elemental Refreshment",
+      "category": "FlatStat",
+      "value": 180.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Refreshment (read 2026-09-23: Vitality 180)"
+    },
+    {
+      "effect_id": "trait:2077:coverage",
+      "source_type": "Trait",
+      "source_id": 2077,
+      "source_name": "Elemental Refreshment",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elemental_Refreshment (read 2026-09-23: barrier 261 (0.2875 healing power) in WvW when using Dual Attack skills)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "barrier"
+      }
+    },
+    {
+      "effect_id": "trait:508:0",
+      "source_type": "Trait",
+      "source_id": 508,
+      "source_name": "Reconstruction Enclosure",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Reconstruction_Enclosure (read 2026-09-13: Protection 3 s to nearby allies (5 targets) when you use a heal skill)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Protection",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 3000,
+        "target_count": 5
+      },
+      "trigger_scope": {
+        "Slot": "Heal"
+      }
+    },
+    {
+      "effect_id": "trait:518:0",
+      "source_type": "Trait",
+      "source_id": 518,
+      "source_name": "Cleansing Synergy",
+      "category": "RemovesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Cleansing_Synergy (read 2026-09-13: Heal skill: Cleansing Pulse removes 1 condition from nearby allies; pulse regeneration is on the skill page)",
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "Ally",
+        "status_kind": "Any",
+        "amount_mode": "Count",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies"
+      },
+      "trigger_scope": {
+        "Slot": "Heal"
+      }
+    },
+    {
+      "effect_id": "trait:515:0",
+      "source_type": "Trait",
+      "source_id": 515,
+      "source_name": "Serrated Steel",
+      "category": "AppliesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnCrit",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Serrated_Steel (read 2026-09-13: 33% chance on crit: Bleeding 1 s in WvW/PvP; bleeding duration increase is NeedsMechanic condition duration)",
+      "status_operation": {
+        "operation_type": "AppliesCondition",
+        "target_side": "Enemy",
+        "status_kind": "Bleeding",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "SingleTarget",
+        "base_duration_ms": 1000
+      },
+      "proc_chance": 0.33
+    },
+    {
+      "effect_id": "trait:1979:0",
+      "source_type": "Trait",
+      "source_id": 1979,
+      "source_name": "Optimized Activation",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Optimized_Activation (read 2026-09-13: Vigor 2 s in WvW/PvP when you use a tool belt skill; Mech Command / Morph share the tool-belt slot)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Vigor",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 2000
+      },
+      "trigger_scope": {
+        "Slot": "Toolbelt"
+      }
+    },
+    {
+      "effect_id": "trait:1872:0",
+      "source_type": "Trait",
+      "source_id": 1872,
+      "source_name": "Mechanized Deployment",
+      "category": "RemovesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Mechanized_Deployment (read 2026-09-13: Tool belt skills remove 1 condition; 15% tool-belt recharge is NeedsMechanic recharge)",
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "self",
+        "status_kind": "Any",
+        "amount_mode": "Count",
+        "amount_value": 1.0,
+        "target_scope": "self"
+      },
+      "trigger_scope": {
+        "Slot": "Toolbelt"
+      }
+    },
+    {
+      "effect_id": "trait:468:coverage",
+      "source_type": "Trait",
+      "source_id": 468,
+      "source_name": "Hidden Flask",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hidden_Flask (read 2026-09-23: when struck below 75% health drink Lesser Elixir B (skill 13465: Fury 4 s, Might x5 4 s, Resolution 4 s, Swiftness 4 s in WvW; recharge 24 s))",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-struck trigger (incoming strike event)"
+      }
+    },
+    {
+      "effect_id": "trait:487:0",
+      "source_type": "Trait",
+      "source_id": 487,
+      "source_name": "Transmute",
+      "category": "ConvertsConditionToBoon",
+      "value": 2.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Transmute (read 2026-09-23: Drink Lesser Elixir C (skill 49097, recharge 10 s) when you use a healing skill; Conditions Converted to Boons 2 in WvW/PvP)",
+      "trigger_scope": {
+        "Slot": "Heal"
+      },
+      "internal_cooldown": 10.0,
+      "status_operation": {
+        "operation_type": "ConvertsConditionToBoon",
+        "target_side": "self",
+        "status_kind": "Any",
+        "amount_mode": "Count",
+        "amount_value": 2.0,
+        "target_scope": "self",
+        "internal_cooldown_ms": 10000
+      }
+    },
+    {
+      "effect_id": "trait:432:coverage",
+      "source_type": "Trait",
+      "source_id": 432,
+      "source_name": "Explosive Entrance",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Explosive_Entrance (read 2026-09-23: first attack on entering combat explodes (trait skill 59562: power coefficient 0.4 in WvW, 5 targets, radius 240); refreshes after a dodge roll)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "combat-entry first-attack trigger re-armed by dodge"
+      }
+    },
+    {
+      "effect_id": "trait:517:0",
+      "source_type": "Trait",
+      "source_id": 517,
+      "source_name": "Steel-Packed Powder",
+      "category": "AppliesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnExplosion",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Steel-Packed_Powder (read 2026-09-23: Explosions cause Vulnerability 5 s)",
+      "status_operation": {
+        "operation_type": "AppliesCondition",
+        "target_side": "Enemy",
+        "status_kind": "Vulnerability",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Area",
+        "base_duration_ms": 5000
+      }
+    },
+    {
+      "effect_id": "trait:2377:0",
+      "source_type": "Trait",
+      "source_id": 2377,
+      "source_name": "Experimental Union",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Morph skills and Evolve",
+          "replaces": "Tool belt"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Experimental_Union (read 2026-09-23: selectable morph skills replace your toolbelt skills or merge to evolve)"
+    },
+    {
+      "effect_id": "trait:2377:1",
+      "source_type": "Trait",
+      "source_id": 2377,
+      "source_name": "Experimental Union",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Stance utility skills"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Experimental_Union (read 2026-09-23: Gain access to stance utility skills)"
+    },
+    {
+      "effect_id": "trait:2356:0",
+      "source_type": "Trait",
+      "source_id": 2356,
+      "source_name": "Willing Host",
+      "category": "StrikeDamagePct",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Willing_Host (read 2026-09-23: Using a morph skill: Willing Host 10 s, +10% Damage in WvW/PvP)",
+      "trigger_scope": {
+        "Category": "Morph"
+      },
+      "effect_duration": 10.0
+    },
+    {
+      "effect_id": "trait:2356:1",
+      "source_type": "Trait",
+      "source_id": 2356,
+      "source_name": "Willing Host",
+      "category": "ConditionDamagePct",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Willing_Host (read 2026-09-23: Using a morph skill: Willing Host 10 s, +10% Condition Damage in WvW/PvP)",
+      "trigger_scope": {
+        "Category": "Morph"
+      },
+      "effect_duration": 10.0
+    },
+    {
+      "effect_id": "trait:2158:0",
+      "source_type": "Trait",
+      "source_id": 2158,
+      "source_name": "Photon Projector",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Photon Forge",
+          "replaces": "Tool belt skill 5"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Photon_Projector (read 2026-09-23: Photon Forge replaces your tool belt skill 5)"
+    },
+    {
+      "effect_id": "trait:2158:1",
+      "source_type": "Trait",
+      "source_id": 2158,
+      "source_name": "Photon Projector",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Exceed skills"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Photon_Projector (read 2026-09-23: Gain access to Exceed skills)"
+    },
+    {
+      "effect_id": "trait:2291:0",
+      "source_type": "Trait",
+      "source_id": 2291,
+      "source_name": "Mechanical Genius",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Jade Mech",
+          "replaces": "Tool belt (Mech Commands)"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Mechanical_Genius (read 2026-09-23: a battle mech fights at your side; tool belt skills are replaced with Mech Commands)"
+    },
+    {
+      "effect_id": "trait:2291:1",
+      "source_type": "Trait",
+      "source_id": 2291,
+      "source_name": "Mechanical Genius",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Signet utility skills"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Mechanical_Genius (read 2026-09-23: Gain access to signet utility skills)"
+    },
+    {
+      "effect_id": "trait:2291:coverage",
+      "source_type": "Trait",
+      "source_id": 2291,
+      "source_name": "Mechanical Genius",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Mechanical_Genius (read 2026-09-23: All Stats Inherited by Mech 50% in PvE/WvW, precision excepted; Mech Commands recharge +20% beyond 360 range)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "mech stat inheritance and mech distance"
+      }
+    },
+    {
+      "effect_id": "trait:2266:coverage:1",
+      "source_type": "Trait",
+      "source_id": 2266,
+      "source_name": "Mech Fighter",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Mech_Fighter (read 2026-09-23: mech uses Rocket Punch (skill 63185: Burning 5 s, 5 targets, radius 180, recharge 5 s; damage 0.5 coefficient in WvW, bugged to 1 damage in PvP/WvW) when you activate weapon skill 3)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "mech-owned attack (Rocket Punch: Burning 5 s, 5 targets, recharge 5 s)"
+      }
+    },
+    {
+      "effect_id": "trait:2266:coverage",
+      "source_type": "Trait",
+      "source_id": 2266,
+      "source_name": "Mech Fighter",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Mech_Fighter (read 2026-09-23: Toughness and Vitality Inherited by Mech 100% in PvE/WvW)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "mech stat inheritance"
+      }
+    },
+    {
+      "effect_id": "trait:2267:0",
+      "source_type": "Trait",
+      "source_id": 2267,
+      "source_name": "Exigency Protocols",
+      "category": "IncomingStrikeMultiplier",
+      "value": 0.5,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnHealthThreshold",
+      "health_threshold": {
+        "above": false,
+        "percent": 50.0
+      },
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Exigency_Protocols (read 2026-09-23: mech struck below half health: Exigency Protocols 5 s, -50% Incoming Damage (multiplier 0.5); recharge 60 s)",
+      "effect_duration": 5.0,
+      "internal_cooldown": 60.0,
+      "actor": "Pet"
+    },
+    {
+      "effect_id": "trait:2267:1",
+      "source_type": "Trait",
+      "source_id": 2267,
+      "source_name": "Exigency Protocols",
+      "category": "IncomingConditionMultiplier",
+      "value": 0.5,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnHealthThreshold",
+      "health_threshold": {
+        "above": false,
+        "percent": 50.0
+      },
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Exigency_Protocols (read 2026-09-23: mech struck below half health: Exigency Protocols 5 s, -50% Incoming Condition Damage (multiplier 0.5); recharge 60 s)",
+      "effect_duration": 5.0,
+      "internal_cooldown": 60.0,
+      "actor": "Pet"
+    },
+    {
+      "effect_id": "trait:2267:2",
+      "source_type": "Trait",
+      "source_id": 2267,
+      "source_name": "Exigency Protocols",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnHealthThreshold",
+      "health_threshold": {
+        "above": false,
+        "percent": 50.0
+      },
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Exigency_Protocols (read 2026-09-23: mech struck below half health: Regeneration 5 s; recharge 60 s)",
+      "internal_cooldown": 60.0,
+      "actor": "Pet",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Regeneration",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 5000,
+        "internal_cooldown_ms": 60000
+      }
+    },
+    {
+      "effect_id": "trait:2267:coverage",
+      "source_type": "Trait",
+      "source_id": 2267,
+      "source_name": "Exigency Protocols",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Exigency_Protocols (read 2026-09-23: Increased Regenerative Healing 20%: regeneration boons you apply are stronger)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "regeneration-only healing modifier"
+      }
+    },
+    {
+      "effect_id": "trait:1959:0",
+      "source_type": "Trait",
+      "source_id": 1959,
+      "source_name": "Function Gyro",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Function Gyro",
+          "replaces": "Tool belt skill 5"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Function_Gyro (read 2026-09-23: function gyro replaces your tool belt skill 5)"
+    },
+    {
+      "effect_id": "trait:1959:1",
+      "source_type": "Trait",
+      "source_id": 1959,
+      "source_name": "Function Gyro",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Gyro skills"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Function_Gyro (read 2026-09-23: Gain access to Gyro skills)"
+    },
+    {
+      "effect_id": "trait:2014:0",
+      "source_type": "Trait",
+      "source_id": 2014,
+      "source_name": "Speed of Synergy",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Speed_of_Synergy (read 2026-09-23: Using a heal skill grants Superspeed 2 s in WvW, radius 240)",
+      "trigger_scope": {
+        "Slot": "Heal"
+      },
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Superspeed",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 2000
+      }
+    },
+    {
+      "effect_id": "trait:2014:coverage",
+      "source_type": "Trait",
+      "source_id": 2014,
+      "source_name": "Speed of Synergy",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Speed_of_Synergy (read 2026-09-23: Using a healing skill's associated tool-belt skill grants Self Superspeed 4 s in WvW/PvP)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "heal-associated tool belt skill scope"
+      }
+    },
+    {
+      "effect_id": "trait:1877:coverage",
+      "source_type": "Trait",
+      "source_id": 1877,
+      "source_name": "Impact Savant",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Impact_Savant (read 2026-09-23: Conversion Percent 15% in WvW: that share of strike damage you deal becomes barrier)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "barrier from strike-damage conversion"
+      }
+    },
+    {
+      "effect_id": "trait:413:0",
+      "source_type": "Trait",
+      "source_id": 413,
+      "source_name": "Compounding Chemicals",
+      "category": "Heal",
+      "value": 37.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnBoonApplied",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Compounding_Chemicals (read 2026-09-23: Healing 37 (0.023 healing power) when you grant yourself a boon; Notes: boons from other players also trigger, might triggers once per stack)",
+      "healing_power_coefficient": 0.023
+    },
+    {
+      "effect_id": "trait:413:1",
+      "source_type": "Trait",
+      "source_id": 413,
+      "source_name": "Compounding Chemicals",
+      "category": "RemovesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Compounding_Chemicals (read 2026-09-23: Conditions Removed 1 when you use an elixir skill)",
+      "trigger_scope": {
+        "Category": "Elixir"
+      },
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "self",
+        "status_kind": "Any",
+        "amount_mode": "Count",
+        "amount_value": 1.0,
+        "target_scope": "self"
+      }
+    },
+    {
+      "effect_id": "trait:413:2",
+      "source_type": "Trait",
+      "source_id": 413,
+      "source_name": "Compounding Chemicals",
+      "category": "FlatStat",
+      "value": 75.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Compounding_Chemicals (read 2026-09-23: Concentration 75 in PvP/WvW)"
+    },
+    {
+      "effect_id": "trait:2389:0",
+      "source_type": "Trait",
+      "source_id": 2389,
+      "source_name": "Hybrid Vigor",
+      "category": "FlatStat",
+      "value": 240.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hybrid_Vigor (read 2026-09-23: Vitality 240)"
+    },
+    {
+      "effect_id": "trait:2389:coverage",
+      "source_type": "Trait",
+      "source_id": 2389,
+      "source_name": "Hybrid Vigor",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hybrid_Vigor (read 2026-09-23: Barrier 783 (0.1 healing power) in WvW when you use a morph skill)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "barrier on morph skill use"
+      }
+    },
+    {
+      "effect_id": "trait:429:0",
+      "source_type": "Trait",
+      "source_id": 429,
+      "source_name": "Shaped Charge",
+      "category": "TriggeredEffect",
+      "value": 0.5,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Shaped_Charge (read 2026-09-23: +0.5% strike damage per stack of vulnerability on the target, 25 stacks)",
+      "inner_category": "StrikeDamagePct",
+      "prerequisite": {
+        "foe_condition": "Vulnerability"
+      },
+      "max_stacks": 25
+    },
+    {
+      "effect_id": "trait:516:coverage",
+      "source_type": "Trait",
+      "source_id": 516,
+      "source_name": "Modified Ammunition",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Modified_Ammunition (read 2026-09-23: +1% strike damage per condition on the foe in PvE/WvW; Notes: additive per condition)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "per-distinct-foe-condition scale"
+      }
+    },
+    {
+      "effect_id": "trait:536:0",
+      "source_type": "Trait",
+      "source_id": 536,
+      "source_name": "Hematic Focus",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnConditionApplied",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hematic_Focus (read 2026-09-23: Fury 4 s in WvW/PvP when you inflict bleeding; recharge 8 s)",
+      "trigger_scope": {
+        "Status": "Bleeding"
+      },
+      "internal_cooldown": 8.0,
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Fury",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 4000,
+        "internal_cooldown_ms": 8000
+      }
+    },
+    {
+      "effect_id": "trait:536:1",
+      "source_type": "Trait",
+      "source_id": 536,
+      "source_name": "Hematic Focus",
+      "category": "TriggeredEffect",
+      "value": 5.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hematic_Focus (read 2026-09-23: Fury gives +5% critical chance in WvW)",
+      "inner_category": "CritChancePct",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Fury"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:2122:coverage",
+      "source_type": "Trait",
+      "source_id": 2122,
+      "source_name": "Laser's Edge",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Laser%27s_Edge (read 2026-09-23: While Photon Forge is active, strike damage increased based on current heat; Maximum Damage Increase 10% in WvW)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "heat resource and Photon Forge state"
+      }
+    },
+    {
+      "effect_id": "trait:2135:coverage",
+      "source_type": "Trait",
+      "source_id": 2135,
+      "source_name": "Heat Therapy",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Heat_Therapy (read 2026-09-23: Heal per unit of heat lost 39 (0.006 healing power) in WvW/PvP; not while cooling from overheat without Photonic Blasting Module)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "heat resource (per unit of heat lost)"
+      }
+    },
+    {
+      "effect_id": "trait:519:0",
+      "source_type": "Trait",
+      "source_id": 519,
+      "source_name": "Energy Amplifier",
+      "category": "FlatStat",
+      "value": 250.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Energy_Amplifier (read 2026-09-23: Power 250 while you have regeneration)",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Regeneration"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:519:1",
+      "source_type": "Trait",
+      "source_id": 519,
+      "source_name": "Energy Amplifier",
+      "category": "FlatStat",
+      "value": 250.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Energy_Amplifier (read 2026-09-23: Healing Power 250 while you have regeneration)",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Regeneration"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:1936:0",
+      "source_type": "Trait",
+      "source_id": 1936,
+      "source_name": "Excessive Energy",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Excessive_Energy (read 2026-09-23: +10% strike damage while you have vigor)",
+      "inner_category": "StrikeDamagePct",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Vigor"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:604:0",
+      "source_type": "Trait",
+      "source_id": 604,
+      "source_name": "Virtue of Resolution",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Virtue_of_Resolution (read 2026-09-13: Resolution 3 s when you activate a Virtue; resolution duration increase is NeedsMechanic boon extension)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Resolution",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 3000
+      },
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:604:coverage",
+      "source_type": "Trait",
+      "source_id": 604,
+      "source_name": "Virtue of Resolution",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Virtue_of_Resolution (read 2026-09-13: Resolution you grant has +25% duration)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "boon extension"
+      }
+    },
+    {
+      "effect_id": "trait:2222:0",
+      "source_type": "Trait",
+      "source_id": 2222,
+      "source_name": "Righteous Sprint",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Righteous_Sprint (read 2026-09-13: Swiftness 5 s when you activate a Virtue; +25% movement speed is NeedsMechanic movement skill)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Swiftness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 5000
+      },
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:2222:coverage",
+      "source_type": "Trait",
+      "source_id": 2222,
+      "source_name": "Righteous Sprint",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Righteous_Sprint (read 2026-09-13: +25% movement speed)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "movement skill"
+      }
+    },
+    {
+      "effect_id": "trait:564:0",
+      "source_type": "Trait",
+      "source_id": 564,
+      "source_name": "Vigorous Precision",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnDodge",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Vigorous_Precision (read 2026-09-23: Gain vigor at the end of your dodge roll; Vigor 3 s)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Vigor",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 3000
+      }
+    },
+    {
+      "effect_id": "trait:1685:coverage",
+      "source_type": "Trait",
+      "source_id": 1685,
+      "source_name": "Purity of Body",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Purity_of_Body (read 2026-09-23: Virtue skill 2 passive also regenerates endurance; Endurance Regeneration Increase 15%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "endurance regeneration percent while the Virtue skill 2 passive is up"
+      }
+    },
+    {
+      "effect_id": "trait:572:coverage",
+      "source_type": "Trait",
+      "source_id": 572,
+      "source_name": "Justice is Blind",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Justice_is_Blind (read 2026-09-23: Gain a light aura (4 s) and blind nearby foes (Blinded 3 s, 5 targets, radius 240) when you activate Virtue skill 1)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "virtue skill 1 activation scope (slot-number trigger scope)"
+      }
+    },
+    {
+      "effect_id": "trait:571:coverage",
+      "source_type": "Trait",
+      "source_id": 571,
+      "source_name": "Renewed Justice",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Renewed_Justice (read 2026-09-23: Virtue skill 1 is renewed when you kill a foe; Recharge Reduced 100%, recharge 1 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-kill trigger and profession-skill recharge reset"
+      }
+    },
+    {
+      "effect_id": "trait:582:coverage",
+      "source_type": "Trait",
+      "source_id": 582,
+      "source_name": "Valorous Defense",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Valorous_Defense (read 2026-09-23: Gain aegis (5 s) when you are struck while below the health threshold (50%); recharge 30 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-struck trigger (incoming strike event)"
+      }
+    },
+    {
+      "effect_id": "trait:594:0",
+      "source_type": "Trait",
+      "source_id": 594,
+      "source_name": "Steadfast Courage",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnBlock",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Steadfast_Courage (read 2026-09-23: Gain protection when you block an incoming attack with aegis; Protection 1 s (WvW/PvP))",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Protection",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 1000
+      },
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Aegis"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:583:0",
+      "source_type": "Trait",
+      "source_id": 583,
+      "source_name": "Might of the Protector",
+      "category": "AppliesBoon",
+      "value": 2.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnBlock",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Might_of_the_Protector (read 2026-09-23: Gain might when you block attacks; Might x2 9 s (WvW/PvP), recharge 1 s)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Might",
+        "amount_mode": "Stacks",
+        "amount_value": 2.0,
+        "target_scope": "self",
+        "base_duration_ms": 9000
+      },
+      "internal_cooldown": 1.0
+    },
+    {
+      "effect_id": "trait:648:0",
+      "source_type": "Trait",
+      "source_id": 648,
+      "source_name": "Zealot's Resolution",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnHit",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Zealot%27s_Resolution (read 2026-09-23: Cast Lesser Symbol of Resolution when you strike an enemy below the health threshold (75%); the symbol grants Resolution 2 s to 5 allies per pulse (API skill 13677, Pulses 4 over 4 s, recharge 30 s); symbol damage not modelled)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Resolution",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 2000,
+        "target_count": 5
+      },
+      "prerequisite": {
+        "foe_health": {
+          "above": false,
+          "percent": 75.0
+        }
+      },
+      "internal_cooldown": 30.0,
+      "cast_skill_id": 13677
+    },
+    {
+      "effect_id": "trait:648:coverage",
+      "source_type": "Trait",
+      "source_id": 648,
+      "source_name": "Zealot's Resolution",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Zealot%27s_Resolution (read 2026-09-23: Lesser Symbol of Resolution (skill 13677) pulses 4 times over 4 s: Resolution 2 s to 5 allies and 0.5 strike damage per pulse)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "symbol pulses (4 x Resolution 2 s; 0.5 strike per pulse)"
+      }
+    },
+    {
+      "effect_id": "trait:649:0",
+      "source_type": "Trait",
+      "source_id": 649,
+      "source_name": "Symbolic Avenger",
+      "category": "TriggeredEffect",
+      "value": 1.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnSymbolHit",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Symbolic_Avenger (read 2026-09-23: Your strike damage is increased whenever your Symbols hit a foe; +1% damage per stack, 15 s, maximum 5 stacks)",
+      "inner_category": "StrikeDamagePct",
+      "effect_duration": 15.0,
+      "max_stacks": 5
+    },
+    {
+      "effect_id": "trait:1848:0",
+      "source_type": "Trait",
+      "source_id": 1848,
+      "source_name": "Virtuous Action",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Dragonhunter virtues",
+          "replaces": "Virtues"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Virtuous_Action (read 2026-09-23: Virtues manifested as physical aspects: Spear of Justice, Wings of Resolve, Shield of Courage replace the three Virtues)"
+    },
+    {
+      "effect_id": "trait:1848:1",
+      "source_type": "Trait",
+      "source_id": 1848,
+      "source_name": "Virtuous Action",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Traps"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Virtuous_Action (read 2026-09-23: Gain access to Traps)"
+    },
+    {
+      "effect_id": "trait:2089:0",
+      "source_type": "Trait",
+      "source_id": 2089,
+      "source_name": "Purity of Word",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Tomes",
+          "replaces": "Virtues"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Purity_of_Word (read 2026-09-23: Virtues manifested as mystic tomes; using Tome skills consumes pages, pages regenerate every 8 s interval)"
+    },
+    {
+      "effect_id": "trait:2089:1",
+      "source_type": "Trait",
+      "source_id": 2089,
+      "source_name": "Purity of Word",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Mantras"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Purity_of_Word (read 2026-09-23: Gain access to Mantras)"
+    },
+    {
+      "effect_id": "trait:2062:0",
+      "source_type": "Trait",
+      "source_id": 2062,
+      "source_name": "Swift Scholar",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Swift_Scholar (read 2026-09-23: Equipping a Virtue grants you quickness; Quickness 2 s (WvW); only once per interval (interval not stated))",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Quickness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 2000
+      },
+      "internal_cooldown": null,
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:2062:coverage",
+      "source_type": "Trait",
+      "source_id": 2062,
+      "source_name": "Swift Scholar",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Swift_Scholar (read 2026-09-23: Every third Tome skill grants you pages; Pages 1; stacks reset when exiting a tome)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "tome page resource"
+      }
+    },
+    {
+      "effect_id": "trait:2381:0",
+      "source_type": "Trait",
+      "source_id": 2381,
+      "source_name": "Luminary",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Radiant Forge"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Luminary_(trait) (read 2026-09-23: Gain access to Radiant Forge)"
+    },
+    {
+      "effect_id": "trait:2381:1",
+      "source_type": "Trait",
+      "source_id": 2381,
+      "source_name": "Luminary",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Stances"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Luminary_(trait) (read 2026-09-23: Gain access to Stance skills)"
+    },
+    {
+      "effect_id": "trait:2435:coverage",
+      "source_type": "Trait",
+      "source_id": 2435,
+      "source_name": "Radiant Armaments",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Radiant_Armaments (read 2026-09-23: Gain a bonus based on your equipped radiant weapon (hammer +10% damage WvW, staff +10% healing to others WvW, sword +33% movement speed, shield 10% incoming strike damage reduced), lingering 10 s after exiting Radiant Forge)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "radiant forge weapon state"
+      }
+    },
+    {
+      "effect_id": "trait:2200:0",
+      "source_type": "Trait",
+      "source_id": 2200,
+      "source_name": "Willbender Training",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Willbender virtues",
+          "replaces": "Virtues"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Willbender_Training (read 2026-09-23: The guardian's Virtues are now movement based (Rushing Justice, Flowing Resolve, Crashing Courage))"
+    },
+    {
+      "effect_id": "trait:2200:1",
+      "source_type": "Trait",
+      "source_id": 2200,
+      "source_name": "Willbender Training",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Physical skills"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Willbender_Training (read 2026-09-23: Gain access to the Physical skill type)"
+    },
+    {
+      "effect_id": "trait:2189:0",
+      "source_type": "Trait",
+      "source_id": 2189,
+      "source_name": "Lethal Tempo",
+      "category": "TriggeredEffect",
+      "value": 3.0,
+      "stacking_rule": "RefreshAllStacks",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Lethal_Tempo (read 2026-09-23: Each time you activate a virtue, gain a damage bonus; +3% strike damage per stack (WvW/PvP), 6 s, maximum 5 stacks; gaining a stack refreshes other stacks)",
+      "inner_category": "StrikeDamagePct",
+      "effect_duration": 6.0,
+      "max_stacks": 5,
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:2189:1",
+      "source_type": "Trait",
+      "source_id": 2189,
+      "source_name": "Lethal Tempo",
+      "category": "TriggeredEffect",
+      "value": 3.0,
+      "stacking_rule": "RefreshAllStacks",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Lethal_Tempo (read 2026-09-23: Each time you activate a virtue, gain a damage bonus; +3% condition damage per stack (WvW/PvP), 6 s, maximum 5 stacks; gaining a stack refreshes other stacks)",
+      "inner_category": "ConditionDamagePct",
+      "effect_duration": 6.0,
+      "max_stacks": 5,
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:2189:coverage",
+      "source_type": "Trait",
+      "source_id": 2189,
+      "source_name": "Lethal Tempo",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Lethal_Tempo (read 2026-09-23: or your virtue's passives are triggered, gain a damage bonus)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "virtue passive trigger events"
+      }
+    },
+    {
+      "effect_id": "trait:551:0",
+      "source_type": "Trait",
+      "source_id": 551,
+      "source_name": "Selfless Daring",
+      "category": "Heal",
+      "value": 129.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnDodge",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Selfless_Daring (read 2026-09-23: end of dodge roll heals nearby allies (self included); healing 129, coefficient 0.6 (WvW), 5 targets, radius 240)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Healing (area)",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Party",
+        "target_count": 5
+      },
+      "healing_power_coefficient": 0.6
+    },
+    {
+      "effect_id": "trait:568:0",
+      "source_type": "Trait",
+      "source_id": 568,
+      "source_name": "Radiant Power",
+      "category": "FlatStat",
+      "value": 150.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Radiant_Power (read 2026-09-23: Your ferocity is increased; Ferocity +150)"
+    },
+    {
+      "effect_id": "trait:568:1",
+      "source_type": "Trait",
+      "source_id": 568,
+      "source_name": "Radiant Power",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Radiant_Power (read 2026-09-23: Attacks against burning foes have an increased chance to critically hit; Critical chance increase 10)",
+      "inner_category": "CritChancePct",
+      "prerequisite": {
+        "foe_condition": "Burning"
+      }
+    },
+    {
+      "effect_id": "trait:620:0",
+      "source_type": "Trait",
+      "source_id": 620,
+      "source_name": "Power of the Virtuous",
+      "category": "StatConversion",
+      "value": 13.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Power_of_the_Virtuous (read 2026-09-23: Gain condition damage based on your vitality; 13% of Vitality as Condition Damage (WvW/PvP))"
+    },
+    {
+      "effect_id": "trait:620:coverage",
+      "source_type": "Trait",
+      "source_id": 620,
+      "source_name": "Power of the Virtuous",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Power_of_the_Virtuous (read 2026-09-23: Virtues gain reduced recharge; Recharge Reduced 15%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "profession-skill recharge reduction"
+      }
+    },
+    {
+      "effect_id": "trait:621:coverage",
+      "source_type": "Trait",
+      "source_id": 621,
+      "source_name": "Inspired Virtue",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Inspired_Virtue (read 2026-09-23: Virtues apply boons to allies when activated (Justice: Might x3 5 s; Resolve: Regeneration 5 s; Courage: Protection 5 s; 5 targets, radius 1200). Deal increased strike damage for each boon on you; +1% per boon (WvW/PvP))",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "per-virtue activation scope (slot-number trigger scope) and a per-distinct-boon-count damage scale"
+      }
+    },
+    {
+      "effect_id": "trait:646:0",
+      "source_type": "Trait",
+      "source_id": 646,
+      "source_name": "Symbolic Exposure",
+      "category": "AppliesCondition",
+      "value": 2.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSymbolHit",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Symbolic_Exposure (read 2026-09-23: Symbols inflict vulnerability on foes; Vulnerability x2 5 s)",
+      "status_operation": {
+        "operation_type": "AppliesCondition",
+        "target_side": "Enemy",
+        "status_kind": "Vulnerability",
+        "amount_mode": "Stacks",
+        "amount_value": 2.0,
+        "target_scope": "SingleTarget",
+        "base_duration_ms": 5000
+      }
+    },
+    {
+      "effect_id": "trait:646:1",
+      "source_type": "Trait",
+      "source_id": 646,
+      "source_name": "Symbolic Exposure",
+      "category": "TriggeredEffect",
+      "value": 5.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Symbolic_Exposure (read 2026-09-23: Deal increased strike damage to vulnerable foes; Damage Increase 5%)",
+      "inner_category": "StrikeDamagePct",
+      "prerequisite": {
+        "foe_condition": "Vulnerability"
+      }
+    },
+    {
+      "effect_id": "trait:1896:0",
+      "source_type": "Trait",
+      "source_id": 1896,
+      "source_name": "Defender's Dogma",
+      "category": "FlatStat",
+      "value": 180.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Defender%27s_Dogma (read 2026-09-23: Gain vitality; Vitality +180)"
+    },
+    {
+      "effect_id": "trait:1896:coverage",
+      "source_type": "Trait",
+      "source_id": 1896,
+      "source_name": "Defender's Dogma",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Defender%27s_Dogma (read 2026-09-23: Blocking an attack causes justice to reach its maximum charge and reduces the cooldown of Spear of Justice; Recharge Time Reduced 1 s (WvW/PvP), recharge 1 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "justice attack-count charge and profession-skill recharge reduction on block"
+      }
+    },
+    {
+      "effect_id": "trait:1926:coverage",
+      "source_type": "Trait",
+      "source_id": 1926,
+      "source_name": "Pure of Sight",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Pure_of_Sight (read 2026-09-23: Deal bonus strike damage based on your distance to the enemy; minimum 5% (WvW), maximum 15%; the increase starts above 150 units and peaks at 1200 units)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "distance scale with floor (150-1200)"
+      }
+    },
+    {
+      "effect_id": "trait:2148:0",
+      "source_type": "Trait",
+      "source_id": 2148,
+      "source_name": "Imbued Haste",
+      "category": "FlatStat",
+      "value": 150.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Imbued_Haste (read 2026-09-23: Gain increased attributes while affected by quickness; Condition Damage +150 (WvW/PvP))",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Quickness"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:2148:1",
+      "source_type": "Trait",
+      "source_id": 2148,
+      "source_name": "Imbued Haste",
+      "category": "FlatStat",
+      "value": 150.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Imbued_Haste (read 2026-09-23: Gain increased attributes while affected by quickness; Healing Power +150 (WvW/PvP))",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Quickness"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:2148:2",
+      "source_type": "Trait",
+      "source_id": 2148,
+      "source_name": "Imbued Haste",
+      "category": "FlatStat",
+      "value": 150.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Imbued_Haste (read 2026-09-23: Gain increased attributes while affected by quickness; Vitality +150 (WvW/PvP))",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Quickness"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:2394:0",
+      "source_type": "Trait",
+      "source_id": 2394,
+      "source_name": "Light's Gift",
+      "category": "FlatStat",
+      "value": 180.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Light%27s_Gift (read 2026-09-23: Gain vitality; Vitality +180)"
+    },
+    {
+      "effect_id": "trait:2394:coverage",
+      "source_type": "Trait",
+      "source_id": 2394,
+      "source_name": "Light's Gift",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Light%27s_Gift (read 2026-09-23: Grant Luminary's Blessing (3 s WvW/PvP) to allies when you equip a radiant weapon; 5 targets, radius 300)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "radiant weapon equip event"
+      }
+    },
+    {
+      "effect_id": "trait:1010:0",
+      "source_type": "Trait",
+      "source_id": 1010,
+      "source_name": "Opening Strike",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Opening Strike"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Opening_Strike (read 2026-09-23: your next attack is an opening strike when entering combat)"
+    },
+    {
+      "effect_id": "trait:1010:coverage",
+      "source_type": "Trait",
+      "source_id": 1010,
+      "source_name": "Opening Strike",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Opening_Strike (read 2026-09-23: you and your pet inflict 5 stacks of vulnerability for 5 s with the first strike when entering combat)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-opening-strike"
+      }
+    },
+    {
+      "effect_id": "trait:1009:coverage",
+      "source_type": "Trait",
+      "source_id": 1009,
+      "source_name": "Alpha Focus",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Alpha_Focus (read 2026-09-23: opening strikes inflict crippled 2 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-opening-strike"
+      }
+    },
+    {
+      "effect_id": "trait:1011:coverage",
+      "source_type": "Trait",
+      "source_id": 1011,
+      "source_name": "Precise Strike",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Precise_Strike (read 2026-09-23: critical chance increase 100% on the opening strike)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-opening-strike"
+      }
+    },
+    {
+      "effect_id": "trait:1055:0",
+      "source_type": "Trait",
+      "source_id": 1055,
+      "source_name": "Rejuvenation",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Rejuvenation (read 2026-09-23: Beast skills grant regeneration 5 s (WvW/PvP) to 5 targets in a 300 radius around the ranger, recharge 20 s)",
+      "effect_duration": 5.0,
+      "internal_cooldown": 20.0,
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Regeneration",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "NearbyAllies",
+        "base_duration_ms": 5000,
+        "target_count": 5
+      },
+      "trigger_scope": {
+        "Category": "Beast"
+      }
+    },
+    {
+      "effect_id": "trait:1056:coverage",
+      "source_type": "Trait",
+      "source_id": 1056,
+      "source_name": "Fortifying Bond",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Fortifying_Bond (read 2026-09-23: when you gain a boon it is shared with your pet (WvW/PvP): Aegis 5 s, Alacrity 3 s, Fury 5 s, Might 5 s, Protection 3 s, Quickness 2.5 s, Regeneration 6 s, Resistance 2 s, Resolution 5 s, Swiftness 6 s, Stability 5 s, Vigor 3 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "pet as boon-share target"
+      }
+    },
+    {
+      "effect_id": "trait:1080:coverage",
+      "source_type": "Trait",
+      "source_id": 1080,
+      "source_name": "Tail Wind",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Tail_Wind (read 2026-09-23: gain swiftness 9 s when swapping weapons in combat, recharge 9 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-weapon-swap"
+      }
+    },
+    {
+      "effect_id": "trait:1083:coverage",
+      "source_type": "Trait",
+      "source_id": 1083,
+      "source_name": "Furious Grip",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Furious_Grip (read 2026-09-23: gain fury 5 s (WvW/PvP) when swapping weapons in combat, recharge 9 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-weapon-swap"
+      }
+    },
+    {
+      "effect_id": "trait:1096:coverage",
+      "source_type": "Trait",
+      "source_id": 1096,
+      "source_name": "Natural Vigor",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Natural_Vigor (read 2026-09-23: endurance regeneration increase 25%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "endurance regen"
+      }
+    },
+    {
+      "effect_id": "trait:1090:0",
+      "source_type": "Trait",
+      "source_id": 1090,
+      "source_name": "Companion's Defense",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnDodge",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Companion%27s_Defense (read 2026-09-23: you and your pet gain protection 2 s when you dodge roll in combat)",
+      "effect_duration": 2.0,
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Protection",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 2000
+      },
+      "gates": [
+        "InCombat"
+      ]
+    },
+    {
+      "effect_id": "trait:1992:0",
+      "source_type": "Trait",
+      "source_id": 1992,
+      "source_name": "Natural Mender",
+      "category": "OutgoingHealingPct",
+      "value": 15.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Natural_Mender (read 2026-09-23: healing increase to others 15% (WvW/PvP))"
+    },
+    {
+      "effect_id": "trait:1992:coverage",
+      "source_type": "Trait",
+      "source_id": 1992,
+      "source_name": "Natural Mender",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Natural_Mender (read 2026-09-23: energy gain 8 astral force (PvE/WvW) every 3 s interval while not in celestial avatar form)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "astral force; in-celestial-avatar state"
+      }
+    },
+    {
+      "effect_id": "trait:2359:0",
+      "source_type": "Trait",
+      "source_id": 2359,
+      "source_name": "Teachings of the Tengu",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Cyclone Bow"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Teachings_of_the_Tengu (read 2026-09-23: conjure the Cyclone Bow at will; arrows generated every 5 s interval)"
+    },
+    {
+      "effect_id": "trait:2359:1",
+      "source_type": "Trait",
+      "source_id": 2359,
+      "source_name": "Teachings of the Tengu",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Hawkeye"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Teachings_of_the_Tengu (read 2026-09-23: arrow-consuming skills grant Wind Force; Hawkeye usable at the Wind Force threshold of 5)"
+    },
+    {
+      "effect_id": "trait:2359:2",
+      "source_type": "Trait",
+      "source_id": 2359,
+      "source_name": "Teachings of the Tengu",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Squalls"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Teachings_of_the_Tengu (read 2026-09-23: gain access to Squalls)"
+    },
+    {
+      "effect_id": "trait:2341:coverage",
+      "source_type": "Trait",
+      "source_id": 2341,
+      "source_name": "Jetstream",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Jetstream (read 2026-09-23: Hawkeye grants superspeed 3 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-skill-use scope Hawkeye"
+      }
+    },
+    {
+      "effect_id": "trait:2341:coverage:1",
+      "source_type": "Trait",
+      "source_id": 2341,
+      "source_name": "Jetstream",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Jetstream (read 2026-09-23: base movement speed increase 25%)",
+      "coverage": {
+        "class": "PassiveNoEffect"
+      }
+    },
+    {
+      "effect_id": "trait:2151:0",
+      "source_type": "Trait",
+      "source_id": 2151,
+      "source_name": "Elevated Bond",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Beastmode"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elevated_Bond (read 2026-09-23: meld with your pet by entering beastmode)"
+    },
+    {
+      "effect_id": "trait:2151:1",
+      "source_type": "Trait",
+      "source_id": 2151,
+      "source_name": "Elevated Bond",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Stances"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Elevated_Bond (read 2026-09-23: gain access to Stances)"
+    },
+    {
+      "effect_id": "trait:2127:0",
+      "source_type": "Trait",
+      "source_id": 2127,
+      "source_name": "Twice as Vicious",
+      "category": "StrikeDamagePct",
+      "value": 5.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnDisableFoe",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Twice_as_Vicious (read 2026-09-23: disabling a foe grants Twice as Vicious 10 s: +5% damage (WvW/PvP))",
+      "effect_duration": 10.0
+    },
+    {
+      "effect_id": "trait:2127:1",
+      "source_type": "Trait",
+      "source_id": 2127,
+      "source_name": "Twice as Vicious",
+      "category": "ConditionDamagePct",
+      "value": 5.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnDisableFoe",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Twice_as_Vicious (read 2026-09-23: disabling a foe grants Twice as Vicious 10 s: +5% condition damage (WvW/PvP))",
+      "effect_duration": 10.0
+    },
+    {
+      "effect_id": "trait:2268:0",
+      "source_type": "Trait",
+      "source_id": 2268,
+      "source_name": "Unleashed Power",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Unleash"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Unleashed_Power (read 2026-09-23: gain access to Unleash; unleashed pet skills are replaced with larger area skills)"
+    },
+    {
+      "effect_id": "trait:2268:1",
+      "source_type": "Trait",
+      "source_id": 2268,
+      "source_name": "Unleashed Power",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Cantrips"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Unleashed_Power (read 2026-09-23: gain access to Cantrips)"
+    },
+    {
+      "effect_id": "trait:2268:2",
+      "source_type": "Trait",
+      "source_id": 2268,
+      "source_name": "Unleashed Power",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Unleashed Ambush"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Unleashed_Power (read 2026-09-23: once per interval (15 s in WvW/PvP) Unleashed Ambush skills are available for 4 s after you unleash)"
+    },
+    {
+      "effect_id": "trait:974:0",
+      "source_type": "Trait",
+      "source_id": 974,
+      "source_name": "Loud Whistle",
+      "category": "StrikeDamagePct",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnHealthThreshold",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Loud_Whistle (read 2026-09-23: pet damage increase 10% (WvW/PvP) while your health is above 90%)",
+      "health_threshold": {
+        "above": true,
+        "percent": 90.0
+      },
+      "actor": "Pet"
+    },
+    {
+      "effect_id": "trait:974:coverage",
+      "source_type": "Trait",
+      "source_id": 974,
+      "source_name": "Loud Whistle",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Loud_Whistle (read 2026-09-23: pet swap recharge reduced 20%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "pet swap recharge"
+      }
+    },
+    {
+      "effect_id": "trait:1065:0",
+      "source_type": "Trait",
+      "source_id": 1065,
+      "source_name": "Pet's Prowess",
+      "category": "FlatStat",
+      "value": 300.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Pet%27s_Prowess (read 2026-09-23: pet Ferocity +300)",
+      "actor": "Pet"
+    },
+    {
+      "effect_id": "trait:1065:coverage",
+      "source_type": "Trait",
+      "source_id": 1065,
+      "source_name": "Pet's Prowess",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Pet%27s_Prowess (read 2026-09-23: pet movement speed increase 30%)",
+      "coverage": {
+        "class": "PassiveNoEffect"
+      }
+    },
+    {
+      "effect_id": "trait:1900:0",
+      "source_type": "Trait",
+      "source_id": 1900,
+      "source_name": "Pack Alpha",
+      "category": "FlatStat",
+      "value": 150.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Pack_Alpha (read 2026-09-23: pet attribute increase 150 (WvW/PvP) to Power, Condition Damage, Precision, Toughness and Vitality)",
+      "actor": "Pet"
+    },
+    {
+      "effect_id": "trait:1900:coverage",
+      "source_type": "Trait",
+      "source_id": 1900,
+      "source_name": "Pack Alpha",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Pack_Alpha (read 2026-09-23: pet skill recharge reduced 20%)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "pet skill recharge"
+      }
+    },
+    {
+      "effect_id": "trait:1862:coverage",
+      "source_type": "Trait",
+      "source_id": 1862,
+      "source_name": "Live Vicariously",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Live_Vicariously (read 2026-09-23: when you heal an ally you are also healed: 144 + 0.01 healing power (WvW/PvP), recharge 1 s)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-ally-healed"
+      }
+    },
+    {
+      "effect_id": "trait:1874:0",
+      "source_type": "Trait",
+      "source_id": 1874,
+      "source_name": "Celestial Being",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Celestial Avatar"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Celestial_Being (read 2026-09-23: become a celestial avatar once you gain enough astral force)"
+    },
+    {
+      "effect_id": "trait:1874:1",
+      "source_type": "Trait",
+      "source_id": 1874,
+      "source_name": "Celestial Being",
+      "category": {
+        "MechanicUnlock": {
+          "mechanic": "Glyphs"
+        }
+      },
+      "value": null,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Celestial_Being (read 2026-09-23: gain access to Glyphs)"
+    },
+    {
+      "effect_id": "trait:1874:coverage",
+      "source_type": "Trait",
+      "source_id": 1874,
+      "source_name": "Celestial Being",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Celestial_Being (read 2026-09-23: astral force 1.5% per heal, 0.75% per damage)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "astral force"
+      }
+    },
+    {
+      "effect_id": "trait:2363:0",
+      "source_type": "Trait",
+      "source_id": 2363,
+      "source_name": "Bird of Prey",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Bird_of_Prey (read 2026-09-23: strike damage increase 10% (WvW) while you have swiftness or superspeed; swiftness 20% more effective)",
+      "inner_category": "StrikeDamagePct",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Swiftness"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:2363:coverage",
+      "source_type": "Trait",
+      "source_id": 2363,
+      "source_name": "Bird of Prey",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Bird_of_Prey (read 2026-09-23: the same 10% while you have superspeed)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "superspeed boon; any-of gate"
+      }
+    },
+    {
+      "effect_id": "trait:1059:0",
+      "source_type": "Trait",
+      "source_id": 1059,
+      "source_name": "Lingering Magic",
+      "category": "FlatStat",
+      "value": 120.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Lingering_Magic (read 2026-09-23: you and your pet gain Concentration +120 (WvW/PvP))"
+    },
+    {
+      "effect_id": "trait:1059:coverage",
+      "source_type": "Trait",
+      "source_id": 1059,
+      "source_name": "Lingering Magic",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Lingering_Magic (read 2026-09-23: regeneration you apply is 20% more effective)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "regeneration effectiveness"
+      }
+    },
+    {
+      "effect_id": "trait:1068:0",
+      "source_type": "Trait",
+      "source_id": 1068,
+      "source_name": "Hunter's Tactics",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hunter%27s_Tactics (read 2026-09-23: damage increase 10% while attacking from behind or the side)",
+      "inner_category": "StrikeDamagePct",
+      "gates": [
+        {
+          "Positional": "Flank"
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:1068:1",
+      "source_type": "Trait",
+      "source_id": 1068,
+      "source_name": "Hunter's Tactics",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hunter%27s_Tactics (read 2026-09-23: critical chance increase 10% while attacking from behind or the side)",
+      "inner_category": "CritChancePct",
+      "gates": [
+        {
+          "Positional": "Flank"
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:1068:2",
+      "source_type": "Trait",
+      "source_id": 1068,
+      "source_name": "Hunter's Tactics",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hunter%27s_Tactics (read 2026-09-23: damage increase 10% while attacking from behind or the side)",
+      "inner_category": "StrikeDamagePct",
+      "gates": [
+        {
+          "Positional": "Behind"
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:1068:3",
+      "source_type": "Trait",
+      "source_id": 1068,
+      "source_name": "Hunter's Tactics",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Hunter%27s_Tactics (read 2026-09-23: critical chance increase 10% while attacking from behind or the side)",
+      "inner_category": "CritChancePct",
+      "gates": [
+        {
+          "Positional": "Behind"
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:2156:0",
+      "source_type": "Trait",
+      "source_id": 2156,
+      "source_name": "Furious Strength",
+      "category": "TriggeredEffect",
+      "value": 7.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Furious_Strength (read 2026-09-23: strike damage increase 7% (WvW/PvP) while you have fury)",
+      "inner_category": "StrikeDamagePct",
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Fury"
+          }
+        }
+      ]
+    },
+    {
+      "effect_id": "trait:2269:coverage",
+      "source_type": "Trait",
+      "source_id": 2269,
+      "source_name": "Vow of the Untamed",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Vow_of_the_Untamed (read 2026-09-23: outgoing strike damage increase 10% (WvW/PvP) while you are unleashed)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "unleashed state"
+      }
+    },
+    {
+      "effect_id": "trait:2269:coverage:1",
+      "source_type": "Trait",
+      "source_id": 2269,
+      "source_name": "Vow of the Untamed",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Vow_of_the_Untamed (read 2026-09-23: incoming strike damage reduced 10% (WvW/PvP) while your pet is unleashed)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "unleashed state"
+      }
+    },
+    {
+      "effect_id": "trait:2286:0",
+      "source_type": "Trait",
+      "source_id": 2286,
+      "source_name": "Natural Fortitude",
+      "category": "FlatStat",
+      "value": 240.0,
+      "stacking_rule": "Additive",
+      "trigger_rule": "Passive",
+      "uptime_model": {
+        "kind": "AlwaysOn"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Natural_Fortitude (read 2026-09-23: gain Vitality +240)"
+    },
+    {
+      "effect_id": "trait:2286:coverage",
+      "source_type": "Trait",
+      "source_id": 2286,
+      "source_name": "Natural Fortitude",
+      "category": "FlatStat",
+      "value": null,
+      "stacking_rule": "Additive",
+      "trigger_rule": "NotApplicable",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Natural_Fortitude (read 2026-09-23: Unleashed Ambush skills siphon 1764 + 0.2 healing (WvW/PvP) on the first hit, 294 + 0.03 per extra target, 5 targets)",
+      "coverage": {
+        "class": "NeedsMechanic",
+        "mechanic": "on-hit scope Unleashed Ambush"
+      }
+    },
+    {
+      "effect_id": "trait:1089:0",
+      "source_type": "Trait",
+      "source_id": 1089,
+      "source_name": "Rugged Growth",
+      "category": "Heal",
+      "value": 196.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Periodic",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Rugged_Growth (read 2026-09-23: you and your pet recover 196 + 0.122 healing power (WvW/PvP) every 1 s interval while affected by protection)",
+      "internal_cooldown": 1.0,
+      "healing_power_coefficient": 0.122,
+      "gates": [
+        {
+          "SelfBoon": {
+            "boon": "Protection"
+          }
+        }
+      ]
     }
   ]
 }

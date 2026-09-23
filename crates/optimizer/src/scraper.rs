@@ -508,7 +508,13 @@ fn benchmark_from_html(
     // Captured during the scrape because the alternative is fetching every
     // page a second time.
     published.prose = truncate_chars(&prose, PROSE_LIMIT);
+    let (benchmark_dps, log_url) = match source {
+        "snowcrows" => crate::providers::snowcrows::benchmark(html),
+        _ => (None, None),
+    };
     BenchmarkBuild {
+        benchmark_dps,
+        log_url,
         source: source.into(),
         profession,
         spec_name,
@@ -1927,6 +1933,59 @@ fn today_string() -> String {
 mod tests {
     use super::*;
 
+    /// Trimmed from the live Snowcrows Power Dragonhunter page, 2026-09-23.
+    const SNOWCROWS_BENCHMARK_SNIPPET: &str = r#"<div class="md:flex-grow text-left">
+<a class="tab" icon="fa-file-chart-column" target="_blank" href="https://dps.report/so5x-20260418-005724_golem">
+<i class="fa-solid fa-file-chart-column mr-3"></i>DPS Report</a></div>
+<div class="bg-neutral-800/40 p-4 md:p-6 rounded-lg" stat="Last Benchmark Max">
+<div class="text-sm text-neutral-400 mb-2">Last Benchmark Max</div>
+<div class="text-lg"><i class="fas fa-angle-double-up mr-1"></i>41879</div></div>
+<div class="bg-neutral-800/40 p-4 md:p-6 rounded-lg" stat="Last Benchmark Average">
+<div class="text-sm text-neutral-400 mb-2">Last Benchmark Average</div>
+<div class="text-lg"><i class="fas fa-tilde mr-1"></i>41400</div></div>"#;
+
+    #[test]
+    fn snowcrows_page_yields_benchmark_dps_and_log() {
+        let row = |source| {
+            benchmark_from_html(
+                SNOWCROWS_BENCHMARK_SNIPPET,
+                "https://snowcrows.com/builds/raids/guardian/x",
+                "2026-09-23",
+                source,
+                "Guardian".into(),
+                "Dragonhunter".into(),
+                "PvE",
+                "",
+            )
+        };
+        let sc = row("snowcrows");
+        assert_eq!(sc.benchmark_dps, Some(41879.0));
+        assert_eq!(
+            sc.log_url.as_deref(),
+            Some("https://dps.report/so5x-20260418-005724_golem")
+        );
+        // Only Snowcrows publishes a benchmark; other readers leave it empty.
+        let hs = row("hardstuck");
+        assert_eq!((hs.benchmark_dps, hs.log_url), (None, None));
+    }
+
+    #[test]
+    fn stored_row_without_benchmark_fields_still_loads() {
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/benchmarks/snowcrows_guardian_pve.json"
+        ))
+        .expect("fixture");
+        let rows: Vec<BenchmarkBuild> = serde_json::from_str(&text).expect("fixture parses");
+        assert!(!rows.is_empty());
+        assert!(rows
+            .iter()
+            .all(|b| b.benchmark_dps.is_none() && b.log_url.is_none()));
+        // And a row without them serialises without them.
+        let json = serde_json::to_string(&rows[0]).expect("serialise");
+        assert!(!json.contains("benchmark_dps") && !json.contains("log_url"));
+    }
+
     #[test]
     fn format_source_status_shows_live_progress() {
         let line = format_source_status("Snowcrows (PvE)", 0, Some("12/45"), None);
@@ -2023,6 +2082,7 @@ mod tests {
                 prose: "Opener\nFrost Trap\nWeapon Swap\nMaul".into(),
                 ..Default::default()
             },
+            ..Default::default()
         };
         // What the old extractor wrote: today's date, no ids.
         let id_less = |url: &str| BenchmarkBuild {

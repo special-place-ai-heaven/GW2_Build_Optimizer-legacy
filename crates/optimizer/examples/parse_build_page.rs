@@ -46,7 +46,12 @@ fn main() {
 
     let build = match site.as_str() {
         "guildjen" => providers::guildjen::parse(&html),
-        "snowcrows" => providers::snowcrows::parse(&html),
+        "snowcrows" => {
+            let (benchmark_dps, log_url) = providers::snowcrows::benchmark(&html);
+            println!("  benchmark_dps: {benchmark_dps:?}");
+            println!("  log_url    : {log_url:?}");
+            providers::snowcrows::parse(&html)
+        }
         "hardstuck" => {
             let name = providers::hardstuck::build_name(&html).unwrap_or_default();
             println!("  name       : {name:?}");

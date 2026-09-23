@@ -1996,28 +1996,29 @@ mod tests {
         );
     }
 
-    /// The schema grew; the data did not. Every shipped record still parses and
-    /// the counts are the ones the migration left behind.
+    /// Gate 1 ratchet: coverage blocks only ever turn into real records, and
+    /// a coverage block is exactly a `NotApplicable` trigger (rule 15).
     #[test]
-    fn gate1_record_counts_are_unchanged() {
-        for (json, mode, expected) in [
-            (PVE_EFFECTS_JSON, "PvE", 30),
-            (PVP_EFFECTS_JSON, "PvP", 14),
-            (WVW_EFFECTS_JSON, "WvW", 779),
+    fn gate1_coverage_only_ratchets_down() {
+        for (json, mode) in [
+            (PVE_EFFECTS_JSON, "PvE"),
+            (PVP_EFFECTS_JSON, "PvP"),
+            (WVW_EFFECTS_JSON, "WvW"),
         ] {
             let file = load_effects_file(json).expect("embedded file loads");
             assert_eq!(file.mode, mode);
-            assert_eq!(file.effects.len(), expected, "{mode} record count moved");
+            assert!(file
+                .effects
+                .iter()
+                .all(|e| (e.trigger_rule == TriggerRule::NotApplicable) == e.coverage.is_some()));
         }
-        // 582 WvW coverage blocks carried `Passive` as required-field filler
-        // before the migration; all of them now say NotApplicable.
+        // 582 after the 2026-09-22 migration; 581 after the Ele/Engi/Guardian/
+        // Ranger minor-trait increment (2026-09-23: 209 minors recorded, the
+        // remaining blocks each name the trigger or field the format lacks).
+        // Lower this, never raise it.
         let wvw = load_effects_file(WVW_EFFECTS_JSON).expect("WvW loads");
         let coverage = wvw.effects.iter().filter(|e| e.coverage.is_some()).count();
-        assert_eq!(coverage, 582);
-        assert!(wvw
-            .effects
-            .iter()
-            .all(|e| (e.trigger_rule == TriggerRule::NotApplicable) == e.coverage.is_some()));
+        assert!(coverage <= 581, "coverage blocks grew to {coverage}");
     }
 
     /// Sprint 3: the fourteen Sprint 2 WvW records load unchanged.

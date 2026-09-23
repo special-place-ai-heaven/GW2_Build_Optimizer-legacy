@@ -63,6 +63,22 @@ pub struct DamageModifiers {
     /// Target-conditional percents (vs-target / vs-disabled / PerFoeStack).
     /// Parsed here, evaluated at resolve — never in `total_strike_mult`.
     pub deferred_target: Vec<DeferredTargetModifier>,
+    /// Each equipped trait's share of the always-on percents above. The WvW
+    /// timeline removes a trait's share when it runs that trait's own
+    /// Conditional record, so the bonus is counted once (review E1).
+    pub trait_standing: Vec<TraitStanding>,
+}
+
+/// One trait's always-on share of the parsed modifiers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitStanding {
+    pub trait_id: u32,
+    /// Fractions this trait pushed into `strike_pct`.
+    pub strike_pct: Vec<f64>,
+    /// Points this trait pushed into `crit_chance_pct`.
+    pub crit_chance_pct: f64,
+    /// Points this trait pushed into `crit_damage_pct`.
+    pub crit_damage_pct: f64,
 }
 
 /// One flattened, health-gated strike clause and where it came from.
@@ -865,7 +881,26 @@ pub fn extract_damage_modifiers(
         }
         // Two same-category values are the API's PvE/competitive split. Collapse
         // them within one trait so they can never stack simultaneously.
+        let (strike, crit_chance, crit_damage) = (
+            mods.strike_pct.len(),
+            mods.crit_chance_pct.len(),
+            mods.crit_damage_pct.len(),
+        );
         absorb_mode_pairs(&mut mods, trait_mods, competitive);
+        // ponytail: additive-bucket strike entries are not tagged; no trait
+        // routed there has a Conditional record. Removing one needs the bucket total.
+        let standing = TraitStanding {
+            trait_id,
+            strike_pct: mods.strike_pct[strike..].to_vec(),
+            crit_chance_pct: mods.crit_chance_pct[crit_chance..].iter().sum(),
+            crit_damage_pct: mods.crit_damage_pct[crit_damage..].iter().sum(),
+        };
+        if !standing.strike_pct.is_empty()
+            || standing.crit_chance_pct != 0.0
+            || standing.crit_damage_pct != 0.0
+        {
+            mods.trait_standing.push(standing);
+        }
     }
 
     // 2. Rune bonuses — parse strings like "+7% Burning Duration", "+5% damage"

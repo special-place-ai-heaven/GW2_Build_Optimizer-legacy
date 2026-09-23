@@ -238,10 +238,8 @@ pub fn coverage_table(db: &GameDb) -> CoverageTable {
     let professions = by_profession
         .into_iter()
         .map(|(profession, (minors, majors))| {
-            let (minor_executable, minor_abstaining, minor_coverage, minor_none) =
-                buckets(&minors);
-            let (major_executable, major_abstaining, major_coverage, major_none) =
-                buckets(&majors);
+            let (minor_executable, minor_abstaining, minor_coverage, minor_none) = buckets(&minors);
+            let (major_executable, major_abstaining, major_coverage, major_none) = buckets(&majors);
             ProfessionRow {
                 profession,
                 minor_executable,

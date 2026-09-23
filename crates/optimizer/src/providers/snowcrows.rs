@@ -71,6 +71,34 @@ pub fn scale_from_url(url: &str) -> &'static str {
     ""
 }
 
+/// The published benchmark and its log: `(DPS, dps.report URL)`.
+///
+/// The number is the "Last Benchmark Max" stat card —
+/// `<div stat="Last Benchmark Max">…<div class="text-lg"><i …></i>41879</div>` —
+/// the best run, which is the one the page's "DPS Report" tab links:
+/// `<a class="tab" href="https://dps.report/so5x-…_golem">`. Support pages
+/// carry neither, and both come back `None`.
+pub fn benchmark(html: &str) -> (Option<f64>, Option<String>) {
+    let document = ::html::Html::parse_document(html);
+    let card =
+        ::html::Selector::parse(r#"[stat="Last Benchmark Max"] .text-lg"#).expect("valid selector");
+    let log = ::html::Selector::parse(r#"a[href^="https://dps.report/"]"#).expect("valid selector");
+    let dps = document.select(&card).next().and_then(|el| {
+        let digits: String = el
+            .text()
+            .flat_map(str::chars)
+            .filter(char::is_ascii_digit)
+            .collect();
+        digits.parse::<f64>().ok()
+    });
+    let url = document
+        .select(&log)
+        .next()
+        .and_then(|a| a.value().attr("href"))
+        .map(str::to_string);
+    (dps, url)
+}
+
 /// Read one Snowcrows build page from the raw response.
 pub fn parse(html: &str) -> ProviderBuild {
     let document = ::html::Html::parse_document(html);

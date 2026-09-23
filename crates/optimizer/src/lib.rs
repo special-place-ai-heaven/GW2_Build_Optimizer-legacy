@@ -9,6 +9,7 @@ pub mod context;
 mod context_combo;
 pub mod data;
 pub mod engine;
+pub mod fidelity;
 pub mod gamedb;
 pub mod gemini;
 pub mod gemini_tools;

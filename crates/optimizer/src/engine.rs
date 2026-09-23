@@ -1182,6 +1182,8 @@ pub struct PreparedRotation {
     /// Traits the parser consumed a fact from (US4): executed from facts, so
     /// the coverage line never names them.
     pub consumed_trait_ids: Vec<u32>,
+    /// Each trait's share of the always-on percents in `params` (E1).
+    pub trait_standing: Vec<combat::TraitStanding>,
     profession_name: String,
 }
 
@@ -1357,6 +1359,7 @@ pub fn prepare_validated_rotation(
         conditional_strike: mods.conditional_strike.clone(),
         deferred_target: mods.deferred_target.clone(),
         consumed_trait_ids: mods.consumed_trait_ids.clone(),
+        trait_standing: mods.trait_standing.clone(),
         skills: rotation_skills,
         params,
         profession_name: profession_name.to_string(),
@@ -1457,6 +1460,7 @@ fn simulate_prepared_with(
         let wvw_params = wvw_params_without_executed_conditionals(
             params,
             &prepared.conditional_strike,
+            &prepared.trait_standing,
             &active_effects,
         );
         result.wvw = Some(rotation::wvw_timeline::evaluate_wvw_timeline(
@@ -1533,12 +1537,17 @@ pub(crate) fn equipped_weapons(
 /// source's threshold record per strike, so the bonus is counted once
 /// (CONN-01-01). A clause whose record is absent or unresolved stays
 /// flattened, exactly as every other path sees it.
+///
+/// Likewise a trait's parser-folded strike, crit chance and crit damage
+/// share is removed when the timeline runs that trait's own Conditional
+/// record of the same category (review E1).
 fn wvw_params_without_executed_conditionals(
     params: &rotation::simulator::SimParams,
     clauses: &[combat::ConditionalClause],
+    trait_standing: &[combat::TraitStanding],
     active_effects: &[&crate::data::normalized_effects::NormalizedEffect],
 ) -> rotation::simulator::SimParams {
-    use crate::data::normalized_effects::TriggerRule;
+    use crate::data::normalized_effects::{EffectCategory, SourceType, TriggerRule};
     let mut out = params.clone();
     for clause in clauses {
         let executed = active_effects.iter().any(|effect| {
@@ -1552,6 +1561,35 @@ fn wvw_params_without_executed_conditionals(
         });
         if executed {
             out.strike_mult /= 1.0 + clause.value;
+        }
+    }
+    // Mirrors the timeline's Conditional ConditionalSpec load path.
+    let runs_conditional = |trait_id: u32, category: EffectCategory| {
+        active_effects.iter().any(|effect| {
+            effect.source_type == SourceType::Trait
+                && effect.source_id == trait_id
+                && effect.trigger_rule == TriggerRule::Conditional
+                && (effect.category == category || effect.inner_category == Some(category.clone()))
+                && effect
+                    .prerequisite
+                    .as_ref()
+                    .is_some_and(|p| p.in_shroud != Some(false))
+                && effect.value.is_resolved()
+                && effect.max_stacks.as_ref().is_none_or(|m| m.is_resolved())
+                && rotation::wvw_timeline::unexecutable_reason(effect).is_none()
+        })
+    };
+    for standing in trait_standing {
+        if runs_conditional(standing.trait_id, EffectCategory::StrikeDamagePct) {
+            for m in &standing.strike_pct {
+                out.strike_mult /= 1.0 + m;
+            }
+        }
+        if runs_conditional(standing.trait_id, EffectCategory::CritChancePct) {
+            out.crit_chance_bonus -= standing.crit_chance_pct;
+        }
+        if runs_conditional(standing.trait_id, EffectCategory::CritDamagePct) {
+            out.ferocity -= standing.crit_damage_pct * 15.0;
         }
     }
     out
@@ -5316,7 +5354,7 @@ mod tests {
             percent: crate::data::quality::FactualValue::Resolved(90.0),
         });
         let effects = [&scholar];
-        let out = wvw_params_without_executed_conditionals(&params, &[clause], &effects);
+        let out = wvw_params_without_executed_conditionals(&params, &[clause], &[], &effects);
         assert!(
             (out.strike_mult - 1.0).abs() < 1e-6,
             "strike_mult after divide-out: {}",
@@ -5327,12 +5365,79 @@ mod tests {
         assert_eq!(out.weapon_strength, params.weapon_strength);
     }
 
+    /// E1: Symbolic Exposure's "Damage Increase 5%" fact is folded always-on
+    /// by the parser, and trait:646:1 (+5% vs Vulnerability, Conditional) is
+    /// run by the timeline. The timeline's params must carry it once.
+    #[test]
+    fn wvw_params_divides_out_trait_percent_with_executed_conditional() {
+        use crate::data::normalized_effects::{EffectCategory, Prerequisite, SourceType};
+        let symbolic_exposure = gw2_api::models::Trait {
+            id: 646,
+            name: "Symbolic Exposure".into(),
+            icon: None,
+            description: None,
+            specialization: 0,
+            tier: 0,
+            order: 0,
+            slot: "Minor".into(),
+            facts: vec![gw2_api::models::Fact::Percent {
+                text: Some("Damage Increase".into()),
+                icon: None,
+                percent: Some(5.0),
+            }],
+            traited_facts: vec![],
+            skills: vec![],
+        };
+        let traits = HashMap::from([(646, symbolic_exposure)]);
+        let mods = combat::extract_damage_modifiers(
+            &[646],
+            None,
+            &[],
+            None,
+            &traits,
+            &HashMap::new(),
+            &BalanceContext::new(GameMode::WvW),
+        );
+        let mut params = rotation::simulator::SimParams::basic(1111.0, 222.0, 333.0);
+        params.strike_mult = mods.total_strike_mult();
+        assert!(
+            (params.strike_mult - 1.05).abs() < 1e-9,
+            "parser folds the fact"
+        );
+
+        let mut record = rotation::reaper_fixture::record(
+            SourceType::Trait,
+            646,
+            "Symbolic Exposure",
+            EffectCategory::TriggeredEffect,
+            5.0,
+            crate::data::normalized_effects::TriggerRule::Conditional,
+        );
+        record.inner_category = Some(EffectCategory::StrikeDamagePct);
+        record.prerequisite = Some(Prerequisite {
+            foe_condition: Some("Vulnerability".into()),
+            ..Default::default()
+        });
+        let effects = [&record];
+        let out = wvw_params_without_executed_conditionals(
+            &params,
+            &mods.conditional_strike,
+            &mods.trait_standing,
+            &effects,
+        );
+        assert!(
+            (out.strike_mult - 1.0).abs() < 1e-9,
+            "the timeline applies +5% vs Vulnerability; standing params must not: {}",
+            out.strike_mult
+        );
+    }
+
     #[test]
     fn wvw_params_unchanged_without_conditional_clauses() {
         let mut params = rotation::simulator::SimParams::basic(1111.0, 222.0, 333.0);
         params.strike_mult = 1.045;
         params.condition_mult = 1.2;
-        let out = wvw_params_without_executed_conditionals(&params, &[], &[]);
+        let out = wvw_params_without_executed_conditionals(&params, &[], &[], &[]);
         assert!((out.strike_mult - 1.045).abs() < 1e-6);
         assert_eq!(out.power, params.power);
         assert_eq!(out.condition_damage, params.condition_damage);
