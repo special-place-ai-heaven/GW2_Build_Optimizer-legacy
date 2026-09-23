@@ -743,6 +743,7 @@ mod tests {
                 rarity: "Exotic".into(),
                 level: 60,
                 details: Some(gw2_api::models::ItemDetails {
+                    description: None,
                     detail_type: Some("Rune".into()),
                     bonuses: vec![
                         "+25 Power".into(),
@@ -779,6 +780,7 @@ mod tests {
                 rarity: "Ascended".into(),
                 level: 80,
                 details: Some(gw2_api::models::ItemDetails {
+                    description: None,
                     detail_type: Some("Helm".into()),
                     attribute_adjustment: Some(141.0),
                     ..default_details()
@@ -1150,6 +1152,7 @@ mod tests {
 
     fn default_details() -> gw2_api::models::ItemDetails {
         gw2_api::models::ItemDetails {
+            description: None,
             detail_type: None,
             weight_class: None,
             defense: None,

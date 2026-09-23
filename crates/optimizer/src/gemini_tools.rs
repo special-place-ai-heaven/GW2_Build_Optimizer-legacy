@@ -2047,6 +2047,10 @@ fn rotation_sim_params(
                 .is_some_and(|t| t.specialization == crate::rotation::attunement::WEAVER_SPEC_ID)
         }),
         form: None,
+        triggered: Vec::new(),
+        strike_add: 0.0,
+        condition_add: 0.0,
+        folded: Default::default(),
     }
 }
 

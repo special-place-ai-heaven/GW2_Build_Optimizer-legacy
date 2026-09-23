@@ -1124,6 +1124,62 @@
         "in_shroud": true
       },
       "internal_cooldown": 3.0
+    },
+    {
+      "effect_id": "skill:29965:0",
+      "source_type": "Skill",
+      "source_id": 29965,
+      "source_name": "\"Feel My Wrath!\"",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/%22Feel_My_Wrath!%22 (read 2026-09-23: \"The duration of the quickness you grant yourself is doubled\"; skill fact quickness 3 s with no game-mode split (the page's split covers only Fury 25%/20% crit chance and the 24 s PvP/WvW recharge); version history 2020-07-07: 6 seconds of quickness to the guardian, 3 to other allies. The API fact's 3 s reaches the guardian as the ally grant; this record is the self half. Player logs 2026-09-23: every clean self window after a cast is 6.55 s (6 s x boon duration) in the golem log 204811 and in 23 WvW casts across 11 WvW logs)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Quickness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 3000
+      }
+    },
+    {
+      "effect_id": "sigil:24561:0",
+      "source_type": "Sigil",
+      "source_id": 24561,
+      "source_name": "Superior Sigil of Rage",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnCrit",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Superior_Sigil_of_Rage (read 2026-09-23: gain quickness for 3 seconds upon critically hitting a foe, cooldown 20 seconds, no game-mode split; notes: will not trigger if you already have quickness (Game updates/April 2014); API item 24561 buff description agrees)",
+      "internal_cooldown": 20.0,
+      "gates": [
+        {
+          "SelfBoonAbsent": {
+            "boon": "Quickness"
+          }
+        }
+      ],
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Quickness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 3000
+      }
     }
   ]
 }

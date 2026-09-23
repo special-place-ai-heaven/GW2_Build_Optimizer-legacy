@@ -43,6 +43,7 @@ fn item(id: u32, name: &str, details: Option<ItemDetails>) -> Item {
 
 fn details_bonuses(bonuses: Vec<&str>) -> ItemDetails {
     ItemDetails {
+        description: None,
         detail_type: Some("Rune".into()),
         weight_class: None,
         defense: None,
@@ -63,6 +64,7 @@ fn details_bonuses(bonuses: Vec<&str>) -> ItemDetails {
 
 fn details_buff(description: &str) -> ItemDetails {
     ItemDetails {
+        description: None,
         detail_type: Some("Sigil".into()),
         weight_class: None,
         defense: None,

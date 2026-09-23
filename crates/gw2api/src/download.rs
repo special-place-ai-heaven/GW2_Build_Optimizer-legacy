@@ -5,7 +5,8 @@
 //! - `RefreshMode::Default` + same `CacheEntry.build` as live `/v2/build`:
 //!   skip body fetches **and** id-list probes for that key.
 //! - Build mismatch / `Verify`: refresh KEPT only, compare-before-write.
-//! - Items keep-set stays the existing type+rarity filter; Refresh never
+//! - Items keep-set is the type+rarity filter plus level-80 Food / Utility
+//!   consumables (`consumable_is_kept`); Refresh never
 //!   body-fetches the discarded bulk when `items.json` already exists.
 //!
 //! First-fill (no `items.json`) persists DataCache key `items.partial` after
@@ -136,8 +137,71 @@ fn values_eq<T: Serialize>(a: &T, b: &T) -> bool {
 }
 
 fn item_is_kept(item: &models::Item) -> bool {
-    RELEVANT_TYPES.contains(&item.item_type.as_str())
-        && RELEVANT_RARITIES.contains(&item.rarity.as_str())
+    (RELEVANT_TYPES.contains(&item.item_type.as_str())
+        && RELEVANT_RARITIES.contains(&item.rarity.as_str()))
+        || consumable_is_kept(item)
+}
+
+/// Food (Nourishment) and Utility (Enhancement) a level-80 character eats;
+/// ascended feasts are level 80 too. Every other consumable stays out.
+fn consumable_is_kept(item: &models::Item) -> bool {
+    item.item_type == "Consumable"
+        && item.level == 80
+        && matches!(
+            item.details.as_ref().and_then(|d| d.detail_type.as_deref()),
+            Some("Food" | "Utility")
+        )
+}
+
+/// One-off upgrade for an `items.json` written before Food / Utility were
+/// kept. Refresh never body-fetches the discarded bulk, so an existing cache
+/// only gains them here (or on a first fill): walk every live id not already
+/// cached, append the kept consumables, keep the cached build stamp. Returns
+/// the number of rows added; `items.json` is not rewritten when it is zero.
+///
+/// Runs only while the cache holds no kept consumable, so once it has
+/// completed it never walks again; a cancelled walk wrote nothing and the
+/// next Refresh redoes it.
+pub fn backfill_consumables(
+    client: &Gw2Client,
+    cache: &DataCache,
+    mut on_progress: impl FnMut(usize, usize),
+) -> Result<usize, ApiError> {
+    let mut items: Vec<models::Item> = cache
+        .load("items")
+        .map_err(cache_err)?
+        .ok_or_else(|| cache_err("no items cache to backfill"))?;
+    if items.iter().any(consumable_is_kept) {
+        return Ok(0);
+    }
+    let build = cache.cached_build("items").unwrap_or(0);
+    let have: HashSet<u32> = items.iter().map(|i| i.id).collect();
+    let live: Vec<serde_json::Value> = client.get("items")?;
+    let todo: Vec<serde_json::Value> = parse_u32_ids(&live)
+        .into_iter()
+        .filter(|id| !have.contains(id))
+        .map(|id| serde_json::json!(id))
+        .collect();
+    let before = items.len();
+    let mut done = 0;
+    for slice in todo.chunks(crate::client::MAX_BULK_IDS * 10) {
+        let (raw, _skipped): (Vec<serde_json::Value>, _) =
+            client.fetch_by_ids_with_skips("items", slice, |fetched, _| {
+                on_progress(done + fetched, todo.len())
+            })?;
+        items.extend(
+            raw.into_iter()
+                .filter_map(|v| serde_json::from_value::<models::Item>(v).ok())
+                .filter(consumable_is_kept),
+        );
+        done += slice.len();
+        on_progress(done, todo.len());
+    }
+    let added = items.len() - before;
+    if added > 0 {
+        cache.save("items", &items, build).map_err(cache_err)?;
+    }
+    Ok(added)
 }
 
 fn cache_err(e: impl ToString) -> ApiError {
@@ -707,12 +771,28 @@ fn download_steps(
     report(&mut on_progress, &mut step, "PvP Amulets", None);
 
     check()?;
+    let had_items = cache.exists("items");
     if needs_catalog_refresh(cache, "items", build, mode) {
-        if cache.exists("items") {
+        if had_items {
             refresh_items(client, cache, build, step, &mut on_progress)?;
         } else {
             install_items(client, cache, build, step, &mut on_progress)?;
         }
+    }
+    // A cache filled before Food / Utility were kept gains them once, on any
+    // Refresh (same-build skip included). A first fill already kept them.
+    if had_items {
+        backfill_consumables(client, cache, |done, total| {
+            on_progress(DownloadProgress {
+                current_step: step,
+                total_steps: TOTAL_STEPS,
+                step_name: "Items (food and utility)".to_string(),
+                done: false,
+                detail: Some(format!("{done} / {total} items checked")),
+                inner_done: done,
+                inner_total: total,
+            })
+        })?;
     }
     report(&mut on_progress, &mut step, "Items (equipment)", None);
 
@@ -986,6 +1066,34 @@ mod tests {
     }
 
     #[test]
+    fn keep_filter_keeps_level_80_food_and_utility_only() {
+        let consumable = |detail: &str, level: u32| {
+            let json = format!(
+                r#"{{"id":1,"name":"C","type":"Consumable","rarity":"Fine","level":{level},"details":{{"type":"{detail}","description":"+100 Power"}}}}"#
+            );
+            serde_json::from_str::<models::Item>(&json).unwrap()
+        };
+        assert!(item_is_kept(&consumable("Food", 80)));
+        assert!(item_is_kept(&consumable("Utility", 80)));
+        assert_eq!(
+            consumable("Food", 80)
+                .details
+                .and_then(|d| d.description)
+                .as_deref(),
+            Some("+100 Power")
+        );
+        assert!(!item_is_kept(&consumable("Food", 40)));
+        assert!(!item_is_kept(&consumable("Booze", 80)));
+        assert!(!item_is_kept(&consumable("Generic", 80)));
+        assert!(!item_is_kept(&sample_item(
+            50,
+            "Junk",
+            "Consumable",
+            "Basic"
+        )));
+    }
+
+    #[test]
     fn merge_kept_items_all_equal_reports_unchanged() {
         let old = vec![sample_item(10, "Same", "Armor", "Ascended")];
         let fetched = vec![sample_item(10, "Same", "Armor", "Ascended")];
@@ -1048,9 +1156,7 @@ mod tests {
         cache
             .save("pvp_amulets", &Vec::<models::PvpAmulet>::new(), 42)
             .unwrap();
-        cache
-            .save("items", &Vec::<models::Item>::new(), 42)
-            .unwrap();
+        cache.save("items", &vec![food_row(5)], 42).unwrap();
         cache.save(ITEMS_IDS_KEY, &Vec::<u32>::new(), 42).unwrap();
 
         let mut server = mockito::Server::new();
@@ -1087,7 +1193,10 @@ mod tests {
         let dir = temp_cache_dir("bump_items");
         let cache = DataCache::new(&dir);
         let kept = sample_item(10, "Kept", "Armor", "Ascended");
-        cache.save("items", &vec![kept.clone()], 100).unwrap();
+        // Id 2 is a food row: this cache is past the consumable backfill.
+        cache
+            .save("items", &vec![food_row(2), kept.clone()], 100)
+            .unwrap();
         cache.save(ITEMS_IDS_KEY, &vec![1u32, 2, 10], 100).unwrap();
         // Other catalogs same-build-skip at 101? No — build bump makes them stale.
         // Seed them at 101 so only items is exercised for body counts... actually
@@ -1125,10 +1234,10 @@ mod tests {
             .with_body(r#"[1,2,3,10,99]"#)
             .expect_at_least(1)
             .create();
-        // fetch set = new{3,99} ∪ cached{10} = 3,10,99 (live order)
+        // fetch set = new{3,99} ∪ cached{2,10} = 2,3,10,99 (live order)
         let bodies = server
             .mock("GET", "/items")
-            .match_query(mockito::Matcher::Regex(r"ids=3,10,99".into()))
+            .match_query(mockito::Matcher::Regex(r"ids=2,3,10,99".into()))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -1255,6 +1364,74 @@ mod tests {
     }
 
     // --- items.partial first-fill resume (SCHEMA N) ---------------------------
+
+    /// A kept level-80 Food row.
+    fn food_row(id: u32) -> models::Item {
+        serde_json::from_str(&format!(
+            r#"{{"id":{id},"name":"Soup {id}","type":"Consumable","rarity":"Fine","level":80,"details":{{"type":"Food","description":"+100 Power"}}}}"#
+        ))
+        .unwrap()
+    }
+
+    /// Refresh walks the live ids once when the cache holds no Food /
+    /// Utility row, and never again once it does.
+    #[test]
+    fn refresh_backfills_consumables_once() {
+        let dir = temp_cache_dir("backfill_once");
+        let cache = DataCache::new(&dir);
+        seed_kept_except_items(&cache, 42);
+        let armor = sample_item(10, "Kept", "Armor", "Ascended");
+        cache.save("items", &vec![armor], 42).unwrap();
+        cache.save(ITEMS_IDS_KEY, &vec![5u32, 10], 42).unwrap();
+
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/build")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"id":42}"#)
+            .create();
+        let ids = server
+            .mock("GET", "/items")
+            .match_query(mockito::Matcher::Missing)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body("[5,10]")
+            .expect_at_least(1)
+            .create();
+        let food = serde_json::to_string(&vec![food_row(5)]).unwrap();
+        let bodies = server
+            .mock("GET", "/items")
+            .match_query(mockito::Matcher::Regex(r"^ids=5$".into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(food)
+            .expect_at_least(1)
+            .create();
+
+        let client = Gw2Client::without_key()
+            .unwrap()
+            .with_api_root(server.url());
+        download_all(&client, &cache, || false, RefreshMode::Default, |_| {})
+            .expect("same-build refresh");
+        ids.assert();
+        bodies.assert();
+        ids.remove();
+        bodies.remove();
+        // Food row present now: the next Refresh touches no items endpoint.
+        let again = server
+            .mock("GET", mockito::Matcher::Regex(r"^/items".into()))
+            .expect(0)
+            .create();
+        download_all(&client, &cache, || false, RefreshMode::Default, |_| {})
+            .expect("second refresh");
+        again.assert();
+        let stored: Vec<models::Item> = cache.load("items").unwrap().unwrap();
+        let stored: Vec<u32> = stored.iter().map(|i| i.id).collect();
+        assert_eq!(stored, [10, 5]);
+        assert_eq!(cache.cached_build("items"), Some(42));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn seed_kept_except_items(cache: &DataCache, build: u32) {
         cache
@@ -1594,9 +1771,7 @@ mod tests {
         let dir = temp_cache_dir("warm_partial_ignored");
         let cache = DataCache::new(&dir);
         seed_kept_except_items(&cache, 42);
-        cache
-            .save("items", &Vec::<models::Item>::new(), 42)
-            .unwrap();
+        cache.save("items", &vec![food_row(5)], 42).unwrap();
         cache.save(ITEMS_IDS_KEY, &Vec::<u32>::new(), 42).unwrap();
         cache
             .save(

@@ -214,6 +214,73 @@ pub struct SimParams {
     /// The build's profession form, if it has one the data describes.
     /// `None` leaves the [`super::SHROUD_SET`] bar stowed for the whole run.
     pub form: Option<FormSpec>,
+    /// Trait records fired by an event, with or without a form. Built by
+    /// `engine::trait_procs_for_build` from record fields; a record's
+    /// `in_shroud` prerequisite is [`TriggeredProc::in_form`], which only
+    /// a form satisfies.
+    pub triggered: Vec<TriggeredProc>,
+    /// Additive-bucket sums inside `strike_mult` / `condition_mult`
+    /// (fractions; `data/formulas/modifier_buckets.json`), so a timed
+    /// modifier from an additive source joins that bucket.
+    pub strike_add: f64,
+    pub condition_add: f64,
+    /// Always-on shares the fact parser folded into the multipliers for
+    /// traits whose records this simulation plays on their own clock.
+    pub folded: FoldedShares,
+}
+
+/// Always-on shares taken out of [`SimParams`] at the start of a flow run,
+/// because a record now plays the same trait effect timed or in form (Soul
+/// Barbs' parsed "Damage Increase", Death Perception's crit damage). The
+/// WvW timeline never reads this.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FoldedShares {
+    /// Product of the removed multiplicative strike factors.
+    pub strike_mult: f64,
+    /// Sum of the removed additive-bucket strike fractions.
+    pub strike_add: f64,
+    pub condition_mult: f64,
+    pub condition_add: f64,
+    /// Ferocity removed (15 per critical-damage percentage point).
+    pub ferocity: f64,
+}
+
+impl Default for FoldedShares {
+    fn default() -> Self {
+        Self {
+            strike_mult: 1.0,
+            strike_add: 0.0,
+            condition_mult: 1.0,
+            condition_add: 0.0,
+            ferocity: 0.0,
+        }
+    }
+}
+
+/// The damage term a record's modifier changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModAxis {
+    Strike,
+    Condition,
+    /// Critical damage percentage points.
+    CritDamage,
+}
+
+/// One percent modifier from a record: `percent` points on `axis`,
+/// `additive` when its source is in the additive bucket.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DamageMod {
+    pub axis: ModAxis,
+    pub percent: f64,
+    pub additive: bool,
+}
+
+/// A fired [`FormProc::Modifier`]: live while any stack is unexpired.
+#[derive(Debug, Clone)]
+struct LiveMod {
+    source: String,
+    modifier: DamageMod,
+    expiries: Vec<u32>,
 }
 
 /// A profession form played as a timed state (Necromancer shroud, Druid
@@ -251,6 +318,8 @@ pub struct FormSpec {
     pub gains_in_form: bool,
     /// Fraction of the remaining pool kept on a voluntary exit.
     pub exit_keep: f64,
+    /// The pool is life force (`GainsLifeForce` records credit it).
+    pub life_force: bool,
     /// `(skill id, pool on use, pool per landed strike)`: the API's
     /// `Life Force` and `Life Force Per Hit` facts.
     pub skill_gains: Vec<(u32, f64, f64)>,
@@ -258,21 +327,23 @@ pub struct FormSpec {
     pub on_exit: Vec<FormProc>,
     /// `(interval ms, proc)`, fired on entry and every interval while in.
     pub periodic: Vec<(u32, FormProc)>,
-    /// Trait records fired by a cast or an inflicted status, in or out of
-    /// the form (`OnSkillUse`, `OnConditionApplied`).
-    // ponytail: carried on the form, so a formless build (Scourge) fires
-    // none of these; move to `SimParams` when a non-form record needs them.
-    pub triggered: Vec<TriggeredProc>,
+    /// Modifiers live for as long as the form stands (`Conditional`
+    /// records with the `in_shroud` prerequisite).
+    pub while_in: Vec<DamageMod>,
     /// What the form does that is not played, named for the gap line.
     pub unmodelled: Vec<String>,
 }
 
-/// What just happened, for [`FormSpec::triggered`].
+/// What just happened, for [`SimParams::triggered`].
 enum ProcEvent<'a> {
     /// The skill at this index was cast.
     Cast(usize),
     /// This condition was inflicted on the foe.
     Condition(&'a str),
+    /// A strike landed on the foe with this critical chance (0..=1).
+    Hit { crit: f64 },
+    /// A simulation tick passed.
+    Tick,
 }
 
 /// A [`FormProc`] fired by an event rather than by the form's own entry,
@@ -280,11 +351,17 @@ enum ProcEvent<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TriggeredProc {
     pub on: ProcTrigger,
-    /// Internal cooldown; 0 fires on every event.
+    /// Internal cooldown; 0 fires on every event. For
+    /// [`ProcTrigger::Periodic`] the interval.
     pub icd_ms: u32,
     /// The record's `in_shroud` prerequisite: `Some(true)` only in the
     /// form, `Some(false)` only out of it.
     pub in_form: Option<bool>,
+    /// The weapon set the source is socketed on (a sigil): live only while
+    /// that set is held, or was held when the form was entered. 0: any.
+    pub weapon_set: u8,
+    /// `SelfBoon` / `SelfBoonAbsent` gates: `(boon, must carry)`.
+    pub self_boons: Vec<(String, bool)>,
     pub proc_: FormProc,
 }
 
@@ -292,13 +369,28 @@ pub struct TriggeredProc {
 pub enum ProcTrigger {
     /// A cast of a skill this scope admits (`OnSkillUse`).
     SkillUse(crate::data::normalized_effects::TriggerScope),
+    /// A cast of this skill: a skill's own `OnSkillUse` record.
+    OwnCast(u32),
+    /// A landed strike that crits (`OnCrit`). The flow sim averages crits,
+    /// so each strike adds its crit chance as probability mass and the
+    /// record fires once a whole proc's worth has gathered (the WvW
+    /// timeline's expected-value on-crit reading).
+    Crit,
     /// Inflicting the named condition on the foe, any when `None`
     /// (`OnConditionApplied`).
     ConditionApplied(Option<String>),
+    /// A landed strike (`OnHit`).
+    // ponytail: condition ticks do not fire it (the record's "strike or
+    // condition tick"); add a tick event if a condition build's ICD-free
+    // on-hit record matters.
+    Hit,
+    /// Every `icd_ms` from the fight's start (`Periodic`).
+    Periodic,
 }
 
-/// What a trait record does when the form fires it (`OnShroudEnter`,
-/// `OnShroudExit`, `Periodic` with `in_shroud`).
+/// What a trait record does when it fires: by the form (`OnShroudEnter`,
+/// `OnShroudExit`, `Periodic` with `in_shroud`) or by an event
+/// ([`TriggeredProc`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormProc {
     Buff {
@@ -309,6 +401,24 @@ pub enum FormProc {
     },
     /// Pool units.
     Gain(f64),
+    /// A condition on the foe, through the skill path (condition duration
+    /// applies).
+    Condition {
+        name: String,
+        stacks: u32,
+        duration_ms: u32,
+    },
+    /// A timed damage modifier: each firing adds a stack expiring after
+    /// `duration_ms`, at most `max_stacks` held; `refresh_all` renews every
+    /// held stack (`StackingRule::RefreshAllStacks`). One live entry per
+    /// `source` and axis.
+    Modifier {
+        source: String,
+        modifier: DamageMod,
+        duration_ms: u32,
+        max_stacks: u32,
+        refresh_all: bool,
+    },
 }
 
 impl SimParams {
@@ -337,6 +447,10 @@ impl SimParams {
             deferred_target: Vec::new(),
             weaver: false,
             form: None,
+            triggered: Vec::new(),
+            strike_add: 0.0,
+            condition_add: 0.0,
+            folded: FoldedShares::default(),
         }
     }
 }
@@ -442,6 +556,8 @@ struct SimState {
 
     skills: Vec<RotationSkill>,
     skill_states: Vec<SkillState>,
+    /// Auto-attack chain cursor (E11).
+    auto_chain: super::AutoChain,
     duration_ms: u32,
     current_time_ms: u32,
     /// Time when the character is free to use the next skill.
@@ -505,8 +621,16 @@ struct SimState {
     damage_seconds: Vec<(f64, f64)>,
     /// Capture only: `buff_seen` at each second's midpoint tick.
     buff_seen_mid_second: Vec<Vec<bool>>,
-    /// Earliest next firing per `FormSpec::triggered` entry (its ICD).
+    /// Earliest next firing per `SimParams::triggered` entry (its ICD).
     triggered_ready_ms: Vec<u32>,
+    /// Crit probability mass gathered per [`ProcTrigger::Crit`] entry
+    /// since it last fired.
+    triggered_mass: Vec<f64>,
+    /// Fired [`FormProc::Modifier`]s.
+    live_mods: Vec<LiveMod>,
+    /// Nesting of `fire_triggered`: a proc's condition may fire records on
+    /// that condition, but not without end.
+    proc_depth: u8,
 }
 
 impl SimState {
@@ -514,8 +638,19 @@ impl SimState {
         skills: &[RotationSkill],
         duration_ms: u32,
         target: TargetState,
-        params: SimParams,
+        mut params: SimParams,
     ) -> Self {
+        // Each folded share counts once: the record plays it now.
+        let folded = std::mem::take(&mut params.folded);
+        params.strike_mult *= (1.0 + params.strike_add - folded.strike_add)
+            / (1.0 + params.strike_add)
+            / folded.strike_mult;
+        params.strike_add -= folded.strike_add;
+        params.condition_mult *= (1.0 + params.condition_add - folded.condition_add)
+            / (1.0 + params.condition_add)
+            / folded.condition_mult;
+        params.condition_add -= folded.condition_add;
+        params.ferocity -= folded.ferocity;
         let skill_states = skills
             .iter()
             .map(|_| SkillState {
@@ -538,6 +673,7 @@ impl SimState {
             illusion: super::illusion::IllusionState::new(),
             skills: skills.to_vec(),
             skill_states,
+            auto_chain: super::AutoChain::new(skills),
             duration_ms,
             current_time_ms: 0,
             next_action_ms: 0,
@@ -576,7 +712,10 @@ impl SimState {
             form_periodic_due: Vec::new(),
             damage_seconds: vec![(0.0, 0.0); duration_ms.div_ceil(1000) as usize],
             buff_seen_mid_second: Vec::new(),
-            triggered_ready_ms: vec![0; params.form.as_ref().map_or(0, |f| f.triggered.len())],
+            triggered_ready_ms: vec![0; params.triggered.len()],
+            triggered_mass: vec![0.0; params.triggered.len()],
+            live_mods: Vec::new(),
+            proc_depth: 0,
             params,
             combo: ComboEngine::new(),
         }
@@ -588,6 +727,8 @@ impl SimState {
         let weapon_strength = self.params.weapon_strength;
         while self.current_time_ms < self.duration_ms {
             let landed_before = (self.total_strike_damage, self.total_condition_damage);
+            // Periodic records first: what fires at t counts for hits at t.
+            self.fire_triggered(ProcEvent::Tick);
             // Tick conditions and buffs
             self.tick_conditions(condition_damage);
             self.tick_buffs();
@@ -664,7 +805,10 @@ impl SimState {
 
             // Auto-attack = filler (always available, pick last).
             // Prefer the filler from the active weapon set over weapon_set==0.
-            if skill.slot == SkillSlot::Weapon1 && skill.cooldown_ms == 0 {
+            if skill.is_auto_attack() {
+                if self.auto_chain.is_follow_up(i) {
+                    continue;
+                }
                 match filler_idx {
                     None => filler_idx = Some(i),
                     Some(prev) => {
@@ -692,6 +836,8 @@ impl SimState {
                 best_idx = Some(i);
             }
         }
+
+        let filler_idx = filler_idx.map(|head| self.auto_chain.step(head, self.current_time_ms));
 
         if self.current_time_ms < self.setup_until_ms {
             let mut best_setup = None;
@@ -943,6 +1089,65 @@ impl SimState {
         }
     }
 
+    /// Grant `stacks` of `name`, each `remaining_ms` long. A boon that
+    /// stacks in duration (`data/formulas/boons.json` `stacking_mode`; wiki
+    /// `Effect stacking`: Quickness, Fury, Protection, ...) adds its time to
+    /// what is already running, up to `max_duration`, instead of running
+    /// beside it. One instance per audience: the self ledger is the longer
+    /// of the two, so an ally-facing grant extends both and a self-only
+    /// grant queues behind whatever the player already has.
+    fn add_buff(&mut self, name: &str, stacks: u32, remaining_ms: u32, ally_facing: bool) {
+        let kind = buff_kind(name);
+        let slot = self.buff_slot(name);
+        let cap_ms = crate::data::boon_condition_formulas::boons()
+            .get(name)
+            .filter(|b| {
+                b.stacking_mode == crate::data::boon_condition_formulas::StackingMode::Duration
+            })
+            .map(|b| b.max_duration.map_or(u32::MAX, |s| s.saturating_mul(1_000)));
+        let Some(cap_ms) = cap_ms else {
+            for _ in 0..stacks {
+                self.buffs.push(BuffInstance {
+                    remaining_ms,
+                    kind,
+                    slot,
+                    ally_facing,
+                });
+            }
+            return;
+        };
+        let add = remaining_ms.saturating_mul(stacks);
+        if add == 0 {
+            return;
+        }
+        let live = |buffs: &[BuffInstance], ally: bool| {
+            buffs
+                .iter()
+                .position(|b| b.slot == slot && b.ally_facing == ally && b.remaining_ms > 0)
+        };
+        let ally_ms = live(&self.buffs, true).map_or(0, |i| self.buffs[i].remaining_ms);
+        let own = live(&self.buffs, false);
+        let own_ms = own.map_or(0, |i| self.buffs[i].remaining_ms);
+        let (audience, until) = if ally_facing {
+            if let Some(i) = own {
+                self.buffs[i].remaining_ms = own_ms.saturating_add(add).min(cap_ms);
+            }
+            (live(&self.buffs, true), ally_ms.saturating_add(add))
+        } else {
+            (own, own_ms.max(ally_ms).saturating_add(add))
+        };
+        let until = until.min(cap_ms);
+        match audience {
+            Some(i) => self.buffs[i].remaining_ms = until,
+            None => self.buffs.push(BuffInstance {
+                remaining_ms: until,
+                kind,
+                slot,
+                ally_facing,
+            }),
+        }
+    }
+
     fn fire_form_proc(&mut self, proc_: &FormProc) {
         match proc_ {
             FormProc::Buff {
@@ -951,52 +1156,169 @@ impl SimState {
                 duration_ms,
                 ally,
             } => {
-                let kind = buff_kind(name);
-                let slot = self.buff_slot(name);
-                let remaining_ms = (*duration_ms as f64 * self.params.boon_duration_mult).round();
-                for _ in 0..*stacks {
-                    self.buffs.push(BuffInstance {
-                        remaining_ms: remaining_ms as u32,
-                        kind,
-                        slot,
-                        ally_facing: *ally,
-                    });
-                }
+                let remaining_ms =
+                    (*duration_ms as f64 * self.params.boon_duration_mult).round() as u32;
+                self.add_buff(name, *stacks, remaining_ms, *ally);
             }
             FormProc::Gain(amount) => self.gain_form_pool(*amount, true),
+            FormProc::Condition {
+                name,
+                stacks,
+                duration_ms,
+            } => {
+                self.inflict_condition(name, *stacks, *duration_ms);
+                self.fire_triggered(ProcEvent::Condition(name));
+            }
+            FormProc::Modifier {
+                source,
+                modifier,
+                duration_ms,
+                max_stacks,
+                refresh_all,
+            } => {
+                let now = self.current_time_ms;
+                let until = now.saturating_add(*duration_ms);
+                let live = match self
+                    .live_mods
+                    .iter_mut()
+                    .position(|m| m.source == *source && m.modifier.axis == modifier.axis)
+                {
+                    Some(i) => &mut self.live_mods[i],
+                    None => {
+                        self.live_mods.push(LiveMod {
+                            source: source.clone(),
+                            modifier: modifier.clone(),
+                            expiries: Vec::new(),
+                        });
+                        self.live_mods.last_mut().expect("just pushed")
+                    }
+                };
+                live.expiries.retain(|at| *at > now);
+                if *refresh_all {
+                    live.expiries.iter_mut().for_each(|at| *at = until);
+                }
+                live.expiries.push(until);
+                let excess = live
+                    .expiries
+                    .len()
+                    .saturating_sub((*max_stacks).max(1) as usize);
+                live.expiries.sort_unstable();
+                live.expiries.drain(..excess);
+            }
         }
     }
 
-    /// Fire every [`FormSpec::triggered`] record `event` admits that is off
+    /// A condition on the foe with the skill path's duration and stack cap.
+    fn inflict_condition(&mut self, name: &str, stacks: u32, duration_ms: u32) {
+        let cap = condition_stack_cap(name, &self.params.mode);
+        let _ = self.condition_slot(name);
+        let duration = (duration_ms as f64 * self.params.condition_duration_mult).round() as u32;
+        self.target
+            .apply_condition(name, stacks, duration, self.current_time_ms, cap as u32);
+    }
+
+    /// Live modifiers on `axis` with their stack counts, plus the form's
+    /// `while_in` ones while it stands.
+    fn live_mods_on(&self, axis: ModAxis) -> impl Iterator<Item = (&DamageMod, f64)> {
+        let now = self.current_time_ms;
+        let timed = self.live_mods.iter().map(move |m| {
+            let stacks = m.expiries.iter().filter(|at| **at > now).count();
+            (&m.modifier, stacks as f64)
+        });
+        let in_form = self
+            .form
+            .as_ref()
+            .filter(|_| self.form_entered_ms.is_some())
+            .map(|form| form.while_in.iter().map(|m| (m, 1.0)))
+            .into_iter()
+            .flatten();
+        timed
+            .chain(in_form)
+            .filter(move |(m, stacks)| m.axis == axis && *stacks > 0.0)
+    }
+
+    /// Factor on `strike_mult` / `condition_mult` from live record
+    /// modifiers: multiplicative sources multiply, additive ones join the
+    /// bucket already inside the base multiplier.
+    fn live_mod_factor(&self, axis: ModAxis) -> f64 {
+        let bucket = match axis {
+            ModAxis::Strike => self.params.strike_add,
+            ModAxis::Condition => self.params.condition_add,
+            ModAxis::CritDamage => return 1.0,
+        };
+        let (mut product, mut added) = (1.0, 0.0);
+        for (m, stacks) in self.live_mods_on(axis) {
+            let fraction = m.percent / 100.0 * stacks;
+            if m.additive {
+                added += fraction;
+            } else {
+                product *= 1.0 + fraction;
+            }
+        }
+        product * (1.0 + bucket + added) / (1.0 + bucket)
+    }
+
+    /// Fire every [`SimParams::triggered`] record `event` admits that is off
     /// its internal cooldown and in the form state it asks for.
     fn fire_triggered(&mut self, event: ProcEvent<'_>) {
-        let Some(form) = self.form.as_ref() else {
+        if self.params.triggered.is_empty() || self.proc_depth >= 2 {
             return;
-        };
+        }
         let in_form = self.form_entered_ms.is_some();
+        // Sigils on the stowed weapon keep working in a form.
+        let held_set = if in_form {
+            self.weapon_set_before_form
+        } else {
+            self.active_weapon_set
+        };
         let mut due = Vec::new();
-        for (i, triggered) in form.triggered.iter().enumerate() {
+        for (i, triggered) in self.params.triggered.iter().enumerate() {
             let admits = match (&triggered.on, &event) {
                 (ProcTrigger::SkillUse(scope), ProcEvent::Cast(idx)) => {
                     super::wvw_timeline::skill_scope_admits(scope, &self.skills[*idx], &self.skills)
                 }
+                (ProcTrigger::OwnCast(id), ProcEvent::Cast(idx)) => {
+                    self.skills[*idx].skill_id == *id
+                }
                 (ProcTrigger::ConditionApplied(want), ProcEvent::Condition(name)) => want
                     .as_deref()
                     .is_none_or(|want| super::wvw_timeline::foe_condition_name_eq(name, want)),
+                (ProcTrigger::Hit, ProcEvent::Hit { .. })
+                | (ProcTrigger::Crit, ProcEvent::Hit { .. })
+                | (ProcTrigger::Periodic, ProcEvent::Tick) => true,
                 _ => false,
+            };
+            let carries = |boon: &str| {
+                self.buffs.iter().any(|b| {
+                    b.remaining_ms > 0 && self.buff_slots[b.slot].eq_ignore_ascii_case(boon)
+                })
             };
             if !admits
                 || self.triggered_ready_ms[i] > self.current_time_ms
                 || triggered.in_form.is_some_and(|want| want != in_form)
+                || (triggered.weapon_set != 0 && triggered.weapon_set != held_set)
+                || triggered
+                    .self_boons
+                    .iter()
+                    .any(|(boon, want)| carries(boon) != *want)
             {
                 continue;
+            }
+            if let (ProcTrigger::Crit, ProcEvent::Hit { crit }) = (&triggered.on, &event) {
+                self.triggered_mass[i] += crit;
+                if self.triggered_mass[i] < 1.0 {
+                    continue;
+                }
+                self.triggered_mass[i] = 0.0;
             }
             self.triggered_ready_ms[i] = self.current_time_ms.saturating_add(triggered.icd_ms);
             due.push(triggered.proc_.clone());
         }
+        self.proc_depth += 1;
         for proc_ in &due {
             self.fire_form_proc(proc_);
         }
+        self.proc_depth -= 1;
     }
 
     /// Credit the form pool; `from_proc` gains land even in a form that
@@ -1050,13 +1372,20 @@ impl SimState {
             } else {
                 0.0
             };
+            let crit_damage_pts: f64 = self
+                .live_mods_on(ModAxis::CritDamage)
+                .map(|(m, stacks)| m.percent * stacks)
+                .sum();
             let mut damage =
                 weapon_strength * effective_power / reference_armor() * hit.dmg_multiplier;
             damage *= strike_crit_factor_with_bonus(
                 self.params.precision,
-                self.params.ferocity,
+                self.params.ferocity
+                    + crit_damage_pts
+                        * crate::data::universal_formulas::formulas().ferocity_per_crit_damage_pct,
                 self.params.crit_chance_bonus + fury_bonus,
-            ) * self.params.strike_mult;
+            ) * self.params.strike_mult
+                * self.live_mod_factor(ModAxis::Strike);
             if self.target.protection {
                 damage *= crate::data::boon_condition_formulas::boons().protection_multiplier();
             }
@@ -1074,6 +1403,11 @@ impl SimState {
             self.apply_dummy_damage(damage);
             let (_, per_hit) = self.form_gain_for(hit.skill_id);
             self.gain_form_pool(per_hit, false);
+            let crit = crit_chance_fraction(
+                self.params.precision,
+                self.params.crit_chance_bonus + fury_bonus,
+            );
+            self.fire_triggered(ProcEvent::Hit { crit });
         }
     }
 
@@ -1132,17 +1466,7 @@ impl SimState {
                     stacks,
                     duration_ms,
                 } => {
-                    let cap = condition_stack_cap(condition, &self.params.mode);
-                    let _ = self.condition_slot(condition);
-                    let duration =
-                        (*duration_ms as f64 * self.params.condition_duration_mult).round() as u32;
-                    self.target.apply_condition(
-                        condition,
-                        *stacks,
-                        duration,
-                        self.current_time_ms,
-                        cap as u32,
-                    );
+                    self.inflict_condition(condition, *stacks, *duration_ms);
                     self.fire_triggered(ProcEvent::Condition(condition));
                 }
                 SkillEffect::ApplyBuff {
@@ -1152,17 +1476,7 @@ impl SimState {
                 } if crate::data::boon_condition_formulas::is_condition(buff) => {
                     // Non-damaging foe conditions (Vulnerability, Chilled, …):
                     // one shared TargetState ledger with WvW (Phase 3).
-                    let cap = condition_stack_cap(buff, &self.params.mode);
-                    let _ = self.condition_slot(buff);
-                    let duration =
-                        (*duration_ms as f64 * self.params.condition_duration_mult).round() as u32;
-                    self.target.apply_condition(
-                        buff,
-                        *stacks,
-                        duration,
-                        self.current_time_ms,
-                        cap as u32,
-                    );
+                    self.inflict_condition(buff, *stacks, *duration_ms);
                     self.fire_triggered(ProcEvent::Condition(buff));
                 }
                 SkillEffect::ApplyBuff {
@@ -1170,17 +1484,9 @@ impl SimState {
                     stacks,
                     duration_ms,
                 } => {
-                    let kind = buff_kind(buff);
-                    let slot = self.buff_slot(buff);
-                    let duration_mult = self.params.boon_duration_mult;
-                    for _ in 0..*stacks {
-                        self.buffs.push(BuffInstance {
-                            remaining_ms: (*duration_ms as f64 * duration_mult).round() as u32,
-                            kind,
-                            slot,
-                            ally_facing,
-                        });
-                    }
+                    let remaining_ms =
+                        (*duration_ms as f64 * self.params.boon_duration_mult).round() as u32;
+                    self.add_buff(buff, *stacks, remaining_ms, ally_facing);
                 }
                 SkillEffect::ComboField {
                     field_type,
@@ -1280,6 +1586,11 @@ impl SimState {
             cast_time
         };
 
+        self.auto_chain.on_cast(
+            idx,
+            self.skills[idx].is_auto_attack(),
+            self.current_time_ms.saturating_add(effective_cast),
+        );
         // Next action = now + effective_cast + human delay
         self.next_action_ms = self
             .current_time_ms
@@ -1310,17 +1621,8 @@ impl SimState {
                 if duration == 0 || stacks == 0 {
                     return;
                 }
-                let kind = buff_kind(&name);
-                let slot = self.buff_slot(&name);
-                for _ in 0..stacks {
-                    self.buffs.push(BuffInstance {
-                        remaining_ms: duration,
-                        kind,
-                        slot,
-                        // Area effect: the field's boon lands on allies in it.
-                        ally_facing: true,
-                    });
-                }
+                // Area effect: the field's boon lands on allies in it.
+                self.add_buff(&name, stacks, duration, true);
             }
             ComboOutcomeEffect::Condition {
                 name,
@@ -1441,7 +1743,7 @@ impl SimState {
             now,
             &self.params.mode,
             &self.params.deferred_target,
-        );
+        ) * self.live_mod_factor(ModAxis::Condition);
 
         let mut tick_total = 0.0;
         for condition in &mut self.target.conditions {
@@ -2465,6 +2767,100 @@ mod tests {
             0.0,
             false,
         )
+    }
+
+    /// A three-step auto chain 101 -> 102 -> 103 (E11).
+    fn chain_step(id: u32, name: &str, next: Option<u32>) -> RotationSkill {
+        RotationSkill {
+            skill_id: id,
+            name: name.into(),
+            next_chain: next,
+            ..auto_attack()
+        }
+    }
+
+    fn three_step_chain() -> Vec<RotationSkill> {
+        vec![
+            chain_step(101, "Step One", Some(102)),
+            chain_step(102, "Step Two", Some(103)),
+            chain_step(103, "Step Three", None),
+        ]
+    }
+
+    fn chain_casts(result: &crate::rotation::SimulationResult, name: &str) -> u32 {
+        result
+            .skill_usage
+            .iter()
+            .find(|usage| usage.name == name)
+            .map_or(0, |usage| usage.cast_count)
+    }
+
+    #[test]
+    fn auto_chain_cursor_cycles_and_resets() {
+        let skills = three_step_chain();
+        let mut chain = crate::rotation::AutoChain::new(&skills);
+        assert!(!chain.is_follow_up(0) && chain.is_follow_up(1) && chain.is_follow_up(2));
+        let mut order = Vec::new();
+        let mut now = 0;
+        for _ in 0..4 {
+            let step = chain.step(0, now);
+            order.push(skills[step].skill_id);
+            now += 500;
+            chain.on_cast(step, true, now);
+        }
+        assert_eq!(order, vec![101, 102, 103, 101]);
+        // A non-auto cast resets to step 1.
+        chain.on_cast(0, true, now);
+        assert_eq!(chain.step(0, now), 1);
+        chain.on_cast(5, false, now);
+        assert_eq!(chain.step(0, now), 0);
+        // A pause past the continue window resets to step 1.
+        chain.on_cast(0, true, 1_000);
+        let deadline = 1_000 + crate::rotation::CHAIN_CONTINUE_SLACK_MS;
+        assert_eq!(chain.step(0, deadline), 1);
+        assert_eq!(chain.step(0, deadline + 1), 0);
+    }
+
+    #[test]
+    fn flow_sim_cycles_the_auto_chain() {
+        let result = simulate(&three_step_chain(), 10_000, 2000.0, 0.0, 1100.0);
+        let counts = [
+            chain_casts(&result, "Step One"),
+            chain_casts(&result, "Step Two"),
+            chain_casts(&result, "Step Three"),
+        ];
+        assert!(counts[2] > 0, "{counts:?}");
+        assert!(counts[0] - counts[2] <= 1, "1-2-3-1 cycle: {counts:?}");
+    }
+
+    #[test]
+    fn a_non_auto_cast_restarts_the_chain_in_the_flow_sim() {
+        let mut skills = three_step_chain();
+        skills.push(RotationSkill {
+            cooldown_ms: 1_500,
+            ..weapon_skill()
+        });
+        let result = simulate(&skills, 10_000, 2000.0, 0.0, 1100.0);
+        let (one, three) = (
+            chain_casts(&result, "Step One"),
+            chain_casts(&result, "Step Three"),
+        );
+        assert!(
+            one > three,
+            "step 1 after every weapon skill: one {one} three {three}"
+        );
+    }
+
+    #[test]
+    fn a_chain_with_a_missing_step_abstains_by_name() {
+        let skills = vec![chain_step(101, "Step One", Some(999))];
+        assert_eq!(
+            crate::rotation::missing_chain_steps(&skills),
+            vec!["Step One auto chain (step 999 missing)".to_string()]
+        );
+        assert!(crate::rotation::missing_chain_steps(&three_step_chain()).is_empty());
+        let result = simulate(&skills, 5_000, 2000.0, 0.0, 1100.0);
+        assert!(chain_casts(&result, "Step One") > 0);
     }
 
     #[test]
@@ -4260,8 +4656,18 @@ mod tests {
     }
 
     fn run_form_sim(skills: &[RotationSkill], duration_ms: u32, form: FormSpec) -> SimState {
+        run_sim(skills, duration_ms, Some(form), Vec::new())
+    }
+
+    fn run_sim(
+        skills: &[RotationSkill],
+        duration_ms: u32,
+        form: Option<FormSpec>,
+        triggered: Vec<TriggeredProc>,
+    ) -> SimState {
         let mut params = SimParams::basic(2_000.0, 0.0, 1_000.0);
-        params.form = Some(form);
+        params.form = form;
+        params.triggered = triggered;
         let mut sim = SimState::new(
             skills,
             duration_ms,
@@ -4497,7 +4903,7 @@ mod tests {
         assert!((result.buff_uptime["Fury"] - 4.0 / 20.0).abs() < 0.01);
     }
 
-    /// `OnSkillUse` / `OnConditionApplied` records ride on the form: a
+    /// `OnSkillUse` / `OnConditionApplied` records with a form: a
     /// `Shroud_1` scope admits the form bar's slot 1 only (not the weapon
     /// auto in the same slot), a Fear scope fires on a landed fear, and the
     /// `in_shroud` prerequisite and the internal cooldown hold.
@@ -4542,38 +4948,44 @@ mod tests {
             on,
             icd_ms: 1_000,
             in_form,
+            weapon_set: 0,
+            self_boons: Vec::new(),
             proc_,
         };
-        let form = |initial_pool| {
-            let mut form = test_form(initial_pool);
-            form.triggered = vec![
-                triggered(
-                    ProcTrigger::SkillUse(TriggerScope::Slot("Shroud_1".into())),
-                    None,
-                    buff("Might", 15_000),
-                ),
-                triggered(
-                    ProcTrigger::ConditionApplied(Some("Fear".into())),
-                    None,
-                    buff("Quickness", 5_000),
-                ),
-                triggered(
-                    ProcTrigger::ConditionApplied(Some("Fear".into())),
-                    Some(true),
-                    buff("Fury", 5_000),
-                ),
-                triggered(
-                    ProcTrigger::ConditionApplied(Some("Chilled".into())),
-                    None,
-                    buff("Protection", 5_000),
-                ),
-            ];
-            form
+        let records = vec![
+            triggered(
+                ProcTrigger::SkillUse(TriggerScope::Slot("Shroud_1".into())),
+                None,
+                buff("Might", 15_000),
+            ),
+            triggered(
+                ProcTrigger::ConditionApplied(Some("Fear".into())),
+                None,
+                buff("Quickness", 5_000),
+            ),
+            triggered(
+                ProcTrigger::ConditionApplied(Some("Fear".into())),
+                Some(true),
+                buff("Fury", 5_000),
+            ),
+            triggered(
+                ProcTrigger::ConditionApplied(Some("Chilled".into())),
+                None,
+                buff("Protection", 5_000),
+            ),
+        ];
+        let run = |initial_pool| {
+            run_sim(
+                &skills,
+                20_000,
+                Some(test_form(initial_pool)),
+                records.clone(),
+            )
         };
 
         // Never enters the form: the weapon auto is not shroud skill 1 and
         // the in-form Fury stays shut; the one fear gives 5 s of Quickness.
-        let result = run_form_sim(&skills, 20_000, form(0.0)).into_result();
+        let result = run(0.0).into_result();
         assert_eq!(result.might_stacks_avg, 0.0);
         assert!((result.buff_uptime["Quickness"] - 5.0 / 20.0).abs() < 0.01);
         assert!(!result.buff_uptime.contains_key("Fury"));
@@ -4581,9 +4993,243 @@ mod tests {
 
         // Full pool: the form's auto fires Might (one stack per second at
         // the 1 s cooldown), and the fear cast in the form opens Fury.
-        let result = run_form_sim(&skills, 20_000, form(100.0)).into_result();
+        let result = run(100.0).into_result();
         assert!(result.might_stacks_avg > 1.0, "{}", result.might_stacks_avg);
         assert!((result.buff_uptime["Fury"] - 5.0 / 20.0).abs() < 0.01);
+    }
+
+    fn auto_only() -> Vec<RotationSkill> {
+        vec![bar_skill(
+            1,
+            "Weapon Auto",
+            SkillSlot::Weapon1,
+            1,
+            500,
+            0,
+            strike(1, 1.0),
+        )]
+    }
+
+    fn every(interval_ms: u32, in_form: Option<bool>, proc_: FormProc) -> TriggeredProc {
+        TriggeredProc {
+            on: ProcTrigger::Periodic,
+            icd_ms: interval_ms,
+            in_form,
+            weapon_set: 0,
+            self_boons: Vec::new(),
+            proc_,
+        }
+    }
+
+    fn quickness(duration_ms: u32) -> FormProc {
+        FormProc::Buff {
+            name: "Quickness".into(),
+            stacks: 1,
+            duration_ms,
+            ally: false,
+        }
+    }
+
+    /// "Feel My Wrath!" (wiki: the quickness you grant yourself is doubled):
+    /// the skill's 3 s ally grant plus its own-cast record's 3 s self grant
+    /// run back to back, because Quickness stacks in duration.
+    #[test]
+    fn an_own_cast_record_doubles_self_quickness() {
+        let mut shout = bar_skill(
+            7,
+            "Shout",
+            SkillSlot::Elite,
+            0,
+            250,
+            30_000,
+            vec![SkillEffect::ApplyBuff {
+                buff: "Quickness".into(),
+                stacks: 1,
+                duration_ms: 3_000,
+            }],
+        );
+        shout.reaches_allies = true;
+        let skills = [auto_only(), vec![shout]].concat();
+        let record = |id| TriggeredProc {
+            on: ProcTrigger::OwnCast(id),
+            icd_ms: 0,
+            in_form: None,
+            weapon_set: 0,
+            self_boons: Vec::new(),
+            proc_: quickness(3_000),
+        };
+        let plain = run_sim(&skills, 30_000, None, Vec::new());
+        assert_eq!(casts(&plain, 7), 1);
+        let plain = plain.into_result().buff_uptime["Quickness"];
+        assert!((plain - 3.0 / 30.0).abs() < 0.01, "{plain}");
+        let doubled = run_sim(&skills, 30_000, None, vec![record(7)]).into_result();
+        let doubled = doubled.buff_uptime["Quickness"];
+        assert!((doubled - 6.0 / 30.0).abs() < 0.01, "{doubled}");
+        // Another skill's cast does not fire it.
+        let other = run_sim(&skills, 30_000, None, vec![record(1)]).into_result();
+        assert!(
+            other.buff_uptime["Quickness"] > 0.5,
+            "the auto's own record fires"
+        );
+    }
+
+    /// Sigil of Rage shape: on crit, 20 s cooldown, not while the player
+    /// has Quickness, live only on its weapon set. The payload here is Fury
+    /// so the gate's Quickness can come from elsewhere.
+    #[test]
+    fn an_on_crit_record_fires_after_its_cooldown_only_when_the_gate_holds() {
+        let rage = |weapon_set, crit_bonus: f64, extra: Vec<TriggeredProc>| {
+            let mut params = SimParams::basic(2_000.0, 0.0, 1_000.0);
+            params.precision = 1_000.0;
+            params.crit_chance_bonus = crit_bonus;
+            params.fury_crit_chance_bonus = 0.0;
+            params.triggered = [
+                vec![TriggeredProc {
+                    on: ProcTrigger::Crit,
+                    icd_ms: 20_000,
+                    in_form: None,
+                    weapon_set,
+                    self_boons: vec![("Quickness".into(), false)],
+                    proc_: FormProc::Buff {
+                        name: "Fury".into(),
+                        stacks: 1,
+                        duration_ms: 3_000,
+                        ally: false,
+                    },
+                }],
+                extra,
+            ]
+            .concat();
+            let mut sim = SimState::new(
+                &auto_only(),
+                60_000,
+                TargetState::from_seed(EnemyDummy::open()),
+                params,
+            );
+            sim.run();
+            sim.into_result()
+                .buff_uptime
+                .get("Fury")
+                .copied()
+                .unwrap_or(0.0)
+        };
+        // Certain crits: fires on the first hit, then each 20 s, 3 s each.
+        let fury = rage(1, 100.0, Vec::new());
+        assert!((fury - 9.0 / 60.0).abs() < 0.01, "{fury}");
+        // Averaged crits: the mass takes a few hits after each cooldown, so
+        // the same three firings, never more.
+        let fury = rage(1, 0.0, Vec::new());
+        assert!(fury > 0.0 && fury <= 9.0 / 60.0 + 1e-9, "{fury}");
+        // Quickness always up: the gate stays shut.
+        let fury = rage(1, 100.0, vec![every(1_000, None, quickness(2_000))]);
+        assert_eq!(fury, 0.0);
+        // Socketed on the set the player never holds: never live.
+        let fury = rage(2, 100.0, Vec::new());
+        assert_eq!(fury, 0.0);
+    }
+
+    /// E15: event records ride on `SimParams`, so a build with no form fires
+    /// them; one gated on the form (`in_shroud`) never fires without one.
+    #[test]
+    fn skill_use_records_fire_without_a_form_and_form_gated_ones_do_not() {
+        use crate::data::normalized_effects::TriggerScope;
+        let on_auto = |in_form| TriggeredProc {
+            on: ProcTrigger::SkillUse(TriggerScope::Any),
+            icd_ms: 10_000,
+            in_form,
+            weapon_set: 0,
+            self_boons: Vec::new(),
+            proc_: quickness(5_000),
+        };
+        // Casts at 0 s and 10 s (the internal cooldown): 10 s of 20 s.
+        let result = run_sim(&auto_only(), 20_000, None, vec![on_auto(None)]).into_result();
+        assert!((result.buff_uptime["Quickness"] - 0.5).abs() < 0.01);
+        let result = run_sim(&auto_only(), 20_000, None, vec![on_auto(Some(true))]).into_result();
+        assert!(!result.buff_uptime.contains_key("Quickness"));
+    }
+
+    /// E16: a timed strike modifier multiplies only the hits that land
+    /// inside its window; an additive one joins the bucket already in
+    /// `strike_mult`; stacks add up to the record's cap.
+    #[test]
+    fn a_timed_strike_modifier_raises_damage_only_in_its_window() {
+        let modifier = |percent, additive, max_stacks| FormProc::Modifier {
+            source: "Test Modifier".into(),
+            modifier: DamageMod {
+                axis: ModAxis::Strike,
+                percent,
+                additive,
+            },
+            duration_ms: 2_000,
+            max_stacks,
+            refresh_all: false,
+        };
+        let seconds = |triggered: Vec<TriggeredProc>, strike_add: f64| {
+            let mut params = SimParams::basic(2_000.0, 0.0, 1_000.0);
+            params.triggered = triggered;
+            params.strike_add = strike_add;
+            params.strike_mult = 1.0 + strike_add;
+            let mut sim = SimState::new(
+                &auto_only(),
+                20_000,
+                TargetState::from_seed(EnemyDummy::open()),
+                params,
+            );
+            sim.run();
+            sim.into_result().damage_per_second
+        };
+        let base = seconds(Vec::new(), 0.0);
+        // Fires at 0 s and 10 s, 2 s each.
+        let boosted = seconds(vec![every(10_000, None, modifier(20.0, false, 1))], 0.0);
+        for (k, (b, w)) in base.iter().zip(&boosted).enumerate() {
+            let want = if k % 10 < 2 { 1.2 } else { 1.0 };
+            assert!(
+                (w.0 / b.0 - want).abs() < 1e-9,
+                "second {k}: {} vs {}",
+                w.0,
+                b.0
+            );
+        }
+        assert!(base.iter().all(|(strike, _)| *strike > 0.0));
+        // Additive: (1 + 0.1 + 0.2) / (1 + 0.1) on a +10 % bucket.
+        let bucket = seconds(Vec::new(), 0.1);
+        let additive = seconds(vec![every(10_000, None, modifier(20.0, true, 1))], 0.1);
+        assert!((additive[0].0 / bucket[0].0 - 1.3 / 1.1).abs() < 1e-9);
+        assert!((additive[5].0 / bucket[5].0 - 1.0).abs() < 1e-9);
+        // A stack every second, each 2 s, cap 3: two stacks from 1 s on.
+        let stacked = seconds(vec![every(1_000, None, modifier(10.0, false, 3))], 0.0);
+        assert!((stacked[5].0 / base[5].0 - 1.2).abs() < 1e-9);
+    }
+
+    /// E16: a condition proc applies its record's stacks and duration
+    /// through the skill path, and the condition it applies fires the
+    /// records that listen for it.
+    #[test]
+    fn a_condition_proc_applies_its_stacks() {
+        let records = vec![
+            every(
+                60_000,
+                None,
+                FormProc::Condition {
+                    name: "Bleeding".into(),
+                    stacks: 3,
+                    duration_ms: 5_000,
+                },
+            ),
+            TriggeredProc {
+                on: ProcTrigger::ConditionApplied(Some("Bleeding".into())),
+                icd_ms: 0,
+                in_form: None,
+                weapon_set: 0,
+                self_boons: Vec::new(),
+                proc_: quickness(4_000),
+            },
+        ];
+        let result = run_sim(&auto_only(), 20_000, None, records).into_result();
+        // 3 stacks for 5 s of 20 s.
+        assert!((result.condition_uptime["Bleeding"] - 0.75).abs() < 0.05);
+        assert!(result.condition_dps > 0.0);
+        assert!((result.buff_uptime["Quickness"] - 0.2).abs() < 0.01);
     }
 
     /// Reaper's Shroud with the shipped numbers: `data/formulas/shroud.json`

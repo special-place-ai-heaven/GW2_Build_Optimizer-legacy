@@ -658,6 +658,7 @@ mod tests {
 
     fn rune_bonuses(bonuses: &[&str]) -> ItemDetails {
         ItemDetails {
+            description: None,
             detail_type: Some("Rune".into()),
             weight_class: None,
             defense: None,
@@ -678,6 +679,7 @@ mod tests {
 
     fn sigil_buff(description: &str) -> ItemDetails {
         ItemDetails {
+            description: None,
             detail_type: Some("Sigil".into()),
             weight_class: None,
             defense: None,

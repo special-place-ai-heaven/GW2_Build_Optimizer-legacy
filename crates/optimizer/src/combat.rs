@@ -75,6 +75,12 @@ pub struct TraitStanding {
     pub trait_id: u32,
     /// Fractions this trait pushed into `strike_pct`.
     pub strike_pct: Vec<f64>,
+    /// Sum of the fractions this trait pushed into `strike_add_pct`.
+    pub strike_add_pct: f64,
+    /// Fractions this trait pushed into `condition_pct`.
+    pub condition_pct: Vec<f64>,
+    /// Sum of the fractions this trait pushed into `condition_add_pct`.
+    pub condition_add_pct: f64,
     /// Points this trait pushed into `crit_chance_pct`.
     pub crit_chance_pct: f64,
     /// Points this trait pushed into `crit_damage_pct`.
@@ -881,21 +887,28 @@ pub fn extract_damage_modifiers(
         }
         // Two same-category values are the API's PvE/competitive split. Collapse
         // them within one trait so they can never stack simultaneously.
-        let (strike, crit_chance, crit_damage) = (
+        let (strike, strike_add, condition, condition_add, crit_chance, crit_damage) = (
             mods.strike_pct.len(),
+            mods.strike_add_pct.len(),
+            mods.condition_pct.len(),
+            mods.condition_add_pct.len(),
             mods.crit_chance_pct.len(),
             mods.crit_damage_pct.len(),
         );
         absorb_mode_pairs(&mut mods, trait_mods, competitive);
-        // ponytail: additive-bucket strike entries are not tagged; no trait
-        // routed there has a Conditional record. Removing one needs the bucket total.
         let standing = TraitStanding {
             trait_id,
             strike_pct: mods.strike_pct[strike..].to_vec(),
+            strike_add_pct: mods.strike_add_pct[strike_add..].iter().sum(),
+            condition_pct: mods.condition_pct[condition..].to_vec(),
+            condition_add_pct: mods.condition_add_pct[condition_add..].iter().sum(),
             crit_chance_pct: mods.crit_chance_pct[crit_chance..].iter().sum(),
             crit_damage_pct: mods.crit_damage_pct[crit_damage..].iter().sum(),
         };
         if !standing.strike_pct.is_empty()
+            || standing.strike_add_pct != 0.0
+            || !standing.condition_pct.is_empty()
+            || standing.condition_add_pct != 0.0
             || standing.crit_chance_pct != 0.0
             || standing.crit_damage_pct != 0.0
         {
@@ -2259,6 +2272,7 @@ mod tests {
             game_types: vec![],
             restrictions: vec![],
             details: Some(gw2_api::models::ItemDetails {
+                description: None,
                 detail_type: Some("Rune".into()),
                 weight_class: None,
                 defense: None,
@@ -3785,6 +3799,7 @@ mod tests {
             game_types: vec![],
             restrictions: vec![],
             details: Some(gw2_api::models::ItemDetails {
+                description: None,
                 detail_type: Some("Sigil".into()),
                 weight_class: None,
                 defense: None,
@@ -3839,6 +3854,7 @@ mod tests {
                 game_types: vec![],
                 restrictions: vec![],
                 details: buff.map(|text| gw2_api::models::ItemDetails {
+                    description: None,
                     detail_type: Some("Sigil".into()),
                     weight_class: None,
                     defense: None,
@@ -3913,6 +3929,7 @@ mod tests {
             game_types: vec![],
             restrictions: vec![],
             details: Some(gw2_api::models::ItemDetails {
+                description: None,
                 detail_type: Some("Sigil".into()),
                 weight_class: None,
                 defense: None,
@@ -4069,6 +4086,7 @@ mod tests {
             game_types: vec![],
             restrictions: vec![],
             details: Some(gw2_api::models::ItemDetails {
+                description: None,
                 detail_type: Some("Sigil".into()),
                 weight_class: None,
                 defense: None,
@@ -4166,6 +4184,7 @@ mod tests {
             game_types: vec![],
             restrictions: vec![],
             details: Some(gw2_api::models::ItemDetails {
+                description: None,
                 detail_type: Some("Rune".into()),
                 weight_class: None,
                 defense: None,

@@ -13,11 +13,12 @@ use std::path::{Path, PathBuf};
 
 use gw2_optimizer::fidelity::compare::{self, PlayerComparison};
 use gw2_optimizer::fidelity::ei_log::{self, EiLog};
+use gw2_optimizer::fidelity::kit::CodeEntry;
 use gw2_optimizer::gamedb::GameDb;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ei_logs");
 
-type Codes = BTreeMap<String, BTreeMap<String, String>>;
+type Codes = BTreeMap<String, BTreeMap<String, CodeEntry>>;
 
 fn fixtures() -> Vec<(String, EiLog, String)> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(FIXTURES)
@@ -62,7 +63,8 @@ fn codes_name_players_that_exist_in_their_fixture() {
         let log = logs
             .get(&file)
             .unwrap_or_else(|| panic!("codes.json names {file}, which is not a fixture"));
-        for (name, code) in by_name {
+        for (name, entry) in by_name {
+            let code = entry.code();
             assert!(
                 log.squad().any(|p| p.name == name),
                 "codes.json: {file} has no squad player {name}"
@@ -220,7 +222,7 @@ fn compare_all() -> Vec<PlayerComparison> {
     fixtures()
         .into_iter()
         .flat_map(|(name, log, _)| {
-            let for_log: HashMap<String, String> = codes
+            let for_log: HashMap<String, CodeEntry> = codes
                 .get(&name)
                 .cloned()
                 .unwrap_or_default()

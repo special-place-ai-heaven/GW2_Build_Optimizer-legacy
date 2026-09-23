@@ -73,6 +73,115 @@ pub struct RotationSkill {
 // the same three states; `weapon_set == 3` reuses the availability check.
 pub const SHROUD_SET: u8 = 3;
 
+impl RotationSkill {
+    /// Slot 1 with no recharge: the auto-attack (or a step of its chain).
+    pub fn is_auto_attack(&self) -> bool {
+        self.slot == SkillSlot::Weapon1 && self.cooldown_ms == 0
+    }
+}
+
+/// How long after a chain step's activation ends the next step may still
+/// start. Wiki `Chain` gives no figure: a chain continues when each step is
+/// auto-activated right after the previous one, and resets on an interrupt
+/// or when another weapon skill is used mid-sequence. "Right after" is the
+/// simulators' own reaction time (human delay + skill gap) plus one flow
+/// tick; any longer idle resets the chain to its first step.
+pub const CHAIN_CONTINUE_SLACK_MS: u32 =
+    skill_timings::HUMAN_DELAY_MS + skill_timings::MIN_SKILL_GAP_MS + 100;
+
+/// Auto-attack chain cursor (E11), shared by the flow simulation and the
+/// WvW timeline. The bar keeps one slot-1 head; the follow-up steps sit in
+/// the skill list and are reached only through [`AutoChain::step`], driven
+/// by each skill's API `next_chain`.
+#[derive(Debug, Clone, Default)]
+pub struct AutoChain {
+    /// Per skill: index of its `next_chain` step in the list.
+    next: Vec<Option<usize>>,
+    /// Per skill: its chain's first step (itself when unchained).
+    head: Vec<usize>,
+    /// The step the next auto cast plays, and the last moment it may start.
+    cursor: Option<(usize, u32)>,
+}
+
+impl AutoChain {
+    pub fn new(skills: &[RotationSkill]) -> Self {
+        let n = skills.len();
+        let next: Vec<Option<usize>> = skills
+            .iter()
+            .map(|s| {
+                let id = s.next_chain?;
+                skills.iter().position(|t| t.skill_id == id)
+            })
+            .collect();
+        let mut targeted = vec![false; n];
+        for j in next.iter().flatten() {
+            targeted[*j] = true;
+        }
+        let mut head: Vec<usize> = (0..n).collect();
+        for root in (0..n).filter(|i| !targeted[*i]) {
+            let mut step = next[root];
+            let mut hops = 0;
+            while let Some(k) = step {
+                if k == root || hops > n {
+                    break;
+                }
+                head[k] = root;
+                step = next[k];
+                hops += 1;
+            }
+        }
+        Self {
+            next,
+            head,
+            cursor: None,
+        }
+    }
+
+    /// A chain step after the first: never a filler candidate on its own.
+    pub fn is_follow_up(&self, idx: usize) -> bool {
+        self.head.get(idx).is_some_and(|head| *head != idx)
+    }
+
+    /// The step the auto on chain `head` plays at `now_ms`.
+    pub fn step(&self, head: usize, now_ms: u32) -> usize {
+        match self.cursor {
+            Some((step, deadline)) if now_ms <= deadline && self.head[step] == head => step,
+            _ => head,
+        }
+    }
+
+    /// After a cast ending at `end_ms`: an auto advances its chain, any
+    /// other skill resets it (wiki `Chain`).
+    // ponytail: every non-auto cast resets; the wiki spares some quick
+    // utilities, add a per-skill flag if a log shows one.
+    pub fn on_cast(&mut self, idx: usize, is_auto: bool, end_ms: u32) {
+        self.cursor = if is_auto {
+            self.next[idx].map(|step| (step, end_ms.saturating_add(CHAIN_CONTINUE_SLACK_MS)))
+        } else {
+            None
+        };
+    }
+
+    /// Interrupted (wiki `Chain`): back to the first step.
+    pub fn reset(&mut self) {
+        self.cursor = None;
+    }
+}
+
+/// Auto chains whose next step is not in the skill list (missing from the
+/// skill data), named for the gap line (doctrine rule 6).
+pub fn missing_chain_steps(skills: &[RotationSkill]) -> Vec<String> {
+    skills
+        .iter()
+        .filter(|s| s.is_auto_attack())
+        .filter_map(|s| {
+            let id = s.next_chain?;
+            (!skills.iter().any(|t| t.skill_id == id))
+                .then(|| format!("{} auto chain (step {id} missing)", s.name))
+        })
+        .collect()
+}
+
 /// Skill slot classification — determines priority and auto-attack behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SkillSlot {

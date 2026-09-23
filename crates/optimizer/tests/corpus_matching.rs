@@ -173,12 +173,18 @@ const CASES: &[Case] = &[
         CombatTier::Party,
         &["guildjen:Cloud Support"],
     ),
+    // Re-frozen in sprint 008 (triggered records for every build, E15),
+    // measured: the flow now fires trait records without a form, so the
+    // hardstuck Zerg Boon DPS Revenant's trait boon records play. Its boon
+    // axis rises from 0 to 0.171 and its alignment from -0.012 to +0.088.
+    // hardstuck's Zerg Support measures 0 on every axis except sustain,
+    // before and after, so its alignment stays 0.000 and it drops behind.
     (
         "Revenant",
         GameMode::WvW,
         RoleObjective::Buffer,
         CombatTier::Party,
-        &["hardstuck:Zerg Support", "guildjen:Havoc Support"],
+        &["hardstuck:Zerg Boon DPS", "guildjen:Havoc Support"],
     ),
     (
         "Mesmer",
@@ -209,12 +215,17 @@ const CASES: &[Case] = &[
     // Scourge Zerg Support (0.348, no form: Scourge has no shroud). The
     // shroud skills are sourced (Devouring Cut, Voracious Arc with its
     // daze) and the aquatic twins are off the bar; the drop stands.
+    // Re-frozen in sprint 008 (Willbender increment), measured: once
+    // Quickness stacks in duration in the flow sim (the game rule), the
+    // hardstuck power-reaper-2 Zerg Power DPS control axis rises 0.320 ->
+    // 0.363 and its alignment to 0.363, over Zerg Support's unchanged
+    // 0.348. With duration stacking switched off it measures 0.320 again.
     (
         "Necromancer",
         GameMode::WvW,
         RoleObjective::Disabler,
         CombatTier::Solo,
-        &["guildjen:Roaming Bruiser", "hardstuck:Zerg Support"],
+        &["guildjen:Roaming Bruiser", "hardstuck:Zerg Power DPS"],
     ),
 ];
 

@@ -26,8 +26,208 @@ pub enum Provenance {
     ChatCode,
     /// The character's active equipment or build tab in the addon cache.
     Account,
+    /// Gear the player stated in words beside the chat code (`codes.json`).
+    Stated,
     Corpus,
     Missing,
+}
+
+/// Gear the player stated in words. Every key is optional; an unknown key is
+/// a parse error, so a typo never silently states nothing.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatedGear {
+    /// Stat prefix names as the game db spells them ("Dragon's", "Marauder").
+    pub armor: Option<String>,
+    pub weapons: Option<String>,
+    pub trinkets: Option<String>,
+    /// Weapon type -> its sigils ("Hydromancy" or "Superior Sigil of Hydromancy").
+    #[serde(default)]
+    pub sigils: BTreeMap<String, Vec<String>>,
+    pub rune: Option<String>,
+    pub relic: Option<String>,
+    /// Nourishment and enhancement item names.
+    pub food: Option<String>,
+    pub utility: Option<String>,
+}
+
+/// One character's value in `codes.json`: a bare chat code, or
+/// `{"code": "[&...]", "gear": {...}}`.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(untagged)]
+pub enum CodeEntry {
+    Code(String),
+    Stated {
+        code: String,
+        #[serde(default)]
+        gear: StatedGear,
+    },
+}
+
+impl CodeEntry {
+    pub fn code(&self) -> &str {
+        match self {
+            CodeEntry::Code(c) | CodeEntry::Stated { code: c, .. } => c,
+        }
+    }
+
+    pub fn gear(&self) -> Option<&StatedGear> {
+        match self {
+            CodeEntry::Code(_) => None,
+            CodeEntry::Stated { gear, .. } => Some(gear),
+        }
+    }
+}
+
+/// [`StatedGear`] resolved against the game db. A name that does not resolve
+/// is `None` here and named in `notes`, so its group keeps the corpus source.
+#[derive(Debug, Default)]
+struct Stated {
+    armor: Option<String>,
+    weapons: Option<String>,
+    trinkets: Option<String>,
+    /// Lower-case weapon type -> sigil item ids; `None` if any name failed.
+    sigils: Option<BTreeMap<String, Vec<u32>>>,
+    rune: Option<u32>,
+    relic: Option<u32>,
+    food: Option<u32>,
+    utility: Option<u32>,
+}
+
+const TRINKETS: [&str; 6] = [
+    "Backpack",
+    "Accessory1",
+    "Accessory2",
+    "Amulet",
+    "Ring1",
+    "Ring2",
+];
+
+/// Item id whose name is `name`, or `name` behind one of `prefixes`
+/// ("Hydromancy" -> "Superior Sigil of Hydromancy"). Exact up to case and
+/// punctuation; the first id in `items` order wins, which puts PvE first.
+fn item_by_name(items: &[&gw2_api::models::Item], prefixes: &[&str], name: &str) -> Option<u32> {
+    let key = gw2_core::i18n::alnum_key;
+    let want: Vec<String> = std::iter::once(key(name))
+        .chain(prefixes.iter().map(|p| key(&format!("{p}{name}"))))
+        .filter(|k| !k.is_empty())
+        .collect();
+    items
+        .iter()
+        .find(|i| want.contains(&key(&i.name)))
+        .map(|i| i.id)
+}
+
+/// Food / utility by name: exact first (as [`item_by_name`]), then the one
+/// name containing it ("Sweet and Spicy Butternut Squash Soup" -> "Bowl of
+/// ..."). Several different names containing it resolve to nothing.
+fn consumable_by_name(items: &[&gw2_api::models::Item], name: &str) -> Option<u32> {
+    item_by_name(items, &[], name).or_else(|| {
+        let key = gw2_core::i18n::alnum_key;
+        let want = key(name);
+        if want.is_empty() {
+            return None;
+        }
+        let mut hits = items.iter().filter(|i| key(&i.name).contains(&want));
+        let first = hits.next()?;
+        hits.all(|i| key(&i.name) == key(&first.name))
+            .then_some(first.id)
+    })
+}
+
+fn resolve_stated(
+    g: &StatedGear,
+    mode: &gw2_core::types::GameMode,
+    db: &GameDb,
+    notes: &mut Vec<String>,
+) -> Stated {
+    let mut abstain = |what: &str, name: &str| {
+        notes.push(format!("stated {what} '{name}' not in game data: not used"));
+    };
+    let mut prefix = |what: &str, name: &Option<String>| -> Option<String> {
+        let name = name.as_deref()?;
+        let hit = db.itemstat_by_name(name).map(|s| s.name.clone());
+        if hit.is_none() {
+            abstain(what, name);
+        }
+        hit
+    };
+    let armor = prefix("armor prefix", &g.armor);
+    let weapons = prefix("weapons prefix", &g.weapons);
+    let trinkets = prefix("trinkets prefix", &g.trinkets);
+    let mut item =
+        |what: &str, items: Vec<&gw2_api::models::Item>, pre: &[&str], name: &Option<String>| {
+            let name = name.as_deref()?;
+            let hit = item_by_name(&items, pre, name);
+            if hit.is_none() {
+                abstain(what, name);
+            }
+            hit
+        };
+    let rune = item(
+        "rune",
+        db.all_runes(),
+        &["Superior Rune of ", "Superior Rune of the "],
+        &g.rune,
+    );
+    let relic = item(
+        "relic",
+        db.all_relics(),
+        &["Relic of ", "Relic of the "],
+        &g.relic,
+    );
+    let mut consumable = |what: &str, items: Vec<&gw2_api::models::Item>, name: &Option<String>| {
+        let name = name.as_deref()?;
+        let hit = consumable_by_name(&items, name);
+        if hit.is_none() {
+            abstain(what, name);
+        }
+        hit
+    };
+    let food = consumable("food", db.nourishments_for(mode), &g.food);
+    let utility = consumable("utility", db.enhancements_for(mode), &g.utility);
+    let sigil_items = db.all_sigils();
+    let mut sigils = Some(BTreeMap::new());
+    for (weapon, names) in &g.sigils {
+        for name in names {
+            match item_by_name(
+                &sigil_items,
+                &["Superior Sigil of ", "Superior Sigil of the "],
+                name,
+            ) {
+                Some(id) => {
+                    if let Some(m) = sigils.as_mut() {
+                        m.entry(weapon.to_lowercase())
+                            .or_insert_with(Vec::new)
+                            .push(id);
+                    }
+                }
+                None => {
+                    abstain("sigil", name);
+                    sigils = None;
+                }
+            }
+        }
+    }
+    for (what, id) in [("food", food), ("utility", utility)] {
+        let item = id.and_then(|id| db.items.get(&id));
+        for line in item
+            .map(crate::consumables::unmodeled_lines)
+            .unwrap_or_default()
+        {
+            notes.push(format!("stated {what} line '{line}' not modeled"));
+        }
+    }
+    Stated {
+        armor,
+        weapons,
+        trinkets,
+        sigils: sigils.filter(|m| !m.is_empty()),
+        rune,
+        relic,
+        food,
+        utility,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -42,12 +242,40 @@ pub struct ReconstructedKit {
     /// Prefix, rune, sigils, relic: the account's when the character is
     /// cached, else the neighbour's. Logs carry no gear.
     pub gear: Provenance,
+    /// Per gear group (armor, weapons, trinkets, sigils, rune, relic, and
+    /// food / utility when stated) where stated gear was given; empty
+    /// otherwise. `gear` is the weakest of them.
+    pub gear_groups: Vec<(&'static str, Provenance)>,
+    /// Stated nourishment / enhancement item ids, fed to the stat sheet.
+    pub food: Option<u32>,
+    pub utility: Option<u32>,
     /// `source_url` of the corpus build used.
     pub neighbour: Option<String>,
     /// Stat-rank checks against the prefix. A flag, never a swap.
     pub stat_flags: Vec<String>,
     /// Opening casts from the log, handed to the referee.
     pub opener: Vec<u32>,
+}
+
+impl ReconstructedKit {
+    /// `Stated` when every group is stated, else
+    /// `Stated(armor,weapons,trinkets)+Corpus(rune,relic)`.
+    pub fn gear_label(&self) -> String {
+        let mut by: Vec<(Provenance, Vec<&str>)> = Vec::new();
+        for &(group, p) in &self.gear_groups {
+            match by.iter_mut().find(|(q, _)| *q == p) {
+                Some((_, v)) => v.push(group),
+                None => by.push((p, vec![group])),
+            }
+        }
+        if by.len() <= 1 {
+            return format!("{:?}", self.gear);
+        }
+        by.iter()
+            .map(|(p, v)| format!("{p:?}({})", v.join(",")))
+            .collect::<Vec<_>>()
+            .join("+")
+    }
 }
 
 /// API weapon type ids as the SotO chat-code trailer writes them
@@ -318,26 +546,37 @@ pub fn validate(build: &BenchmarkBuild, db: &GameDb) -> Result<ValidatedBuild, S
 }
 
 /// `account_dir`: the addon's cache dir holding `char_*_equiptabs.json`;
-/// `None` skips the account source.
+/// `None` skips the account source. `stated`: gear the player named, used
+/// below the account and above the corpus.
 pub fn reconstruct(
     log: &EiLog,
     player: &EiPlayer,
     chat_code: Option<&str>,
+    stated: Option<&StatedGear>,
     account_dir: Option<&Path>,
     corpus: &[BenchmarkBuild],
     db: &GameDb,
 ) -> Result<ReconstructedKit, String> {
-    reconstruct_with(log, player, chat_code, account_dir, corpus, db, |b| {
-        validate(b, db).map(|_| ())
-    })
+    reconstruct_with(
+        log,
+        player,
+        chat_code,
+        stated,
+        account_dir,
+        corpus,
+        db,
+        |b| validate(b, db).map(|_| ()),
+    )
 }
 
 /// `neighbour_ok`: whether a corpus row may be the neighbour; production
 /// passes [`validate`], so a kit never inherits a rune in a sigil seat.
+#[allow(clippy::too_many_arguments)]
 fn reconstruct_with(
     log: &EiLog,
     player: &EiPlayer,
     chat_code: Option<&str>,
+    stated: Option<&StatedGear>,
     account_dir: Option<&Path>,
     corpus: &[BenchmarkBuild],
     db: &GameDb,
@@ -370,6 +609,15 @@ fn reconstruct_with(
         None => None,
     };
     let account_prefix = account.as_ref().and_then(Account::prefix);
+    // Account (cache) > stated > corpus: the cache is the worn kit.
+    let stated = match (stated, &account) {
+        (Some(_), Some(_)) => {
+            notes.push("stated gear not used: account cache holds the kit".into());
+            None
+        }
+        (Some(g), None) => Some(resolve_stated(g, &log.mode(), db, &mut notes)),
+        (None, _) => None,
+    };
     // The active tab may have moved on since the log; one of another elite
     // is not the build that was played.
     let account_build =
@@ -434,6 +682,28 @@ fn reconstruct_with(
         .flatten()
         .map(|w| w.to_lowercase())
         .collect();
+    // The stated groups' dominant stat, rows counted as worn.
+    let stated_prefix = stated.as_ref().and_then(|s| {
+        let n_weapons = log_sets.iter().map(Vec::len).sum::<usize>().max(1);
+        ProviderBuild {
+            gear: [(&s.armor, 6), (&s.trinkets, 6), (&s.weapons, n_weapons)]
+                .into_iter()
+                .filter_map(|(stat, n)| Some((stat.clone()?, n)))
+                .flat_map(|(stat, n)| {
+                    std::iter::repeat_n(
+                        GearRow {
+                            stat,
+                            ..Default::default()
+                        },
+                        n,
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        }
+        .dominant_stat()
+    });
+    let want_prefix = account_prefix.clone().or_else(|| stated_prefix.clone());
 
     // Neighbour: same profession, mode and elite spec, platable and
     // validator-clean. With the account's gear known, the row on the
@@ -463,7 +733,7 @@ fn reconstruct_with(
                 .dominant_stat()
                 .unwrap_or_else(|| b.gear_prefix.clone());
             (
-                account_prefix
+                want_prefix
                     .as_deref()
                     .map_or(0.0, |want| stat_nearness(want, &stat, db)),
                 jaccard(&log_skill_set, &skills) + jaccard(&log_weapon_set, &weapons),
@@ -598,12 +868,18 @@ fn reconstruct_with(
                 .collect()
         })
         .unwrap_or_default();
-    let prefix = account_prefix.clone().unwrap_or_else(|| {
-        neighbour
-            .published
-            .dominant_stat()
-            .unwrap_or_else(|| neighbour.gear_prefix.clone())
-    });
+    let neighbour_prefix = neighbour
+        .published
+        .dominant_stat()
+        .unwrap_or_else(|| neighbour.gear_prefix.clone());
+    let stated_weapons = stated.as_ref().and_then(|s| s.weapons.clone());
+    let prefix = want_prefix
+        .clone()
+        .unwrap_or_else(|| neighbour_prefix.clone());
+    let weapon_prefix = account_prefix
+        .clone()
+        .or_else(|| stated_weapons.clone())
+        .unwrap_or_else(|| neighbour_prefix.clone());
     // Per land set: the log where it saw the set, else the chat code, else
     // the account's tab, else the neighbour's own rows. Provenance is the
     // weakest source used. A log set the account also holds keeps the
@@ -619,7 +895,7 @@ fn reconstruct_with(
     let neighbour_set = weapon_set_of(&neighbour_slots, &profession);
     let new_row = |slot: &String| GearRow {
         slot: slot.clone(),
-        stat: prefix.clone(),
+        stat: weapon_prefix.clone(),
         item_id: None,
         upgrade_ids: Vec::new(),
     };
@@ -651,7 +927,14 @@ fn reconstruct_with(
                 .iter()
                 .zip(&neighbour_set)
                 .filter(|(_, set)| **set == Some(k))
-                .map(|(g, _)| (*g).clone())
+                .map(|(g, _)| match &stated_weapons {
+                    Some(stat) => GearRow {
+                        stat: stat.clone(),
+                        item_id: None,
+                        ..(*g).clone()
+                    },
+                    None => (*g).clone(),
+                })
                 .collect();
             (rows, Provenance::Corpus)
         };
@@ -674,6 +957,7 @@ fn reconstruct_with(
     } else {
         Vec::new()
     };
+    let mut gear_groups: Vec<(&'static str, Provenance)> = Vec::new();
     let (armour, rune_id, sigil_ids, relic_id, gear_prov) = match &account {
         Some(a) => {
             // An upgrade the tab does not hold stays the neighbour's, named.
@@ -699,19 +983,88 @@ fn reconstruct_with(
                 Provenance::Account,
             )
         }
-        None => (
-            neighbour
-                .published
+        None => {
+            let p = &neighbour.published;
+            let s = stated.as_ref();
+            let group = |stated: bool| {
+                if stated {
+                    Provenance::Stated
+                } else {
+                    Provenance::Corpus
+                }
+            };
+            let armor = s.and_then(|s| s.armor.clone());
+            let trinkets = s.and_then(|s| s.trinkets.clone());
+            // Stated sigils seat in weapon-row order, set A first.
+            let sigils: Option<Vec<u32>> = s
+                .and_then(|s| s.sigils.as_ref())
+                .map(|m| {
+                    for w in m.keys() {
+                        if !weapon_rows.iter().any(|g| g.slot.eq_ignore_ascii_case(w)) {
+                            notes.push(format!("stated sigils for {w}: weapon not in kit"));
+                        }
+                    }
+                    weapon_rows
+                        .iter()
+                        .filter_map(|g| m.get(&g.slot.to_lowercase()))
+                        .flatten()
+                        .copied()
+                        .collect()
+                })
+                .filter(|v: &Vec<u32>| !v.is_empty());
+            let (rune, relic) = (s.and_then(|s| s.rune), s.and_then(|s| s.relic));
+            let stated_row = |slot: &str, stat: &String| GearRow {
+                slot: slot.into(),
+                stat: stat.clone(),
+                ..Default::default()
+            };
+            // Neighbour rows keep what was not stated; empty-slot rows stay.
+            let rows: Vec<GearRow> = p
                 .gear
                 .iter()
                 .filter(|g| !is_weapon(&g.slot))
+                .filter(|g| {
+                    let armour = ARMOUR.contains(&g.slot.as_str());
+                    !(armour && armor.is_some()
+                        || !armour && !g.slot.is_empty() && trinkets.is_some())
+                })
                 .cloned()
-                .collect(),
-            neighbour.published.rune_id,
-            neighbour.published.sigil_ids.clone(),
-            neighbour.published.relic_id,
-            Provenance::Corpus,
-        ),
+                .chain(
+                    armor
+                        .iter()
+                        .flat_map(|a| ARMOUR.map(|slot| stated_row(slot, a))),
+                )
+                .chain(
+                    trinkets
+                        .iter()
+                        .flat_map(|t| TRINKETS.map(|slot| stated_row(slot, t))),
+                )
+                .collect();
+            if let Some(s) = s {
+                gear_groups = vec![
+                    ("armor", group(armor.is_some())),
+                    ("weapons", group(stated_weapons.is_some())),
+                    ("trinkets", group(trinkets.is_some())),
+                    ("sigils", group(sigils.is_some())),
+                    ("rune", group(rune.is_some())),
+                    ("relic", group(relic.is_some())),
+                ];
+                gear_groups.extend(s.food.map(|_| ("food", Provenance::Stated)));
+                gear_groups.extend(s.utility.map(|_| ("utility", Provenance::Stated)));
+            }
+            let prov = gear_groups
+                .iter()
+                .map(|&(_, p)| p)
+                .reduce(weaker)
+                .unwrap_or(Provenance::Corpus);
+            (
+                rows,
+                rune.or(p.rune_id),
+                sigils.unwrap_or_else(|| p.sigil_ids.clone()),
+                relic.or(p.relic_id),
+                prov,
+            )
+        }
     };
     let gear: Vec<GearRow> = armour.into_iter().chain(weapon_rows).collect();
 
@@ -728,7 +1081,7 @@ fn reconstruct_with(
         mode: mode.into(),
         role: neighbour.role.clone(),
         build_code: build_code.clone(),
-        gear_prefix: account_prefix.unwrap_or_else(|| neighbour.gear_prefix.clone()),
+        gear_prefix: want_prefix.unwrap_or_else(|| neighbour.gear_prefix.clone()),
         source_url: neighbour.source_url.clone(),
         scraped_at: neighbour.scraped_at.clone(),
         published: ProviderBuild {
@@ -745,7 +1098,7 @@ fn reconstruct_with(
         benchmark_dps: None,
         log_url: None,
     };
-    if gear_prov == Provenance::Account {
+    if matches!(gear_prov, Provenance::Account | Provenance::Stated) {
         notes.push(format!(
             "role objective {:?} from neighbour role '{}'",
             super::compare::published_objective(&build),
@@ -760,6 +1113,9 @@ fn reconstruct_with(
         skills,
         weapons,
         gear: gear_prov,
+        gear_groups,
+        food: stated.as_ref().and_then(|s| s.food),
+        utility: stated.as_ref().and_then(|s| s.utility),
         neighbour: Some(neighbour.source_url.clone()),
         stat_flags: skipped
             .into_iter()
@@ -833,8 +1189,9 @@ fn weaker(a: Provenance, b: Provenance) -> Provenance {
         Provenance::Log => 0,
         Provenance::ChatCode => 1,
         Provenance::Account => 2,
-        Provenance::Corpus => 3,
-        Provenance::Missing => 4,
+        Provenance::Stated => 3,
+        Provenance::Corpus => 4,
+        Provenance::Missing => 5,
     };
     if rank(b) > rank(a) {
         b
@@ -1044,7 +1401,7 @@ mod tests {
         corpus: &[BenchmarkBuild],
         db: &GameDb,
     ) -> Result<ReconstructedKit, String> {
-        reconstruct_with(log, p, code, None, corpus, db, |_| Ok(()))
+        reconstruct_with(log, p, code, None, None, corpus, db, |_| Ok(()))
     }
 
     #[test]
@@ -1064,6 +1421,7 @@ mod tests {
         let kit = reconstruct_with(
             &EiLog::default(),
             &p,
+            None,
             None,
             None,
             &corpus(),
@@ -1086,6 +1444,7 @@ mod tests {
             &p,
             None,
             None,
+            None,
             &corpus(),
             &db,
             refuse("near"),
@@ -1094,9 +1453,16 @@ mod tests {
         assert_eq!(kit.neighbour.as_deref(), Some("far"));
         assert!(kit.stat_flags.is_empty());
         // All refused: the error names every skip.
-        let err = reconstruct_with(&EiLog::default(), &p, None, None, &corpus(), &db, |_| {
-            Err("validator: x".to_string())
-        })
+        let err = reconstruct_with(
+            &EiLog::default(),
+            &p,
+            None,
+            None,
+            None,
+            &corpus(),
+            &db,
+            |_| Err("validator: x".to_string()),
+        )
         .unwrap_err();
         assert_eq!(
             err,
@@ -1332,6 +1698,7 @@ mod tests {
             &EiLog::default(),
             &p,
             None,
+            None,
             Some(&dir),
             &stat_corpus(),
             &db,
@@ -1393,6 +1760,7 @@ mod tests {
             &EiLog::default(),
             &p,
             Some(CODE),
+            None,
             Some(&dir),
             &stat_corpus(),
             &db,
@@ -1420,6 +1788,7 @@ mod tests {
             &EiLog::default(),
             &p,
             None,
+            None,
             Some(&dir),
             &stat_corpus(),
             &db,
@@ -1432,6 +1801,186 @@ mod tests {
         // No stat to prefer: the overlap tie goes to the last row.
         assert_eq!(kit.neighbour.as_deref(), Some("far"));
         assert!(kit.stat_flags.is_empty(), "{:?}", kit.stat_flags);
+    }
+
+    #[test]
+    fn a_codes_entry_is_a_string_or_an_object_with_stated_gear() {
+        let codes: BTreeMap<String, CodeEntry> = serde_json::from_str(&format!(
+            r#"{{"a": "{CODE}", "b": {{"code": "{CODE}", "gear": {{"armor": "Dragon's",
+                "sigils": {{"Greatsword": ["Hydromancy", "Rage"]}}, "relic": "Brawler"}}}}}}"#
+        ))
+        .expect("parses");
+        assert_eq!(codes["a"], CodeEntry::Code(CODE.into()));
+        assert_eq!(codes["a"].gear(), None);
+        assert_eq!(codes["b"].code(), CODE);
+        let g = codes["b"].gear().expect("stated");
+        assert_eq!(g.armor.as_deref(), Some("Dragon's"));
+        assert_eq!(g.sigils["Greatsword"], ["Hydromancy", "Rage"]);
+        assert_eq!((g.trinkets.as_ref(), g.rune.as_ref()), (None, None));
+        // A misspelt key is refused, not ignored.
+        let typo = format!(r#"{{"code": "{CODE}", "gear": {{"armour": "Dragon's"}}}}"#);
+        assert!(serde_json::from_str::<CodeEntry>(&typo).is_err());
+    }
+
+    /// The toy db plus Dragon's and Superior Sigil of Hydromancy (id 60).
+    fn stated_db() -> GameDb {
+        let mut db = db();
+        let attributes = [
+            ("Power", 0.35),
+            ("CritDamage", 0.35),
+            ("Precision", 0.25),
+            ("Vitality", 0.25),
+        ]
+        .iter()
+        .map(|&(a, m)| StatAttribute {
+            attribute: a.into(),
+            multiplier: m,
+            value: 0,
+        })
+        .collect();
+        db.itemstats.insert(
+            1566,
+            ItemStat {
+                id: 1566,
+                name: "Dragon's".into(),
+                attributes,
+            },
+        );
+        let sigil = serde_json::from_value(serde_json::json!({
+            "id": 60, "name": "Superior Sigil of Hydromancy", "type": "UpgradeComponent",
+            "rarity": "Exotic", "level": 60,
+            "details": {"type": "Sigil"}
+        }))
+        .expect("item json");
+        db.items.insert(60, sigil);
+        db.sigils.push(60);
+        db
+    }
+
+    fn stated_kit(g: &StatedGear, db: &GameDb) -> ReconstructedKit {
+        let p = player(&[(10, 1)], &["Greatsword", "2Hand"]);
+        reconstruct_with(
+            &EiLog::default(),
+            &p,
+            None,
+            Some(g),
+            None,
+            &corpus(),
+            db,
+            |_| Ok(()),
+        )
+        .expect("kit")
+    }
+
+    #[test]
+    fn stated_dragons_armor_resolves_to_the_dragons_prefix() {
+        let db = stated_db();
+        let g = StatedGear {
+            armor: Some("dragons".into()),
+            weapons: Some("Dragon's".into()),
+            sigils: BTreeMap::from([("Greatsword".into(), vec!["Hydromancy".into()])]),
+            ..Default::default()
+        };
+        let kit = stated_kit(&g, &db);
+        let b = &kit.build.published;
+        let stat_of = |slot: &str| {
+            b.gear
+                .iter()
+                .find(|r| r.slot == slot)
+                .map(|r| r.stat.as_str())
+        };
+        assert_eq!(stat_of("Helm"), Some("Dragon's"));
+        assert_eq!(stat_of("Greatsword"), Some("Dragon's"));
+        assert_eq!(kit.build.gear_prefix, "Dragon's");
+        assert_eq!(
+            db.itemstat_by_name(&kit.build.gear_prefix).map(|s| s.id),
+            Some(1566)
+        );
+        assert_eq!(b.sigil_ids, [60]);
+        assert_eq!(b.rune_id, Some(7), "rune stays the neighbour's");
+        assert_eq!(kit.gear, Provenance::Corpus);
+        assert_eq!(
+            kit.gear_label(),
+            "Stated(armor,weapons,sigils)+Corpus(trinkets,rune,relic)"
+        );
+    }
+
+    #[test]
+    fn stated_food_and_utility_resolve_by_name() {
+        let mut db = stated_db();
+        let rows = [
+            (
+                41569,
+                "Bowl of Sweet and Spicy Butternut Squash Soup",
+                "Food",
+            ),
+            (9443, "Superior Sharpening Stone", "Utility"),
+            (9441, "Master Sharpening Stone", "Utility"),
+        ];
+        for (id, name, kind) in rows {
+            let item = serde_json::from_value(serde_json::json!({
+                "id": id, "name": name, "type": "Consumable", "rarity": "Fine", "level": 80,
+                "details": {"type": kind, "description": "+100 Power\nGain a Spooky Aura"}
+            }))
+            .expect("item json");
+            db.items.insert(id, item);
+            db.items_by_type
+                .entry("Consumable".into())
+                .or_default()
+                .push(id);
+        }
+        let g = StatedGear {
+            food: Some("Bowl of Sweet and Spicy Butternut Squash Soup".into()),
+            utility: Some("superior sharpening stone".into()),
+            ..Default::default()
+        };
+        let kit = stated_kit(&g, &db);
+        assert_eq!((kit.food, kit.utility), (Some(41569), Some(9443)));
+        assert!(kit
+            .stat_flags
+            .iter()
+            .any(|f| f == "stated food line 'Gain a Spooky Aura' not modeled"));
+        assert!(!kit
+            .stat_flags
+            .iter()
+            .any(|f| f.contains("not in game data")));
+
+        // Without the bowl: the one name containing it. Ambiguous: abstain.
+        let g = StatedGear {
+            food: Some("Sweet and Spicy Butternut Squash Soup".into()),
+            utility: Some("Sharpening Stone".into()),
+            ..Default::default()
+        };
+        let kit = stated_kit(&g, &db);
+        assert_eq!((kit.food, kit.utility), (Some(41569), None));
+        assert!(kit
+            .stat_flags
+            .iter()
+            .any(|f| f == "stated utility 'Sharpening Stone' not in game data: not used"));
+    }
+
+    #[test]
+    fn an_unknown_stated_prefix_or_sigil_abstains_by_name() {
+        let db = stated_db();
+        let g = StatedGear {
+            armor: Some("Nonesuch".into()),
+            sigils: BTreeMap::from([("Greatsword".into(), vec!["Nowhere".into()])]),
+            ..Default::default()
+        };
+        let kit = stated_kit(&g, &db);
+        for want in [
+            "stated armor prefix 'Nonesuch' not in game data: not used",
+            "stated sigil 'Nowhere' not in game data: not used",
+        ] {
+            assert!(
+                kit.stat_flags.iter().any(|f| f == want),
+                "{:?}",
+                kit.stat_flags
+            );
+        }
+        // Nothing resolved: every group keeps the corpus, one label.
+        assert_eq!(kit.gear_label(), "Corpus");
+        assert!(kit.build.published.sigil_ids.is_empty());
     }
 
     #[test]
@@ -1510,7 +2059,7 @@ mod tests {
             .squad()
             .find(|p| p.name == "Fun Detected")
             .expect("Fun Detected in the log");
-        let kit = reconstruct(&log, p, None, Some(&cache), &corpus, &db).expect("kit");
+        let kit = reconstruct(&log, p, None, None, Some(&cache), &corpus, &db).expect("kit");
         println!(
             "gear {:?} traits {:?} skills {:?} weapons {:?} prefix {} rune {:?} sigils {:?} relic {:?} specs {:?} <- {:?} flags {:?}",
             kit.gear,
@@ -1562,7 +2111,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/ei_logs"
         ));
-        let codes: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_str(
+        let codes: BTreeMap<String, BTreeMap<String, CodeEntry>> = serde_json::from_str(
             &std::fs::read_to_string(dir.join("codes.json")).expect("codes.json"),
         )
         .expect("codes.json parses");
@@ -1580,11 +2129,10 @@ mod tests {
             let log = super::super::ei_log::load(&path).expect("fixture loads");
             for p in log.squad() {
                 total += 1;
-                let code = codes
-                    .get(&file)
-                    .and_then(|m| m.get(&p.name))
-                    .map(String::as_str);
-                match reconstruct(&log, p, code, None, &corpus, &db) {
+                let entry = codes.get(&file).and_then(|m| m.get(&p.name));
+                let code = entry.map(CodeEntry::code);
+                let stated = entry.and_then(CodeEntry::gear);
+                match reconstruct(&log, p, code, stated, None, &corpus, &db) {
                     Ok(kit) if plate_from(&kit.build, &db).is_some() => {
                         plated += 1;
                         println!(

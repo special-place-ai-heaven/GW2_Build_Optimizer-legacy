@@ -2617,6 +2617,7 @@ mod tests {
                 },
                 restrictions: Vec::new(),
                 details: Some(ItemDetails {
+                    description: None,
                     detail_type: Some(detail.to_string()),
                     weight_class: None,
                     defense: None,
@@ -2710,6 +2711,7 @@ mod tests {
             game_types: Vec::new(),
             restrictions: Vec::new(),
             details: Some(ItemDetails {
+                description: None,
                 detail_type: Some("Rune".to_string()),
                 weight_class: None,
                 defense: None,
@@ -2795,6 +2797,7 @@ mod tests {
             game_types: Vec::new(),
             restrictions: Vec::new(),
             details: Some(ItemDetails {
+                description: None,
                 detail_type: Some("Rune".to_string()),
                 weight_class: None,
                 defense: None,

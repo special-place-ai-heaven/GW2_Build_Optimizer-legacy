@@ -1213,6 +1213,7 @@ mod tests {
                 game_types: vec![],
                 restrictions: vec![],
                 details: Some(gw2_api::models::ItemDetails {
+                    description: None,
                     detail_type: Some("UpgradeComponent".into()),
                     weight_class: None,
                     defense: None,

@@ -30,7 +30,7 @@ use super::trait_skill::{
 use super::trigger_bus::{
     land_foe_disable, BusEvent, DodgeAction, EndurancePool, TriggerBus, DODGE_COST,
 };
-use super::{CoverKind, MobilityKind, RotationSkill, SkillEffect, SkillSlot};
+use super::{CoverKind, MobilityKind, RotationSkill, SkillEffect};
 
 const TIMELINE_TICK_MS: u32 = 50;
 
@@ -822,6 +822,8 @@ struct Timeline<'a> {
     opener: &'a [u32],
     opener_cursor: usize,
     cooldown_ready_ms: Vec<u32>,
+    /// Auto-attack chain cursor (E11).
+    auto_chain: super::AutoChain,
     pending: Option<PendingCast>,
     scheduled_hits: Vec<ScheduledHit>,
     defenses: Vec<TimedDefense>,
@@ -1085,6 +1087,7 @@ impl<'a> Timeline<'a> {
             opener_cursor: 0,
             weapon_swap_cooldown_ms: Some(10_000),
             cooldown_ready_ms: vec![0; skills.len()],
+            auto_chain: super::AutoChain::new(skills),
             pending: None,
             scheduled_hits: Vec::new(),
             defenses: Vec::new(),
@@ -1746,6 +1749,8 @@ impl<'a> Timeline<'a> {
             skill.cast_time_ms
         }
         .max(TIMELINE_TICK_MS);
+        self.auto_chain
+            .on_cast(skill_idx, skill.is_auto_attack(), self.at(cast_ms));
         // Strikes land across the activation, not as one lump at the end:
         // measured spacing where data/formulas/hit_timing.json has it, an
         // even spread otherwise. Everything else the skill does resolves at
@@ -1851,8 +1856,10 @@ impl<'a> Timeline<'a> {
             if self.cooldown_ready_ms[idx] > self.now_ms || !self.skill_available(skill) {
                 continue;
             }
-            if skill.slot == SkillSlot::Weapon1 && skill.cooldown_ms == 0 {
-                filler = Some(idx);
+            if skill.is_auto_attack() {
+                if !self.auto_chain.is_follow_up(idx) {
+                    filler = Some(idx);
+                }
                 continue;
             }
             let has_heal = skill
@@ -1936,7 +1943,8 @@ impl<'a> Timeline<'a> {
                 }
             }
         }
-        best.map(|(idx, _)| idx).or(filler)
+        best.map(|(idx, _)| idx)
+            .or(filler.map(|head| self.auto_chain.step(head, self.now_ms)))
     }
 
     fn skill_available(&self, skill: &RotationSkill) -> bool {
@@ -2115,6 +2123,7 @@ impl<'a> Timeline<'a> {
     /// the interrupt recharge (control, or a forced shroud exit).
     fn cancel_pending_cast(&mut self) {
         if let Some(pending) = self.pending.take() {
+            self.auto_chain.reset();
             if pending.started_at_ms < self.now_ms {
                 self.interrupted_casts += 1;
             }
@@ -3435,6 +3444,14 @@ impl<'a> Timeline<'a> {
                         return Err(format!("no {boon}"));
                     }
                 }
+                Gate::SelfBoonAbsent { boon } => {
+                    let carried = self.buffs.iter().any(|b| {
+                        b.name.eq_ignore_ascii_case(boon) && b.expires_at_ms > self.now_ms
+                    });
+                    if carried {
+                        return Err(format!("already has {boon}"));
+                    }
+                }
                 Gate::SelfResourceStacks { resource, min } => {
                     let Some(kind) = resource_kind_by_name(resource) else {
                         return Err(format!("resource not yet modelled: {resource}"));
@@ -4695,7 +4712,7 @@ fn leftover_condition_fraction(condition: &TimedCondition) -> f64 {
 }
 
 /// Human label for the coverage line: `Superior Sigil of Fire (on-crit)`.
-fn trigger_label(trigger: &TriggerRule) -> &'static str {
+pub(crate) fn trigger_label(trigger: &TriggerRule) -> &'static str {
     match trigger {
         TriggerRule::Passive => "passive",
         TriggerRule::OnCrit => "on-crit",
@@ -5024,7 +5041,9 @@ pub(crate) fn unexecutable_reason(effect: &NormalizedEffect) -> Option<String> {
             }
             // A boon the buff model never tracks would leave the gate shut
             // for the whole fight with nothing on the coverage line.
-            Gate::SelfBoon { boon } if crate::data::boons().get(boon).is_none() => {
+            Gate::SelfBoon { boon } | Gate::SelfBoonAbsent { boon }
+                if crate::data::boons().get(boon).is_none() =>
+            {
                 Some(format!("boon not yet modelled: {boon}"))
             }
             _ => None,

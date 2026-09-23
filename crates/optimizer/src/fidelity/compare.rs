@@ -442,7 +442,17 @@ pub fn simulate(
     db: &GameDb,
 ) -> Result<(Simulated, RefereeReport), String> {
     let profession = &kit.build.profession;
-    let validated = kit::validate(&kit.build, db)?;
+    let mut validated = kit::validate(&kit.build, db)?;
+    // Stated consumables; the stat sheet folds their static bonuses.
+    let item = |id: Option<u32>| {
+        let i = db.items.get(&id?)?;
+        Some(crate::validation::ValidatedItem {
+            id: i.id,
+            name: i.name.clone(),
+        })
+    };
+    validated.food = item(kit.food);
+    validated.utility = item(kit.utility);
     let (mode, tier) = (log.mode(), log.tier());
     let objective = published_objective(&kit.build);
     let ctx = BalanceContext::new(mode.clone());
@@ -801,13 +811,14 @@ fn share_rows(o: &Observed, s: &Simulated) -> Vec<(String, f64, f64)> {
     rows
 }
 
-/// Every squad player of one log. `codes`: character name -> chat code.
+/// Every squad player of one log. `codes`: character name -> chat code and
+/// any stated gear.
 /// `account_dir`: the addon cache holding the characters' equipment and
 /// build tabs, see [`kit::reconstruct`].
 pub fn compare_log(
     log_name: &str,
     log: &EiLog,
-    codes: &HashMap<String, String>,
+    codes: &HashMap<String, kit::CodeEntry>,
     account_dir: Option<&std::path::Path>,
     corpus: &[BenchmarkBuild],
     db: &GameDb,
@@ -830,8 +841,10 @@ pub fn compare_log(
                 gates: Vec::new(),
                 refused: None,
             };
-            let code = codes.get(&p.name).map(String::as_str);
-            let kit = match kit::reconstruct(log, p, code, account_dir, corpus, db) {
+            let entry = codes.get(&p.name);
+            let code = entry.map(kit::CodeEntry::code);
+            let stated = entry.and_then(kit::CodeEntry::gear);
+            let kit = match kit::reconstruct(log, p, code, stated, account_dir, corpus, db) {
                 Ok(k) => k,
                 Err(e) => {
                     row.refused = Some(format!("kit: {e}"));
@@ -942,8 +955,12 @@ pub fn render_table(rows: &[PlayerComparison]) -> String {
         let (prov, neighbour) = match &r.kit {
             Some(k) => (
                 format!(
-                    "{:?}/{:?}/{:?}/{:?}/{:?}",
-                    k.specs, k.traits, k.skills, k.weapons, k.gear
+                    "{:?}/{:?}/{:?}/{:?}/{}",
+                    k.specs,
+                    k.traits,
+                    k.skills,
+                    k.weapons,
+                    k.gear_label()
                 ),
                 k.neighbour.clone().unwrap_or_else(|| "-".into()),
             ),

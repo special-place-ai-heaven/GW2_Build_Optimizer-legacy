@@ -112,6 +112,7 @@ fn rune_item(id: u32, bonuses: Vec<&str>) -> Item {
         game_types: vec!["WvW".into()],
         restrictions: vec![],
         details: Some(ItemDetails {
+            description: None,
             detail_type: Some("Rune".into()),
             weight_class: None,
             defense: None,

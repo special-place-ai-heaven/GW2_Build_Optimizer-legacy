@@ -105,7 +105,101 @@ pub fn static_stat_bonus(item: &Item) -> StatBlock {
     if let Some(desc) = item.description.as_deref() {
         apply_stat_prose(&mut stats, desc);
     }
+    for line in detail_lines(item) {
+        if !consumable_text_is_non_static(line) {
+            apply_stat_prose(&mut stats, line);
+        }
+    }
     stats
+}
+
+/// `details.description` of a Food / Utility row, one tooltip line each
+/// ("+100 Power", "+10% Experience from Kills").
+pub fn detail_lines(item: &Item) -> impl Iterator<Item = &str> {
+    item.details
+        .as_ref()
+        .and_then(|d| d.description.as_deref())
+        .unwrap_or("")
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+}
+
+/// Reward-only lines (experience, magic find, karma, gold): no combat effect,
+/// so neither applied nor reported as a gap.
+fn line_is_non_combat(line: &str) -> bool {
+    let l = line.to_lowercase();
+    ["experience", "magic find", "karma", "gold"]
+        .iter()
+        .any(|w| l.contains(w))
+}
+
+/// A standing stat-to-stat conversion: `target += source * fraction`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatConversion {
+    pub target: &'static str,
+    pub fraction: f64,
+    pub source: &'static str,
+}
+
+/// "Gain Power Equal to 3% of Your Precision" -> Power += 0.03 * Precision.
+pub fn parse_conversion(line: &str) -> Option<StatConversion> {
+    let l = line.trim().trim_end_matches('.').to_lowercase();
+    let rest = l.strip_prefix("gain ")?;
+    let (target, rest) = rest.split_once(" equal to ")?;
+    let (pct, source) = rest.split_once("% of your ")?;
+    Some(StatConversion {
+        target: attr_ci(target)?,
+        fraction: pct.trim().parse::<f64>().ok()? / 100.0,
+        source: attr_ci(source)?,
+    })
+}
+
+/// Case-insensitive attribute name -> `StatBlock` key.
+fn attr_ci(name: &str) -> Option<&'static str> {
+    match name.trim() {
+        "power" => Some("Power"),
+        "precision" => Some("Precision"),
+        "toughness" => Some("Toughness"),
+        "vitality" => Some("Vitality"),
+        "ferocity" => Some("Ferocity"),
+        "condition damage" => Some("ConditionDamage"),
+        "expertise" => Some("Expertise"),
+        "concentration" => Some("Concentration"),
+        "healing power" => Some("Healing"),
+        _ => None,
+    }
+}
+
+/// Every conversion line of `item`'s tooltip.
+pub fn conversions(item: &Item) -> Vec<StatConversion> {
+    detail_lines(item).filter_map(parse_conversion).collect()
+}
+
+/// Tooltip lines the stat sheet does not apply: triggered / chance / gated
+/// lines and lines no parser recognises. Reward-only lines are not gaps.
+pub fn unmodeled_lines(item: &Item) -> Vec<String> {
+    detail_lines(item)
+        .filter(|line| {
+            if line_is_non_combat(line) {
+                return false;
+            }
+            if consumable_text_is_non_static(line) {
+                return true;
+            }
+            if parse_conversion(line).is_some() {
+                return false;
+            }
+            let mut stats = StatBlock::default();
+            apply_stat_prose(&mut stats, line);
+            if !stats.is_zero() {
+                return false;
+            }
+            let mut mods = DamageModifiers::default();
+            !(line.contains('%') && combat::parse_percent_clauses(&mut mods, line))
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 fn apply_named_stat(stats: &mut StatBlock, raw: &str, value: f64) {
@@ -221,6 +315,9 @@ pub fn fold_static_modifiers(mods: &mut DamageModifiers, item: &Item) {
     if let Some(desc) = item.description.as_deref() {
         texts.push(desc);
     }
+    texts.extend(
+        detail_lines(item).filter(|l| parse_conversion(l).is_none() && !line_is_non_combat(l)),
+    );
     for text in texts {
         if consumable_text_is_non_static(text) {
             continue;
@@ -472,15 +569,23 @@ pub fn fold_into_validated_stats(
     validated: &ValidatedBuild,
     db: &GameDb,
 ) {
-    for item in validated
+    let items: Vec<&Item> = validated
         .food
         .as_ref()
         .and_then(|v| db.items.get(&v.id))
         .into_iter()
         .chain(validated.utility.as_ref().and_then(|v| db.items.get(&v.id)))
-    {
+        .collect();
+    for item in &items {
         *stats += &static_stat_bonus(item);
         fold_static_modifiers(mods, item);
+    }
+    // ponytail: converts from the sheet after trait conversions, not the
+    // pre-conversion sheet; split the snapshot if a build converts into a
+    // stone's source stat.
+    let snapshot = stats.clone();
+    for c in items.iter().flat_map(|item| conversions(item)) {
+        stats.add(c.target, snapshot.get(c.source) * c.fraction);
     }
 }
 
@@ -514,6 +619,7 @@ pub fn test_consumable(
         game_types: game_types.iter().map(|s| s.to_string()).collect(),
         restrictions: Vec::new(),
         details: Some(ItemDetails {
+            description: None,
             detail_type: Some(detail_type.into()),
             weight_class: None,
             defense: None,
@@ -859,6 +965,85 @@ mod tests {
         );
         assert!(static_stat_bonus(&item).is_zero());
         assert!(!has_static_effect(&item));
+    }
+
+    fn api_item(json: &str) -> Item {
+        serde_json::from_str(json).unwrap()
+    }
+
+    /// Live /v2/items rows 41569 and 9443 (2026-09-23), trimmed.
+    const SOUP: &str = r#"{"id":41569,"name":"Bowl of Sweet and Spicy Butternut Squash Soup","type":"Consumable","level":80,"rarity":"Fine","game_types":["Wvw","Dungeon","Pve"],"details":{"type":"Food","duration_ms":1800000,"apply_count":1,"name":"Nourishment","description":"+100 Power\n+70 Ferocity\n+10% Experience from Kills"}}"#;
+    const STONE: &str = r#"{"id":9443,"name":"Superior Sharpening Stone","type":"Consumable","level":80,"rarity":"Fine","game_types":["Wvw","Dungeon","Pve"],"details":{"type":"Utility","duration_ms":1800000,"apply_count":1,"name":"Enhancement","description":"Gain Power Equal to 3% of Your Precision\nGain Power Equal to 6% of Your Ferocity\n+10% Experience from Kills"}}"#;
+
+    #[test]
+    fn api_food_and_utility_lines_parse() {
+        let soup = api_item(SOUP);
+        let s = static_stat_bonus(&soup);
+        assert_eq!((s.power, s.ferocity), (100.0, 70.0));
+        assert!(unmodeled_lines(&soup).is_empty());
+
+        let stone = api_item(STONE);
+        assert!(static_stat_bonus(&stone).is_zero());
+        assert_eq!(
+            conversions(&stone),
+            vec![
+                StatConversion {
+                    target: "Power",
+                    fraction: 0.03,
+                    source: "Precision"
+                },
+                StatConversion {
+                    target: "Power",
+                    fraction: 0.06,
+                    source: "Ferocity"
+                },
+            ]
+        );
+        let mut mods = DamageModifiers::default();
+        fold_static_modifiers(&mut mods, &stone);
+        assert!(
+            mods.strike_pct.is_empty() && mods.strike_add_pct.is_empty(),
+            "a conversion line is not a damage percent: {mods:?}"
+        );
+        assert!(unmodeled_lines(&stone).is_empty());
+
+        let odd = api_item(&STONE.replace(
+            "Gain Power Equal to 3% of Your Precision",
+            "Gain a Spooky Aura",
+        ));
+        assert_eq!(
+            unmodeled_lines(&odd),
+            vec!["Gain a Spooky Aura".to_string()]
+        );
+    }
+
+    #[test]
+    fn stone_converts_on_the_stat_sheet() {
+        let db = db_with(vec![api_item(SOUP), api_item(STONE)]);
+        let validated = ValidatedBuild {
+            food: Some(ValidatedItem {
+                id: 41569,
+                name: "soup".into(),
+            }),
+            utility: Some(ValidatedItem {
+                id: 9443,
+                name: "stone".into(),
+            }),
+            ..ValidatedBuild::default()
+        };
+        let mut stats = StatBlock {
+            power: 1000.0,
+            precision: 1000.0,
+            ferocity: 200.0,
+            ..StatBlock::default()
+        };
+        fold_into_validated_stats(&mut stats, &mut DamageModifiers::default(), &validated, &db);
+        // 1000 + 100 soup + 3% of 1000 precision + 6% of (200 + 70) ferocity
+        assert!(
+            (stats.power - (1100.0 + 30.0 + 16.2)).abs() < 1e-9,
+            "{stats:?}"
+        );
+        assert_eq!(stats.ferocity, 270.0);
     }
 
     #[test]

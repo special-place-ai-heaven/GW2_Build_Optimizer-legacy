@@ -488,6 +488,7 @@ pub fn test_infusion(
         game_types: game_types.iter().map(|s| s.to_string()).collect(),
         restrictions: Vec::new(),
         details: Some(ItemDetails {
+            description: None,
             detail_type: Some("Default".into()),
             weight_class: None,
             defense: None,

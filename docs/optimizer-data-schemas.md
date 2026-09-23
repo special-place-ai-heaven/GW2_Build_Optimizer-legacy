@@ -685,7 +685,10 @@ before this section still loads byte-for-byte unchanged.
   `InCombat`, `Interval { every_ms, while }`, `Weapon { types, hand }`,
   `Positional`, `Proximity { radius, min_targets }`,
   `HealthThreshold { below_pct, above_pct, rearm }`, `SelfBoon { boon }`,
-  `SelfResourceStacks { resource, min }`. `rearm` is `OncePerFight`,
+  `SelfResourceStacks { resource, min }`, and `SelfBoonAbsent { boon }` (the
+  player does not carry the boon: Sigil of Rage "will not trigger if you
+  already have quickness"; added 2026-09-23, validated like `SelfBoon`).
+  `rearm` is `OncePerFight`,
   `WhenRecovered` or `Icd`. `while` takes the same block as `prerequisite`.
 - `scale` - live state added to `value` when the record fires:
   `PerDistance { per_unit, cap }`, `PerSelfResourceStack { resource,

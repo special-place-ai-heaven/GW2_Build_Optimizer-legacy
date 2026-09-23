@@ -9,7 +9,8 @@
 //!   cargo run -p gw2-optimizer --example log_compare -- <log.json> --trim out.json [--players N]
 //!
 //! A directory argument reads every `*.json` in it except `codes.json`, which
-//! holds `{"<log file>": {"<character>": "<chat code>"}}`; `--code` adds to it
+//! holds `{"<log file>": {"<character>": "<chat code>"}}` (or, per character,
+//! `{"code": "<chat code>", "gear": {...}}` with stated gear); `--code` adds to it
 //! for every log and wins on a clash. `--trim` parses and re-serialises one
 //! log keeping only squad players (WvW: the largest group, lowest group
 //! number on ties), at most N (default 10), records the untrimmed squad size
@@ -23,10 +24,11 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use gw2_core::types::GameMode;
+use gw2_optimizer::fidelity::kit::CodeEntry;
 use gw2_optimizer::fidelity::{compare, ei_log, fight_profile};
 use gw2_optimizer::gamedb::GameDb;
 
-type Codes = BTreeMap<String, BTreeMap<String, String>>;
+type Codes = BTreeMap<String, BTreeMap<String, CodeEntry>>;
 
 fn fail(msg: &str) -> ! {
     eprintln!("{msg}");
@@ -127,13 +129,17 @@ fn main() {
         let name = path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let mut codes: HashMap<String, String> = file_codes
+        let mut codes: HashMap<String, CodeEntry> = file_codes
             .get(&name)
             .cloned()
             .unwrap_or_default()
             .into_iter()
             .collect();
-        codes.extend(cli_codes.iter().cloned());
+        codes.extend(
+            cli_codes
+                .iter()
+                .map(|(n, c)| (n.clone(), CodeEntry::Code(c.clone()))),
+        );
         let rows = compare::compare_log(&name, &log, &codes, Some(&cache_dir), &corpus, &db);
         println!(
             "\n## {name} ({:?}, {:?}, {} squad players)\n",

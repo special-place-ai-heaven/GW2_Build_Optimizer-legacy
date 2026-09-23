@@ -36,6 +36,7 @@ pub struct Item {
 /// - Weapon: weapon_type, damage_type, min_power, max_power
 /// - Trinket: trinket_type
 /// - UpgradeComponent: upgrade_type, suffix, bonuses
+/// - Consumable (Food / Utility): description
 /// - Common: infusion_slots, attribute_adjustment, infix_upgrade, stat_choices
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItemDetails {
@@ -63,6 +64,8 @@ pub struct ItemDetails {
     pub secondary_suffix_item_id: Option<String>,
     #[serde(default)]
     pub stat_choices: Vec<u32>,
+    /// Consumable (Food / Utility) tooltip lines, e.g. "+100 Power".
+    pub description: Option<String>,
 }
 
 /// Stat bonuses built into an item.

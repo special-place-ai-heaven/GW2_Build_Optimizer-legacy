@@ -381,6 +381,9 @@ pub enum Gate {
     },
     /// The player carries the named boon.
     SelfBoon { boon: String },
+    /// The player does not carry the named boon (Sigil of Rage: "will not
+    /// trigger if you already have quickness").
+    SelfBoonAbsent { boon: String },
     /// The player holds at least `min` of the named resource.
     SelfResourceStacks { resource: String, min: u32 },
 }
@@ -987,6 +990,9 @@ fn validate_effects_file(file: &NormalizedEffectsFile) -> Result<(), NormalizedE
                 // would otherwise read as a gate that simply never opens.
                 Gate::SelfBoon { boon } if super::boons().get(boon).is_none() => {
                     return fail(&format!("SelfBoon gate names unknown boon '{boon}'"))
+                }
+                Gate::SelfBoonAbsent { boon } if super::boons().get(boon).is_none() => {
+                    return fail(&format!("SelfBoonAbsent gate names unknown boon '{boon}'"))
                 }
                 Gate::SelfResourceStacks { resource, min }
                     if resource.trim().is_empty() || *min == 0 =>
@@ -1903,6 +1909,16 @@ mod tests {
             boon: "Quickness".into(),
         })]))
         .is_ok());
+        // The negated form checks the same name, and round-trips by its key.
+        rejected(
+            gated(Gate::SelfBoonAbsent {
+                boon: "Quackness".into(),
+            }),
+            "SelfBoonAbsent gate names unknown boon 'Quackness'",
+        );
+        let absent: Gate =
+            serde_json::from_str(r#"{"SelfBoonAbsent":{"boon":"Quickness"}}"#).expect("parse");
+        assert!(validate_effects_file(&wvw_file(vec![gated(absent)])).is_ok());
         let mut bad_boon = minimal_effect("scale");
         bad_boon.scale = Some(Scale::PerSelfBoon {
             boon: "Mihgt".into(),

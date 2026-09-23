@@ -1332,6 +1332,19 @@ pub fn prepare_validated_rotation(
     let healing_power = stats.get("HealingPower");
     let weapon_strength = 1100.0;
     let derived = stats::compute_derived(stats, profession_name);
+    // An unmodelled form abstains here (its bar stays stowed) and is named
+    // on the WvW resource gap line, as are the records the flow cannot play.
+    let form = form_for_build(validated, &rotation_skills, db, &mode, derived.health)
+        .ok()
+        .flatten();
+    let procs = trait_procs_for_build(
+        validated,
+        db,
+        &mode,
+        &rotation_skills,
+        form.as_ref(),
+        &mods.trait_standing,
+    );
     let params = rotation::simulator::SimParams {
         power,
         condition_damage,
@@ -1356,11 +1369,11 @@ pub fn prepare_validated_rotation(
         intent: None,
         deferred_target: mods.deferred_target.clone(),
         weaver: equipped_spec_ids.contains(&rotation::attunement::WEAVER_SPEC_ID),
-        // An unmodelled form abstains here (its bar stays stowed) and is
-        // named on the WvW resource gap line.
-        form: form_for_build(validated, &rotation_skills, db, &mode, derived.health)
-            .ok()
-            .flatten(),
+        form,
+        triggered: procs.triggered,
+        strike_add: mods.strike_add_pct.iter().sum(),
+        condition_add: mods.condition_add_pct.iter().sum(),
+        folded: procs.folded,
     };
 
     Some(PreparedRotation {
@@ -1809,18 +1822,7 @@ pub(crate) fn active_normalized_effects<'e>(
         rotation_skills.iter().map(|skill| skill.skill_id).collect();
     let rune_ids: std::collections::HashSet<u32> =
         validated.rune.iter().map(|item| item.id).collect();
-    // Both sets, each tagged with its seat: a stowed sigil grants nothing
-    // until a swap brings it in, and the timeline enforces that per hit.
-    let [set_one, set_two] = validated.sigil_ids_by_set();
-    let mut sigil_sets: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
-    for id in &set_one {
-        sigil_sets.insert(*id, 1);
-    }
-    for id in &set_two {
-        // Socketed on both sets: held whichever set is out.
-        let set = if set_one.contains(id) { 0 } else { 2 };
-        sigil_sets.insert(*id, set);
-    }
+    let sigil_sets = sigil_seats(validated);
     let sigil_ids: std::collections::HashSet<u32> = sigil_sets.keys().copied().collect();
     let relic_ids: std::collections::HashSet<u32> =
         validated.relic.iter().map(|item| item.id).collect();
@@ -1919,6 +1921,22 @@ pub(crate) fn active_normalized_effects<'e>(
     coverage.sort_by(|a, b| a.name.cmp(&b.name));
     coverage.dedup_by(|a, b| a.name == b.name);
     (active, coverage, sigil_sets)
+}
+
+/// Every socketed sigil with its seat: 1 or 2 for the set it sits on, 0 when
+/// socketed on both (held whichever set is out). A stowed sigil grants
+/// nothing until a swap brings it in; both simulators enforce that per hit.
+fn sigil_seats(validated: &ValidatedBuild) -> std::collections::HashMap<u32, u8> {
+    let [set_one, set_two] = validated.sigil_ids_by_set();
+    let mut sigil_sets: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+    for id in &set_one {
+        sigil_sets.insert(*id, 1);
+    }
+    for id in &set_two {
+        let set = if set_one.contains(id) { 0 } else { 2 };
+        sigil_sets.insert(*id, set);
+    }
+    sigil_sets
 }
 
 /// Equipped traits whose facts the stat sheet consumes: any AttributeAdjust
@@ -2346,11 +2364,28 @@ pub(crate) fn wvw_resource_rules(
     let complete = !unread_shroud && resource_model_complete(&rules, rotation_skills, db);
     let mut gaps =
         resource_model_gap_names(validated, &rules, rotation_skills, db, profession_name);
-    match form_for_build(validated, rotation_skills, db, &ctx.game_mode, max_health) {
-        Err(name) => gaps.push(format!("{name} form")),
-        Ok(Some(form)) => gaps.extend(form.unmodelled),
-        Ok(None) => {}
+    gaps.extend(rotation::missing_chain_steps(rotation_skills));
+    let form = match form_for_build(validated, rotation_skills, db, &ctx.game_mode, max_health) {
+        Err(name) => {
+            gaps.push(format!("{name} form"));
+            None
+        }
+        Ok(form) => form,
+    };
+    if let Some(form) = &form {
+        gaps.extend(form.unmodelled.iter().cloned());
     }
+    gaps.extend(
+        trait_procs_for_build(
+            validated,
+            db,
+            &ctx.game_mode,
+            rotation_skills,
+            form.as_ref(),
+            &[],
+        )
+        .unhosted,
+    );
     gaps.sort();
     gaps.dedup();
     (rules, complete, gaps)
@@ -2363,8 +2398,9 @@ pub(crate) fn wvw_resource_rules(
 /// elite wears) or `data/formulas/forms.json` (entry floor = the entry's API
 /// `cost` percent, drain = the pool over its API `Duration` fact), and the
 /// equipped traits' `OnShroudEnter` / `OnShroudExit` / in-shroud `Periodic`
-/// records, plus their scoped `OnSkillUse` and `OnConditionApplied` records,
-/// that apply a boon or grant life force.
+/// records and in-shroud `Conditional` damage modifiers ([`flow_record`]).
+/// Event-fired records are every build's, form or none
+/// ([`trait_procs_for_build`]).
 ///
 /// `Ok(None)`: no form bar, or no entry pressed (Scourge). `Err(name)`: an
 /// entry that carries a bar but no pool the data can read; the form
@@ -2376,11 +2412,7 @@ pub(crate) fn form_for_build(
     mode: &GameMode,
     max_health: f64,
 ) -> Result<Option<rotation::simulator::FormSpec>, String> {
-    use crate::data::normalized_effects::{
-        EffectCategory, OperationType, SourceType, TargetSide, TriggerRule, TriggerScope,
-    };
-    use crate::data::quality::FactualValue;
-    use rotation::simulator::{FormProc, FormSpec, ProcTrigger, TriggeredProc};
+    use rotation::simulator::FormSpec;
 
     if !rotation_skills
         .iter()
@@ -2513,84 +2545,436 @@ pub(crate) fn form_for_build(
         }
     }
 
+    let life_force_cap = life_force.then_some(form.pool_cap);
+    form.life_force = life_force;
+    let stat_sheet = stat_consumed_trait_ids(validated, db);
+    for effect in equipped_trait_records(validated, mode) {
+        match flow_record(effect, true, life_force_cap, &stat_sheet) {
+            Some(Ok(FlowRecord::OnEnter(proc_))) => form.on_enter.push(proc_),
+            Some(Ok(FlowRecord::OnExit(proc_))) => form.on_exit.push(proc_),
+            Some(Ok(FlowRecord::InForm(interval_ms, proc_))) => {
+                form.periodic.push((interval_ms, proc_))
+            }
+            Some(Ok(FlowRecord::WhileIn(modifier))) => form.while_in.push(modifier),
+            _ => {}
+        }
+    }
+    Ok(Some(form))
+}
+
+/// The equipped traits' records for `mode`.
+fn equipped_trait_records<'e>(
+    validated: &ValidatedBuild,
+    mode: &GameMode,
+) -> impl Iterator<Item = &'e crate::data::normalized_effects::NormalizedEffect> {
+    use crate::data::normalized_effects::SourceType;
     let trait_ids: std::collections::HashSet<u32> = validated
         .specializations
         .iter()
         .flat_map(|spec| spec.all_trait_ids.iter().copied())
         .collect();
-    let records = crate::data::normalized_effects::effects().effects_for_mode(mode.label());
-    for effect in records {
-        if effect.source_type != SourceType::Trait
-            || !trait_ids.contains(&effect.source_id)
-            || !effect.gates.is_empty()
-            || effect.scale.is_some()
-            || effect.scale_by.is_some()
-        {
-            continue;
+    crate::data::normalized_effects::effects()
+        .effects_for_mode(mode.label())
+        .iter()
+        .filter(move |effect| {
+            effect.source_type == SourceType::Trait && trait_ids.contains(&effect.source_id)
+        })
+}
+
+/// Where a trait record plays in the flow simulation.
+enum FlowRecord {
+    OnEnter(rotation::simulator::FormProc),
+    OnExit(rotation::simulator::FormProc),
+    /// `(interval ms, proc)` while in the form.
+    InForm(u32, rotation::simulator::FormProc),
+    WhileIn(rotation::simulator::DamageMod),
+    Triggered(rotation::simulator::TriggeredProc),
+}
+
+/// One trait record read for the flow simulation from its fields only
+/// (doctrine 5). `None`: not the flow simulation's to play (`Passive` and
+/// non-form `Conditional` records are the fact parser's, `OnHealthThreshold`
+/// is the WvW timeline's, a coverage block claims nothing). `Err`: why it
+/// abstains, named on the gap line (doctrine 6). `life_force_cap`: the pool
+/// when the build's form is life force. `stat_sheet`: traits the stat sheet
+/// reads attributes from (`stat_consumed_trait_ids`).
+fn flow_record(
+    effect: &crate::data::normalized_effects::NormalizedEffect,
+    has_form: bool,
+    life_force_cap: Option<f64>,
+    stat_sheet: &std::collections::HashSet<u32>,
+) -> Option<Result<FlowRecord, String>> {
+    use crate::data::normalized_effects::TriggerRule;
+    let in_shroud = effect.prerequisite.as_ref().and_then(|p| p.in_shroud);
+    match effect.trigger_rule {
+        TriggerRule::Passive | TriggerRule::NotApplicable | TriggerRule::OnHealthThreshold => {
+            return None
         }
-        let prerequisite = effect.prerequisite.as_ref();
-        if prerequisite.is_some_and(|p| {
-            p.foe_condition.is_some() || p.foe_health.is_some() || p.attunement.is_some()
-        }) {
-            continue;
-        }
-        let proc_ = match (&effect.category, &effect.status_operation, &effect.value) {
-            (EffectCategory::AppliesBoon, Some(op), _)
-                if op.operation_type == OperationType::AppliesBoon =>
-            {
-                let (FactualValue::Resolved(stacks), Some(FactualValue::Resolved(duration_ms))) =
-                    (&op.amount_value, &op.base_duration_ms)
-                else {
-                    continue;
-                };
-                FormProc::Buff {
-                    name: op.status_kind.clone(),
-                    stacks: stacks.round().max(1.0) as u32,
-                    duration_ms: *duration_ms,
-                    ally: op.target_side == TargetSide::Ally,
+        TriggerRule::Conditional if in_shroud != Some(true) => return None,
+        _ => {}
+    }
+    let placed = place_flow_record(effect, has_form, life_force_cap, in_shroud);
+    // A stat-sheet attribute (Reaper's Onslaught's 300 Ferocity) cannot be
+    // taken out per trait, so its crit record would count twice.
+    let on_sheet = placed
+        .as_ref()
+        .ok()
+        .and_then(FlowRecord::modifier)
+        .is_some_and(|m| {
+            m.axis == rotation::simulator::ModAxis::CritDamage
+                && stat_sheet.contains(&effect.source_id)
+        });
+    Some(if on_sheet {
+        Err("crit damage on the stat sheet".into())
+    } else {
+        placed
+    })
+}
+
+impl FlowRecord {
+    /// The damage modifier the record plays, if that is its payload.
+    fn modifier(&self) -> Option<&rotation::simulator::DamageMod> {
+        use rotation::simulator::FormProc;
+        match self {
+            FlowRecord::WhileIn(modifier) => Some(modifier),
+            FlowRecord::OnEnter(proc_)
+            | FlowRecord::OnExit(proc_)
+            | FlowRecord::InForm(_, proc_)
+            | FlowRecord::Triggered(rotation::simulator::TriggeredProc { proc_, .. }) => {
+                match proc_ {
+                    FormProc::Modifier { modifier, .. } => Some(modifier),
+                    _ => None,
                 }
             }
-            (EffectCategory::GainsLifeForce, _, FactualValue::Resolved(percent)) if life_force => {
-                FormProc::Gain(percent / 100.0 * form.pool_cap)
-            }
-            _ => continue,
-        };
-        match effect.trigger_rule {
-            TriggerRule::OnShroudEnter => form.on_enter.push(proc_),
-            TriggerRule::OnShroudExit => form.on_exit.push(proc_),
-            TriggerRule::Periodic if prerequisite.and_then(|p| p.in_shroud) == Some(true) => {
-                if let Some(FactualValue::Resolved(seconds)) = &effect.internal_cooldown {
-                    form.periodic.push(((seconds * 1_000.0) as u32, proc_));
-                }
-            }
-            // A skill-use record without a scope stays unexecuted (validation
-            // rule 11); a status record without one fires on any condition.
-            TriggerRule::OnSkillUse | TriggerRule::OnConditionApplied => {
-                let on = match (&effect.trigger_rule, effect.trigger_scope.clone()) {
-                    (TriggerRule::OnSkillUse, Some(TriggerScope::Status(_)) | None) => continue,
-                    (TriggerRule::OnSkillUse, Some(scope)) => ProcTrigger::SkillUse(scope),
-                    (_, Some(TriggerScope::Status(status))) => {
-                        ProcTrigger::ConditionApplied(Some(status))
-                    }
-                    (_, None | Some(TriggerScope::Any)) => ProcTrigger::ConditionApplied(None),
-                    _ => continue,
-                };
-                let icd_ms = match &effect.internal_cooldown {
-                    Some(FactualValue::Resolved(seconds)) => (seconds * 1_000.0) as u32,
-                    None => 0,
-                    Some(_) => continue,
-                };
-                form.triggered.push(TriggeredProc {
-                    on,
-                    icd_ms,
-                    in_form: prerequisite.and_then(|p| p.in_shroud),
-                    proc_,
-                });
-            }
-            _ => {}
         }
     }
-    Ok(Some(form))
+}
+
+fn place_flow_record(
+    effect: &crate::data::normalized_effects::NormalizedEffect,
+    has_form: bool,
+    life_force_cap: Option<f64>,
+    in_shroud: Option<bool>,
+) -> Result<FlowRecord, String> {
+    use crate::data::normalized_effects::{Actor, Gate, SourceType, TriggerRule, TriggerScope};
+    use crate::data::quality::FactualValue;
+    use rotation::simulator::{ProcTrigger, TriggeredProc};
+
+    // The flow sim keeps the player's boons, so a self-boon gate plays;
+    // every other gate needs state it does not keep.
+    let self_boons: Option<Vec<(String, bool)>> = effect
+        .gates
+        .iter()
+        .map(|gate| match gate {
+            Gate::SelfBoon { boon } => Some((boon.clone(), true)),
+            Gate::SelfBoonAbsent { boon } => Some((boon.clone(), false)),
+            _ => None,
+        })
+        .collect();
+    let Some(self_boons) = self_boons else {
+        return Err("gated or scaled".into());
+    };
+    if effect.scale.is_some() || effect.scale_by.is_some() {
+        return Err("gated or scaled".into());
+    }
+    if effect.actor != Actor::Player {
+        return Err("not the player's event".into());
+    }
+    if effect.cast_skill_id.is_some() {
+        return Err("casts a trait skill".into());
+    }
+    if effect.prerequisite.as_ref().is_some_and(|p| {
+        p.foe_condition.is_some() || p.foe_health.is_some() || p.attunement.is_some()
+    }) {
+        return Err("foe or attunement prerequisite".into());
+    }
+    if effect
+        .proc_chance
+        .as_ref()
+        .is_some_and(|chance| *chance != FactualValue::Resolved(1.0))
+    {
+        return Err("proc chance".into());
+    }
+    let form_trigger = matches!(
+        effect.trigger_rule,
+        TriggerRule::OnShroudEnter | TriggerRule::OnShroudExit | TriggerRule::Conditional
+    );
+    if !has_form && (form_trigger || in_shroud == Some(true)) {
+        return Err("no form".into());
+    }
+    let icd_ms = match &effect.internal_cooldown {
+        Some(FactualValue::Resolved(seconds)) => (seconds * 1_000.0).round() as u32,
+        None => 0,
+        Some(_) => return Err("unresolved cooldown".into()),
+    };
+    if effect.trigger_rule == TriggerRule::Conditional {
+        return match record_modifier(effect) {
+            Some(Ok(modifier)) => Ok(FlowRecord::WhileIn(modifier)),
+            Some(Err(reason)) => Err(reason),
+            None => Err(format!("{:?} while in form", effect.category)),
+        };
+    }
+    let proc_ = flow_payload(effect, life_force_cap)?;
+    let on = match (&effect.trigger_rule, &effect.trigger_scope) {
+        (TriggerRule::OnShroudEnter, _) => return Ok(FlowRecord::OnEnter(proc_)),
+        (TriggerRule::OnShroudExit, _) => return Ok(FlowRecord::OnExit(proc_)),
+        (TriggerRule::Periodic, _) if icd_ms == 0 => return Err("no interval".into()),
+        (TriggerRule::Periodic, _) if in_shroud == Some(true) => {
+            return Ok(FlowRecord::InForm(icd_ms, proc_))
+        }
+        (TriggerRule::Periodic, _) => ProcTrigger::Periodic,
+        // A skill's own record fires on that skill's cast.
+        (TriggerRule::OnSkillUse, None) if effect.source_type == SourceType::Skill => {
+            ProcTrigger::OwnCast(effect.source_id)
+        }
+        // A skill-use record without a scope stays unexecuted (validation
+        // rule 11); a status record without one fires on any condition.
+        (TriggerRule::OnSkillUse, Some(TriggerScope::Status(_)) | None) => {
+            return Err("unscoped skill use".into())
+        }
+        (TriggerRule::OnSkillUse, Some(scope)) => ProcTrigger::SkillUse(scope.clone()),
+        (TriggerRule::OnConditionApplied, Some(TriggerScope::Status(status))) => {
+            ProcTrigger::ConditionApplied(Some(status.clone()))
+        }
+        (TriggerRule::OnConditionApplied, None | Some(TriggerScope::Any)) => {
+            ProcTrigger::ConditionApplied(None)
+        }
+        (TriggerRule::OnHit, None | Some(TriggerScope::Any)) => ProcTrigger::Hit,
+        (TriggerRule::OnCrit, None | Some(TriggerScope::Any)) if icd_ms >= CRIT_PROC_MIN_ICD_MS => {
+            ProcTrigger::Crit
+        }
+        (TriggerRule::OnCrit, _) => return Err("on-crit under a 5 s cooldown".into()),
+        (trigger, _) => {
+            return Err(format!(
+                "{} not played",
+                rotation::wvw_timeline::trigger_label(trigger)
+            ))
+        }
+    };
+    Ok(FlowRecord::Triggered(TriggeredProc {
+        on,
+        icd_ms,
+        in_form: in_shroud,
+        weapon_set: 0,
+        self_boons,
+        proc_,
+    }))
+}
+
+/// The shortest internal cooldown an on-crit record plays at in the flow
+/// sim. There each strike adds its crit chance as probability mass and the
+/// record fires once a whole proc's worth has gathered, the WvW timeline's
+/// expected-value reading. With a long cooldown the wait is the cooldown and
+/// the one or two strikes the mass takes barely move it; with a short one
+/// the proc rate follows crit cadence, which averaged crits do not have.
+const CRIT_PROC_MIN_ICD_MS: u32 = 5_000;
+
+/// A record's percent damage modifier, when its payload is one
+/// (`StrikeDamagePct`, `ConditionDamagePct`, `CritDamagePct`, direct or
+/// as a `TriggeredEffect`'s inner category).
+fn record_modifier(
+    effect: &crate::data::normalized_effects::NormalizedEffect,
+) -> Option<Result<rotation::simulator::DamageMod, String>> {
+    use crate::data::normalized_effects::EffectCategory;
+    use crate::data::quality::FactualValue;
+    use rotation::simulator::{DamageMod, ModAxis};
+    let axis = match effect.inner_category.as_ref().unwrap_or(&effect.category) {
+        EffectCategory::StrikeDamagePct => ModAxis::Strike,
+        EffectCategory::ConditionDamagePct => ModAxis::Condition,
+        EffectCategory::CritDamagePct => ModAxis::CritDamage,
+        _ => return None,
+    };
+    let FactualValue::Resolved(percent) = effect.value else {
+        return Some(Err("unresolved value".into()));
+    };
+    // The WvW timeline's reading: a strike value up to 2.0 is a
+    // weapon-strength coefficient proc (Sigil of Fire), not a percent.
+    if axis == ModAxis::Strike && percent <= 2.0 {
+        return Some(Err("strike coefficient proc".into()));
+    }
+    Some(Ok(DamageMod {
+        axis,
+        percent,
+        additive: crate::data::modifier_buckets::is_additive_modifier(&effect.source_name),
+    }))
+}
+
+/// What a fired record does in the flow simulation.
+fn flow_payload(
+    effect: &crate::data::normalized_effects::NormalizedEffect,
+    life_force_cap: Option<f64>,
+) -> Result<rotation::simulator::FormProc, String> {
+    use crate::data::normalized_effects::{
+        EffectCategory, OperationType, StackingRule, TargetSide,
+    };
+    use crate::data::quality::FactualValue;
+    use rotation::simulator::FormProc;
+
+    if let Some(modifier) = record_modifier(effect) {
+        let modifier = modifier?;
+        let Some(FactualValue::Resolved(seconds)) = &effect.effect_duration else {
+            return Err("untimed modifier".into());
+        };
+        let max_stacks = match &effect.max_stacks {
+            Some(FactualValue::Resolved(max)) => *max,
+            None => 1,
+            Some(_) => return Err("unresolved stacks".into()),
+        };
+        return Ok(FormProc::Modifier {
+            source: effect.source_name.clone(),
+            modifier,
+            duration_ms: (seconds * 1_000.0).round() as u32,
+            max_stacks,
+            refresh_all: effect.stacking_rule == StackingRule::RefreshAllStacks,
+        });
+    }
+    let op = effect.status_operation.as_ref();
+    let status = op.and_then(|op| match (&op.amount_value, &op.base_duration_ms) {
+        (FactualValue::Resolved(stacks), Some(FactualValue::Resolved(duration_ms))) => {
+            Some((op, stacks.round().max(1.0) as u32, *duration_ms))
+        }
+        _ => None,
+    });
+    match (&effect.category, status, &effect.value) {
+        (EffectCategory::AppliesBoon, Some((op, stacks, duration_ms)), _)
+            if op.operation_type == OperationType::AppliesBoon =>
+        {
+            Ok(FormProc::Buff {
+                name: op.status_kind.clone(),
+                stacks,
+                duration_ms,
+                ally: op.target_side == TargetSide::Ally,
+            })
+        }
+        (EffectCategory::AppliesCondition, Some((op, stacks, duration_ms)), _)
+            if op.operation_type == OperationType::AppliesCondition
+                && op.target_side == TargetSide::Enemy =>
+        {
+            Ok(FormProc::Condition {
+                name: op.status_kind.clone(),
+                stacks,
+                duration_ms,
+            })
+        }
+        (EffectCategory::GainsLifeForce, _, FactualValue::Resolved(percent)) => life_force_cap
+            .map(|cap| FormProc::Gain(percent / 100.0 * cap))
+            .ok_or_else(|| "no life force pool".into()),
+        (category, _, _) => Err(format!("{category:?}")),
+    }
+}
+
+/// The build's trait records for the flow simulation's event procs
+/// ([`rotation::simulator::SimParams::triggered`]), for every build, form
+/// or none; the always-on shares the fact parser folded for traits whose
+/// damage modifiers now play on their own clock
+/// ([`rotation::simulator::FoldedShares`]); and each record the flow
+/// simulation cannot play, by name, for the gap line. `form`: the build's
+/// form, whose own entry, exit, timer and while-in records
+/// [`form_for_build`] already attached.
+pub(crate) struct TraitProcs {
+    pub triggered: Vec<rotation::simulator::TriggeredProc>,
+    pub folded: rotation::simulator::FoldedShares,
+    pub unhosted: Vec<String>,
+}
+
+pub(crate) fn trait_procs_for_build(
+    validated: &ValidatedBuild,
+    db: &GameDb,
+    mode: &GameMode,
+    bar: &[rotation::RotationSkill],
+    form: Option<&rotation::simulator::FormSpec>,
+    standing: &[combat::TraitStanding],
+) -> TraitProcs {
+    let life_force_cap = form.filter(|f| f.life_force).map(|f| f.pool_cap);
+    let stat_sheet = stat_consumed_trait_ids(validated, db);
+    let mut out = TraitProcs {
+        triggered: Vec::new(),
+        folded: Default::default(),
+        unhosted: Vec::new(),
+    };
+    let mut folded_axes: Vec<(u32, rotation::simulator::ModAxis)> = Vec::new();
+    for (effect, seat) in equipped_trait_records(validated, mode)
+        .map(|effect| (effect, 0))
+        .chain(equipped_skill_and_sigil_records(validated, bar, mode))
+    {
+        let Some(placed) = flow_record(effect, form.is_some(), life_force_cap, &stat_sheet) else {
+            continue;
+        };
+        match placed {
+            Err(reason) => out.unhosted.push(format!(
+                "{} {} (flow sim: {reason})",
+                effect.source_name,
+                rotation::wvw_timeline::trigger_label(&effect.trigger_rule)
+            )),
+            Ok(record) => {
+                // The fact parser's standing shares are per trait id.
+                let is_trait =
+                    effect.source_type == crate::data::normalized_effects::SourceType::Trait;
+                if let Some(m) = record.modifier().filter(|_| is_trait) {
+                    if !folded_axes.contains(&(effect.source_id, m.axis)) {
+                        folded_axes.push((effect.source_id, m.axis));
+                        fold_standing(&mut out.folded, standing, effect.source_id, m.axis);
+                    }
+                }
+                if let FlowRecord::Triggered(mut t) = record {
+                    t.weapon_set = seat;
+                    out.triggered.push(t);
+                }
+            }
+        }
+    }
+    out.unhosted.sort();
+    out.unhosted.dedup();
+    out
+}
+
+/// The records of the skills on `bar` and of the socketed sigils for
+/// `mode`, each with its source's seat ([`sigil_seats`]; 0 for a skill).
+// ponytail: a sigil seat is fixed per set; a swap in the flow sim switches
+// which seat is live (`TriggeredProc::weapon_set`), a kit or bundle does not.
+fn equipped_skill_and_sigil_records<'e>(
+    validated: &ValidatedBuild,
+    bar: &[rotation::RotationSkill],
+    mode: &GameMode,
+) -> impl Iterator<Item = (&'e crate::data::normalized_effects::NormalizedEffect, u8)> {
+    use crate::data::normalized_effects::SourceType;
+    let skill_ids: std::collections::HashSet<u32> = bar.iter().map(|s| s.skill_id).collect();
+    let seats = sigil_seats(validated);
+    crate::data::normalized_effects::effects()
+        .effects_for_mode(mode.label())
+        .iter()
+        .filter_map(move |effect| match effect.source_type {
+            SourceType::Skill if skill_ids.contains(&effect.source_id) => Some((effect, 0)),
+            SourceType::Sigil => seats.get(&effect.source_id).map(|seat| (effect, *seat)),
+            _ => None,
+        })
+}
+
+/// Add `trait_id`'s parsed always-on share on `axis` to `folded`.
+fn fold_standing(
+    folded: &mut rotation::simulator::FoldedShares,
+    standing: &[combat::TraitStanding],
+    trait_id: u32,
+    axis: rotation::simulator::ModAxis,
+) {
+    use rotation::simulator::ModAxis;
+    let Some(share) = standing.iter().find(|s| s.trait_id == trait_id) else {
+        return;
+    };
+    match axis {
+        ModAxis::Strike => {
+            folded.strike_mult *= share.strike_pct.iter().map(|m| 1.0 + m).product::<f64>();
+            folded.strike_add += share.strike_add_pct;
+        }
+        ModAxis::Condition => {
+            folded.condition_mult *= share.condition_pct.iter().map(|m| 1.0 + m).product::<f64>();
+            folded.condition_add += share.condition_add_pct;
+        }
+        ModAxis::CritDamage => {
+            folded.ferocity += share.crit_damage_pct
+                * crate::data::universal_formulas::formulas().ferocity_per_crit_damage_pct;
+        }
+    }
 }
 
 fn wvw_weapon_swap_cooldown_ms(profession_name: &str, validated: &ValidatedBuild) -> Option<u32> {
@@ -2660,6 +3044,17 @@ fn add_weapon_skill_ids(
                 continue;
             }
             skill_ids.push(skill_ref.id);
+            // The API lists only a chain's first step; its follow-ups ride
+            // along for the simulators' chain cursor (E11). A step missing
+            // from the db ends the walk and is named on the gap line.
+            let mut step = skill.next_chain;
+            while let Some(id) = step.filter(|id| !skill_ids.contains(id)) {
+                let Some(follow_up) = db.skills.get(&id) else {
+                    break;
+                };
+                skill_ids.push(id);
+                step = follow_up.next_chain;
+            }
         }
     }
 }
@@ -3436,6 +3831,133 @@ mod tests {
                 flow.skill_usage
             );
         }
+    }
+
+    /// Doctrine 5 and 6 for the flow simulation's trait records: placement
+    /// reads record fields only, and a trigger class the flow simulation
+    /// cannot host abstains with the class named.
+    #[test]
+    fn flow_records_place_by_field_and_name_the_unhostable_trigger() {
+        use crate::data::normalized_effects::{
+            EffectCategory, Prerequisite, SourceType, TriggerRule, TriggerScope,
+        };
+        use crate::data::quality::FactualValue;
+        use rotation::reaper_fixture::record;
+        use rotation::simulator::{FormProc, ModAxis, ProcTrigger};
+
+        let none = std::collections::HashSet::new();
+        let timed_strike = |trigger| {
+            let mut effect = record(
+                SourceType::Trait,
+                1,
+                "Synthetic",
+                EffectCategory::TriggeredEffect,
+                20.0,
+                trigger,
+            );
+            effect.inner_category = Some(EffectCategory::StrikeDamagePct);
+            effect.effect_duration = Some(FactualValue::Resolved(2.0));
+            effect
+        };
+
+        let mut on_use = timed_strike(TriggerRule::OnSkillUse);
+        on_use.trigger_scope = Some(TriggerScope::Category("Virtue".into()));
+        match flow_record(&on_use, false, None, &none) {
+            Some(Ok(FlowRecord::Triggered(t))) => {
+                assert!(matches!(t.on, ProcTrigger::SkillUse(_)));
+                assert_eq!(t.in_form, None);
+                assert!(matches!(
+                    t.proc_,
+                    FormProc::Modifier { ref modifier, duration_ms: 2_000, .. }
+                        if modifier.axis == ModAxis::Strike && modifier.percent == 20.0
+                ));
+            }
+            _ => panic!("a scoped skill-use record plays without a form"),
+        }
+
+        on_use.prerequisite = Some(Prerequisite {
+            in_shroud: Some(true),
+            ..Default::default()
+        });
+        assert!(matches!(flow_record(&on_use, false, None, &none), Some(Err(r)) if r == "no form"));
+
+        // On-crit with a short (here no) cooldown abstains by name; with a
+        // cooldown of 5 s or more it plays as a crit-weighted hit proc.
+        match flow_record(&timed_strike(TriggerRule::OnCrit), false, None, &none) {
+            Some(Err(reason)) => assert_eq!(reason, "on-crit under a 5 s cooldown"),
+            _ => panic!("short-cooldown on-crit must abstain by name"),
+        }
+        let mut long_crit = timed_strike(TriggerRule::OnCrit);
+        long_crit.internal_cooldown = Some(FactualValue::Resolved(4.9));
+        assert!(matches!(
+            flow_record(&long_crit, false, None, &none),
+            Some(Err(r)) if r == "on-crit under a 5 s cooldown"
+        ));
+        long_crit.internal_cooldown = Some(FactualValue::Resolved(20.0));
+        long_crit.gates = vec![crate::data::normalized_effects::Gate::SelfBoonAbsent {
+            boon: "Quickness".into(),
+        }];
+        match flow_record(&long_crit, false, None, &none) {
+            Some(Ok(FlowRecord::Triggered(t))) => {
+                assert!(matches!(t.on, ProcTrigger::Crit));
+                assert_eq!(t.icd_ms, 20_000);
+                assert_eq!(t.self_boons, vec![("Quickness".to_string(), false)]);
+            }
+            _ => panic!("a 20 s on-crit record plays"),
+        }
+        long_crit.gates = vec![crate::data::normalized_effects::Gate::InCombat];
+        assert!(matches!(
+            flow_record(&long_crit, false, None, &none),
+            Some(Err(r)) if r == "gated or scaled"
+        ));
+        // A skill's own unscoped skill-use record fires on that skill.
+        let mut own = record(
+            SourceType::Skill,
+            29965,
+            "Synthetic Shout",
+            EffectCategory::TriggeredEffect,
+            20.0,
+            TriggerRule::OnSkillUse,
+        );
+        own.inner_category = Some(EffectCategory::StrikeDamagePct);
+        own.effect_duration = Some(FactualValue::Resolved(2.0));
+        assert!(matches!(
+            flow_record(&own, false, None, &none),
+            Some(Ok(FlowRecord::Triggered(t))) if t.on == ProcTrigger::OwnCast(29965)
+        ));
+
+        let mut in_form_crit = record(
+            SourceType::Trait,
+            2,
+            "Synthetic Crit",
+            EffectCategory::TriggeredEffect,
+            10.0,
+            TriggerRule::Conditional,
+        );
+        in_form_crit.inner_category = Some(EffectCategory::CritDamagePct);
+        in_form_crit.prerequisite = Some(Prerequisite {
+            in_shroud: Some(true),
+            ..Default::default()
+        });
+        assert!(matches!(
+            flow_record(&in_form_crit, true, None, &none),
+            Some(Ok(FlowRecord::WhileIn(ref m))) if m.axis == ModAxis::CritDamage
+        ));
+        let on_sheet: std::collections::HashSet<u32> = [2].into();
+        assert!(matches!(
+            flow_record(&in_form_crit, true, None, &on_sheet),
+            Some(Err(r)) if r == "crit damage on the stat sheet"
+        ));
+
+        let passive = record(
+            SourceType::Trait,
+            3,
+            "Synthetic Passive",
+            EffectCategory::StrikeDamagePct,
+            10.0,
+            TriggerRule::Passive,
+        );
+        assert!(flow_record(&passive, true, None, &none).is_none());
     }
 
     /// Doctrine 6: a pressed entry that brings a bar but has no pool

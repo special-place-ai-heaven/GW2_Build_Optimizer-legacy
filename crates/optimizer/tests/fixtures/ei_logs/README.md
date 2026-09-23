@@ -11,6 +11,12 @@ Trimmed Elite Insights (EI) JSON logs for the fidelity comparator
 | `aBtd-20260604-211449_wvw.json` | https://dps.report/aBtd-20260604-211449_wvw | Detailed WvW, Eternal Battlegrounds, EI 3.30.0.0. Squad group 1, 5 players. |
 | `codes.json` | Snow Crows build page above | Build chat code per log file and character name. |
 
+A character's value in `codes.json` may also be an object
+`{"code": "[&...]", "gear": {"armor": "Dragon's", "weapons": "Dragon's", "trinkets": "Marauder", "sigils": {"Greatsword": ["Hydromancy", "Rage"]}, "rune": "Scholar", "relic": "Brawler", "food": "...", "utility": "..."}}`,
+every gear key optional, for gear the player stated in words. The kit uses it
+below the account cache and above the corpus (`Provenance::Stated`), and a name
+the game data does not know is named in the stat flags, never guessed.
+
 The two WvW logs come from the SOCK guild comp doc:
 https://github.com/theextendedname/SOCK_BUILDS/blob/60d87f68789eb7108f990796be24a8d9f7441183/Archive/SOCK-Bulds_5-6-2026/testing/Wildfire%20Comp.txt
 

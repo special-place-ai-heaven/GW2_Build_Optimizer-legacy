@@ -1663,6 +1663,7 @@ pub(crate) mod runtime_diagnostics_tests {
             game_types: vec!["PvE".into(), "WvW".into()],
             restrictions: vec![],
             details: Some(ItemDetails {
+                description: None,
                 detail_type: Some("Helm".into()),
                 weight_class: Some("Heavy".into()),
                 defense: Some(127),
