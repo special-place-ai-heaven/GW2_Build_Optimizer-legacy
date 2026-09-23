@@ -45,6 +45,14 @@ pub struct ShroudRow {
     /// Shroud`, Mechanics).
     #[serde(default = "default_true")]
     pub protects_health: bool,
+    /// The elite specialisation whose shroud this is; `None` is core Death
+    /// Shroud. The API tags every shroud entry skill spec-less.
+    #[serde(default)]
+    pub specialization: Option<u32>,
+    /// What this shroud does that the simulators do not play, named for the
+    /// gap line (doctrine 6).
+    #[serde(default)]
+    pub unmodelled: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -55,6 +63,10 @@ fn default_true() -> bool {
 pub struct ShroudTable {
     pub source: String,
     pub life_force_pool_pct_of_health: f64,
+    /// The pool keeps its fill out of combat (wiki `Life force`: stored
+    /// permanently), so a fight can open with it full.
+    #[serde(default)]
+    pub pool_persists_out_of_combat: bool,
     pub entry_floor_pct: f64,
     pub recharge_on_exit_s: f64,
     /// Keyed by the entry skill id.
@@ -65,6 +77,17 @@ impl ShroudTable {
     /// The row for a shroud entry skill, if the table knows it.
     pub fn row(&self, entry_skill_id: u32) -> Option<&ShroudRow> {
         self.shrouds.get(&entry_skill_id)
+    }
+
+    /// The shroud an equipped elite wears, if the table names one.
+    pub fn row_for_elite(&self, equipped_spec_ids: &[u32]) -> Option<(u32, &ShroudRow)> {
+        self.shrouds
+            .iter()
+            .find(|(_, row)| {
+                row.specialization
+                    .is_some_and(|spec| equipped_spec_ids.contains(&spec))
+            })
+            .map(|(id, row)| (*id, row))
     }
 
     /// The row whose name matches (fixtures and renamed ids).
@@ -126,6 +149,11 @@ mod tests {
         // 33/50/50 reduction from the API facts.
         let harbinger = t.row(62567).expect("Harbinger Shroud");
         assert!(!harbinger.protects_health);
+        assert!(harbinger.unmodelled.iter().any(|g| g == "blight"));
+        assert!(harbinger
+            .unmodelled
+            .iter()
+            .any(|g| g.contains("Corrupted Talent")));
         assert_eq!(
             harbinger
                 .drain_pct_per_s
@@ -161,8 +189,12 @@ mod tests {
             50.0
         );
         assert!(t.row(1).is_none());
+        assert_eq!(t.row_for_elite(&[53, 2, 34]).unwrap().0, 30792);
+        assert!(t.row_for_elite(&[53, 2, 19]).is_none());
+        assert_eq!(t.row_for_elite(&[64]).unwrap().1.name, "Harbinger Shroud");
         assert_eq!(t.entry_floor_pct, 10.0);
         assert!((t.pool_for(20_000.0) - 13_800.0).abs() < 1e-9);
         assert!(t.source.contains("(read 20"));
+        assert!(t.pool_persists_out_of_combat);
     }
 }

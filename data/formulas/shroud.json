@@ -1,6 +1,7 @@
 {
-  "source": "https://wiki.guildwars2.com/wiki/Life_force, https://wiki.guildwars2.com/wiki/Death_Shroud, https://wiki.guildwars2.com/wiki/Reaper%27s_Shroud, https://wiki.guildwars2.com/wiki/Harbinger_Shroud, https://wiki.guildwars2.com/wiki/Ritualist%27s_Shroud (read 2026-09-08). Harbinger Shroud does not protect the health pool (protects_health false) and stacks Blight, which is not modeled. Ritualist's Shroud drain carries a wiki verification request. Scourge has no shroud: Manifest Sand Shade is F1 with no flip skill, so no row.",
+  "source": "https://wiki.guildwars2.com/wiki/Life_force, https://wiki.guildwars2.com/wiki/Death_Shroud, https://wiki.guildwars2.com/wiki/Reaper%27s_Shroud, https://wiki.guildwars2.com/wiki/Harbinger_Shroud, https://wiki.guildwars2.com/wiki/Ritualist%27s_Shroud (read 2026-09-08). Harbinger Shroud does not protect the health pool (protects_health false) and stacks Blight, which is not modeled. Ritualist's Shroud drain carries a wiki verification request. Life force is stored permanently on the life force pool (wiki `Life force`, read 2026-09-23), so a fight starts with the pool its player brought and a benchmark starts full. Scourge has no shroud: Manifest Sand Shade is F1 with no flip skill, so no row. `specialization` is the elite whose shroud the row is (API specialization ids 34 Reaper, 64 Harbinger, 76 Ritualist): the API tags every shroud entry skill spec-less, so the row, not the F1 id, says which shroud an elite wears. `unmodelled` names what a row's shroud does that the simulators do not play, for the gap line: Harbinger's Blight, and Corrupted Talent (every Harbinger's grandmaster minor, wiki `Corrupted Talent` read 2026-09-23: 'Allows shroud to be activated with no minimum life force'), so a Harbinger still pays the 10 % entry floor.",
   "life_force_pool_pct_of_health": 69.0,
+  "pool_persists_out_of_combat": true,
   "entry_floor_pct": 10.0,
   "recharge_on_exit_s": 10.0,
   "shrouds": {
@@ -11,17 +12,21 @@
     },
     "30792": {
       "name": "Reaper's Shroud",
+      "specialization": 34,
       "drain_pct_per_s": { "pve": 4.0, "wvw": 5.0, "pvp": 5.0 },
       "damage_reduction_pct": { "pve": 33.0, "wvw": 50.0, "pvp": 50.0 }
     },
     "62567": {
       "name": "Harbinger Shroud",
+      "specialization": 64,
       "drain_pct_per_s": { "pve": 5.0, "wvw": 5.0, "pvp": 5.0 },
       "damage_reduction_pct": { "pve": 0.0, "wvw": 0.0, "pvp": 0.0 },
+      "unmodelled": ["blight", "Corrupted Talent entry without life force"],
       "protects_health": false
     },
     "77238": {
       "name": "Ritualist's Shroud",
+      "specialization": 76,
       "drain_pct_per_s": { "pve": 3.0, "wvw": 5.0, "pvp": 5.0 },
       "damage_reduction_pct": { "pve": 33.0, "wvw": 50.0, "pvp": 50.0 }
     }

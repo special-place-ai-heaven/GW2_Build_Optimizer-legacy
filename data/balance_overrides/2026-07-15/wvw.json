@@ -4,6 +4,46 @@
   "entities": [
     {
       "source_type": "Skill",
+      "source_id": 31869,
+      "name": "Celestial Avatar",
+      "overrides": {
+        "recharge_ms": { "value": 10000, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Celestial_Avatar (infobox split pve wvw, pvp: recharge 10, recharge pvp 15)" }
+      }
+    },
+    {
+      "source_type": "Skill",
+      "source_id": 62672,
+      "name": "Devouring Cut",
+      "overrides": {
+        "activation_ms": { "value": 1000, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Devouring_Cut" },
+        "recharge_ms": { "value": 8000, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Devouring_Cut" },
+        "damage_coefficient:above_50": { "value": 0.85, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Devouring_Cut" }
+      }
+    },
+    {
+      "source_type": "Skill",
+      "source_id": 62539,
+      "name": "Voracious Arc",
+      "overrides": {
+        "activation_ms": { "value": 750, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Voracious_Arc" },
+        "recharge_ms": { "value": 18000, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Voracious_Arc" },
+        "damage_coefficient:above_50": { "value": 1.0, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Voracious_Arc" },
+        "status_duration_ms:daze": { "value": 500, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Voracious_Arc" }
+      }
+    },
+    {
+      "source_type": "Skill",
+      "source_id": 30557,
+      "name": "Executioner's Scythe",
+      "overrides": {
+        "activation_ms": { "value": 1250, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Executioner%27s_Scythe" },
+        "damage_coefficient:above_50": { "value": 0.91, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Executioner%27s_Scythe" },
+        "damage_coefficient:below_50": { "value": 1.364, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Executioner%27s_Scythe" },
+        "damage_coefficient:below_25": { "value": 1.82, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Executioner%27s_Scythe" }
+      }
+    },
+    {
+      "source_type": "Skill",
       "source_id": 13113,
       "name": "Black Powder",
       "overrides": {

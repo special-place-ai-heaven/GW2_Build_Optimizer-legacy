@@ -211,6 +211,104 @@ pub struct SimParams {
     pub deferred_target: Vec<crate::combat::DeferredTargetModifier>,
     /// Elite spec 56 (Weaver): dual attunement stashes outgoing primary.
     pub weaver: bool,
+    /// The build's profession form, if it has one the data describes.
+    /// `None` leaves the [`super::SHROUD_SET`] bar stowed for the whole run.
+    pub form: Option<FormSpec>,
+}
+
+/// A profession form played as a timed state (Necromancer shroud, Druid
+/// Celestial Avatar): while in it the weapon bar is stowed and the
+/// [`super::SHROUD_SET`] bar is out; utilities stay usable. Every amount is
+/// in pool units. Built by `engine::form_for_build` from data
+/// (`data/formulas/shroud.json`, `data/formulas/forms.json`, the entry
+/// skill's API `cost` and `Duration` facts, the build's trait records), so
+/// the simulator holds no profession branch.
+///
+/// Scheduler policy: enter when the entry is off recharge, the pool meets
+/// the floor, and either the pool is full (further gains would be lost) or
+/// the form bar's best ready skill outranks the weapon bar's. Leave when the
+/// pool is empty, or by the exit skill once every non-auto form skill is
+/// recharging and a ready weapon skill outranks the form's best.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FormSpec {
+    pub name: String,
+    /// Entry skill: one cast is one entry.
+    pub entry_skill_id: u32,
+    pub pool_cap: f64,
+    /// Pool at the fight's start: full when the pool persists out of
+    /// combat (players open a fight, a golem benchmark above all, with it
+    /// full), else empty.
+    pub initial_pool: f64,
+    /// Minimum pool to enter.
+    pub entry_floor: f64,
+    pub drain_per_second: f64,
+    /// Entry recharge, started when the form ends.
+    pub recharge_ms: u32,
+    /// Pool per landed strike (astral force).
+    pub gain_per_strike: f64,
+    /// Whether gains land while in the form (life force: yes; astral
+    /// force: no).
+    pub gains_in_form: bool,
+    /// Fraction of the remaining pool kept on a voluntary exit.
+    pub exit_keep: f64,
+    /// `(skill id, pool on use, pool per landed strike)`: the API's
+    /// `Life Force` and `Life Force Per Hit` facts.
+    pub skill_gains: Vec<(u32, f64, f64)>,
+    pub on_enter: Vec<FormProc>,
+    pub on_exit: Vec<FormProc>,
+    /// `(interval ms, proc)`, fired on entry and every interval while in.
+    pub periodic: Vec<(u32, FormProc)>,
+    /// Trait records fired by a cast or an inflicted status, in or out of
+    /// the form (`OnSkillUse`, `OnConditionApplied`).
+    // ponytail: carried on the form, so a formless build (Scourge) fires
+    // none of these; move to `SimParams` when a non-form record needs them.
+    pub triggered: Vec<TriggeredProc>,
+    /// What the form does that is not played, named for the gap line.
+    pub unmodelled: Vec<String>,
+}
+
+/// What just happened, for [`FormSpec::triggered`].
+enum ProcEvent<'a> {
+    /// The skill at this index was cast.
+    Cast(usize),
+    /// This condition was inflicted on the foe.
+    Condition(&'a str),
+}
+
+/// A [`FormProc`] fired by an event rather than by the form's own entry,
+/// exit or timer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TriggeredProc {
+    pub on: ProcTrigger,
+    /// Internal cooldown; 0 fires on every event.
+    pub icd_ms: u32,
+    /// The record's `in_shroud` prerequisite: `Some(true)` only in the
+    /// form, `Some(false)` only out of it.
+    pub in_form: Option<bool>,
+    pub proc_: FormProc,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProcTrigger {
+    /// A cast of a skill this scope admits (`OnSkillUse`).
+    SkillUse(crate::data::normalized_effects::TriggerScope),
+    /// Inflicting the named condition on the foe, any when `None`
+    /// (`OnConditionApplied`).
+    ConditionApplied(Option<String>),
+}
+
+/// What a trait record does when the form fires it (`OnShroudEnter`,
+/// `OnShroudExit`, `Periodic` with `in_shroud`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormProc {
+    Buff {
+        name: String,
+        stacks: u32,
+        duration_ms: u32,
+        ally: bool,
+    },
+    /// Pool units.
+    Gain(f64),
 }
 
 impl SimParams {
@@ -238,6 +336,7 @@ impl SimParams {
             intent: None,
             deferred_target: Vec::new(),
             weaver: false,
+            form: None,
         }
     }
 }
@@ -390,6 +489,24 @@ struct SimState {
     params: SimParams,
     /// Live combo fields (Phase 4). World/sim state, not TargetState.
     combo: ComboEngine,
+    /// Form state (see [`FormSpec`]); a copy of `params.form`.
+    form: Option<FormSpec>,
+    form_pool: f64,
+    /// `Some(entered at)` while in the form.
+    form_entered_ms: Option<u32>,
+    weapon_set_before_form: u8,
+    form_recharge_ms: u32,
+    /// Time spent in the form.
+    form_active_ms: u32,
+    /// Next firing time per `FormSpec::periodic` entry.
+    form_periodic_due: Vec<u32>,
+    /// Capture only, never read by scheduling: (strike, condition) damage
+    /// landed per second `[k, k+1)`.
+    damage_seconds: Vec<(f64, f64)>,
+    /// Capture only: `buff_seen` at each second's midpoint tick.
+    buff_seen_mid_second: Vec<Vec<bool>>,
+    /// Earliest next firing per `FormSpec::triggered` entry (its ICD).
+    triggered_ready_ms: Vec<u32>,
 }
 
 impl SimState {
@@ -450,6 +567,16 @@ impl SimState {
             ally_might_stack_ms: 0.0,
             ally_healing: 0.0,
             ally_buff_active_ms: Vec::new(),
+            form: params.form.clone(),
+            form_pool: params.form.as_ref().map_or(0.0, |form| form.initial_pool),
+            form_entered_ms: None,
+            weapon_set_before_form: 1,
+            form_recharge_ms: 0,
+            form_active_ms: 0,
+            form_periodic_due: Vec::new(),
+            damage_seconds: vec![(0.0, 0.0); duration_ms.div_ceil(1000) as usize],
+            buff_seen_mid_second: Vec::new(),
+            triggered_ready_ms: vec![0; params.form.as_ref().map_or(0, |f| f.triggered.len())],
             params,
             combo: ComboEngine::new(),
         }
@@ -460,9 +587,13 @@ impl SimState {
         let condition_damage = self.params.condition_damage;
         let weapon_strength = self.params.weapon_strength;
         while self.current_time_ms < self.duration_ms {
+            let landed_before = (self.total_strike_damage, self.total_condition_damage);
             // Tick conditions and buffs
             self.tick_conditions(condition_damage);
             self.tick_buffs();
+            if self.current_time_ms % 1000 == 500 {
+                self.buff_seen_mid_second.push(self.buff_seen.clone());
+            }
             self.land_scheduled_strikes(power, weapon_strength);
             self.might_stack_ms += self.live_might_stacks() * TICK_MS as f64;
             self.ally_might_stack_ms += self.live_ally_might_stacks() * TICK_MS as f64;
@@ -477,8 +608,10 @@ impl SimState {
                 state.cooldown_remaining_ms = state.cooldown_remaining_ms.saturating_sub(cd_tick);
             }
             self.weapon_swap_cooldown_ms = self.weapon_swap_cooldown_ms.saturating_sub(TICK_MS);
+            self.tick_form();
 
             if self.current_time_ms >= self.next_action_ms {
+                self.decide_form(power);
                 if self.has_weapon_sets && self.should_weapon_swap(power) {
                     self.weapon_swap();
                 }
@@ -488,11 +621,25 @@ impl SimState {
                 }
             }
 
+            self.capture_damage_since(landed_before);
             self.current_time_ms += TICK_MS;
         }
         // A cast that finishes as the window closes still delivered its hits.
+        let landed_before = (self.total_strike_damage, self.total_condition_damage);
         self.current_time_ms = self.duration_ms;
         self.land_scheduled_strikes(power, weapon_strength);
+        self.capture_damage_since(landed_before);
+    }
+
+    /// Adds the damage landed since `before` to the current second's bucket
+    /// (the last one for the window-close landing).
+    fn capture_damage_since(&mut self, before: (f64, f64)) {
+        let Some(last) = self.damage_seconds.len().checked_sub(1) else {
+            return;
+        };
+        let k = ((self.current_time_ms / 1000) as usize).min(last);
+        self.damage_seconds[k].0 += self.total_strike_damage - before.0;
+        self.damage_seconds[k].1 += self.total_condition_damage - before.1;
     }
 
     /// Pick the skill with the highest DPS-per-cast-time (DPCT) that is available.
@@ -588,7 +735,8 @@ impl SimState {
     /// Decide if we should weapon swap: all active weapon skills on CD,
     /// swap is available, and the other set has usable skills.
     fn should_weapon_swap(&self, power: f64) -> bool {
-        if self.weapon_swap_cooldown_ms > 0 {
+        // wiki `Death Shroud`: no weapon swap while in a form.
+        if self.weapon_swap_cooldown_ms > 0 || self.form_entered_ms.is_some() {
             return false;
         }
 
@@ -676,6 +824,207 @@ impl SimState {
         self.buff_slots.len() - 1
     }
 
+    /// Drain, periodic procs and recharge, once per tick.
+    fn tick_form(&mut self) {
+        self.form_recharge_ms = self.form_recharge_ms.saturating_sub(TICK_MS);
+        let Some(form) = self.form.as_ref() else {
+            return;
+        };
+        if self.form_entered_ms.is_none() {
+            return;
+        }
+        self.form_active_ms += TICK_MS;
+        let mut due = Vec::new();
+        for (i, (interval, proc_)) in form.periodic.iter().enumerate() {
+            if self.form_periodic_due[i] <= self.current_time_ms {
+                self.form_periodic_due[i] += (*interval).max(TICK_MS);
+                due.push(proc_.clone());
+            }
+        }
+        self.form_pool -= form.drain_per_second * TICK_MS as f64 / 1_000.0;
+        for proc_ in &due {
+            self.fire_form_proc(proc_);
+        }
+        if self.form_pool <= 0.0 {
+            self.form_pool = 0.0;
+            self.exit_form(false);
+        }
+    }
+
+    /// Best ready priority on bar `set` (its auto-attacks included), and
+    /// whether any ready skill there is not an auto-attack.
+    fn bar_best(&self, set: u8, power: f64) -> (f64, bool) {
+        let (effective_power, crit_factor) = self.strike_terms(power);
+        let mut best = 0.0f64;
+        let mut non_auto_ready = false;
+        for (i, skill) in self.skills.iter().enumerate() {
+            if skill.weapon_set != set || self.skill_states[i].cooldown_remaining_ms > 0 {
+                continue;
+            }
+            let priority = self.priority(i, effective_power, crit_factor);
+            if priority <= 0.0 {
+                continue;
+            }
+            best = best.max(priority);
+            if !(skill.slot == SkillSlot::Weapon1 && skill.cooldown_ms == 0) {
+                non_auto_ready = true;
+            }
+        }
+        (best, non_auto_ready)
+    }
+
+    /// Enter or leave the form per the [`FormSpec`] policy.
+    fn decide_form(&mut self, power: f64) {
+        let Some(form) = self.form.as_ref() else {
+            return;
+        };
+        let (form_best, form_non_auto) = self.bar_best(super::SHROUD_SET, power);
+        if self.form_entered_ms.is_some() {
+            let (weapon_best, weapon_non_auto) = self.bar_best(self.weapon_set_before_form, power);
+            if !form_non_auto && weapon_non_auto && weapon_best > form_best {
+                self.exit_form(true);
+            }
+            return;
+        }
+        let full = self.form_pool >= form.pool_cap - 1e-9;
+        if self.form_recharge_ms > 0
+            || self.form_pool <= 0.0
+            || self.form_pool < form.entry_floor
+            || form_best <= 0.0
+        {
+            return;
+        }
+        let (weapon_best, _) = self.bar_best(self.active_weapon_set, power);
+        if full || form_best > weapon_best {
+            self.enter_form();
+        }
+    }
+
+    fn enter_form(&mut self) {
+        let Some(form) = self.form.as_ref() else {
+            return;
+        };
+        let on_enter = form.on_enter.clone();
+        let entry = form.entry_skill_id;
+        self.form_periodic_due = vec![self.current_time_ms; form.periodic.len()];
+        self.weapon_set_before_form = self.active_weapon_set;
+        self.active_weapon_set = super::SHROUD_SET;
+        self.form_entered_ms = Some(self.current_time_ms);
+        *self.skill_casts.entry(entry).or_insert(0) += 1;
+        // Entry is instant, like a weapon swap.
+        self.next_action_ms = self.current_time_ms.saturating_add(MIN_SKILL_GAP_MS);
+        for proc_ in &on_enter {
+            self.fire_form_proc(proc_);
+        }
+    }
+
+    /// Leave the form: `voluntary` is the exit skill (keeps
+    /// `exit_keep` of the pool), else the pool ran dry.
+    fn exit_form(&mut self, voluntary: bool) {
+        let Some(form) = self.form.as_ref() else {
+            return;
+        };
+        if self.form_entered_ms.is_none() {
+            return;
+        }
+        let on_exit = form.on_exit.clone();
+        let keep = form.exit_keep;
+        let recharge = form.recharge_ms;
+        // Exit records fire while the form still stands.
+        for proc_ in &on_exit {
+            self.fire_form_proc(proc_);
+        }
+        self.form_entered_ms = None;
+        self.active_weapon_set = self.weapon_set_before_form;
+        self.form_recharge_ms = recharge;
+        if voluntary {
+            self.form_pool *= keep;
+            self.next_action_ms = self.current_time_ms.saturating_add(MIN_SKILL_GAP_MS);
+        }
+    }
+
+    fn fire_form_proc(&mut self, proc_: &FormProc) {
+        match proc_ {
+            FormProc::Buff {
+                name,
+                stacks,
+                duration_ms,
+                ally,
+            } => {
+                let kind = buff_kind(name);
+                let slot = self.buff_slot(name);
+                let remaining_ms = (*duration_ms as f64 * self.params.boon_duration_mult).round();
+                for _ in 0..*stacks {
+                    self.buffs.push(BuffInstance {
+                        remaining_ms: remaining_ms as u32,
+                        kind,
+                        slot,
+                        ally_facing: *ally,
+                    });
+                }
+            }
+            FormProc::Gain(amount) => self.gain_form_pool(*amount, true),
+        }
+    }
+
+    /// Fire every [`FormSpec::triggered`] record `event` admits that is off
+    /// its internal cooldown and in the form state it asks for.
+    fn fire_triggered(&mut self, event: ProcEvent<'_>) {
+        let Some(form) = self.form.as_ref() else {
+            return;
+        };
+        let in_form = self.form_entered_ms.is_some();
+        let mut due = Vec::new();
+        for (i, triggered) in form.triggered.iter().enumerate() {
+            let admits = match (&triggered.on, &event) {
+                (ProcTrigger::SkillUse(scope), ProcEvent::Cast(idx)) => {
+                    super::wvw_timeline::skill_scope_admits(scope, &self.skills[*idx], &self.skills)
+                }
+                (ProcTrigger::ConditionApplied(want), ProcEvent::Condition(name)) => want
+                    .as_deref()
+                    .is_none_or(|want| super::wvw_timeline::foe_condition_name_eq(name, want)),
+                _ => false,
+            };
+            if !admits
+                || self.triggered_ready_ms[i] > self.current_time_ms
+                || triggered.in_form.is_some_and(|want| want != in_form)
+            {
+                continue;
+            }
+            self.triggered_ready_ms[i] = self.current_time_ms.saturating_add(triggered.icd_ms);
+            due.push(triggered.proc_.clone());
+        }
+        for proc_ in &due {
+            self.fire_form_proc(proc_);
+        }
+    }
+
+    /// Credit the form pool; `from_proc` gains land even in a form that
+    /// gains nothing from attacks (a trait says so explicitly).
+    fn gain_form_pool(&mut self, amount: f64, from_proc: bool) {
+        let Some(form) = self.form.as_ref() else {
+            return;
+        };
+        if amount <= 0.0 || (!from_proc && self.form_entered_ms.is_some() && !form.gains_in_form) {
+            return;
+        }
+        self.form_pool = (self.form_pool + amount).min(form.pool_cap);
+    }
+
+    /// Pool a skill's strike or cast earns: `(on use, per strike)`.
+    fn form_gain_for(&self, skill_id: u32) -> (f64, f64) {
+        let Some(form) = self.form.as_ref() else {
+            return (0.0, 0.0);
+        };
+        let (on_use, per_hit) = form
+            .skill_gains
+            .iter()
+            .find(|(id, _, _)| *id == skill_id)
+            .map(|(_, on_use, per_hit)| (*on_use, *per_hit))
+            .unwrap_or((0.0, 0.0));
+        (on_use, per_hit + form.gain_per_strike)
+    }
+
     /// Perform a weapon swap.
     fn weapon_swap(&mut self) {
         self.active_weapon_set = if self.active_weapon_set == 1 { 2 } else { 1 };
@@ -723,6 +1072,8 @@ impl SimState {
             self.total_strike_damage += damage;
             *self.skill_damage.entry(hit.skill_id).or_insert(0.0) += damage;
             self.apply_dummy_damage(damage);
+            let (_, per_hit) = self.form_gain_for(hit.skill_id);
+            self.gain_form_pool(per_hit, false);
         }
     }
 
@@ -740,6 +1091,9 @@ impl SimState {
 
         // Record the cast
         *self.skill_casts.entry(skill_id).or_insert(0) += 1;
+        let (on_use, _) = self.form_gain_for(skill_id);
+        self.gain_form_pool(on_use, false);
+        self.fire_triggered(ProcEvent::Cast(idx));
 
         // E3: profession attune skills mutate shared AttunementState + bus.
         if super::attunement::apply_attunement_skill(
@@ -789,6 +1143,7 @@ impl SimState {
                         self.current_time_ms,
                         cap as u32,
                     );
+                    self.fire_triggered(ProcEvent::Condition(condition));
                 }
                 SkillEffect::ApplyBuff {
                     buff,
@@ -808,6 +1163,7 @@ impl SimState {
                         self.current_time_ms,
                         cap as u32,
                     );
+                    self.fire_triggered(ProcEvent::Condition(buff));
                 }
                 SkillEffect::ApplyBuff {
                     buff,
@@ -881,7 +1237,9 @@ impl SimState {
                     // Cleanse effects are tracked at the roster level (cleanse_count / cleanse_rate_per_20s),
                     // not as in-sim condition deletion (no enemy condi bar).
                 }
-                SkillEffect::CrowdControl { duration_ms, .. } => {
+                SkillEffect::CrowdControl {
+                    kind, duration_ms, ..
+                } => {
                     // Non-overlapping disabled time; nothing lands through
                     // Stability. Same landed-disable emit as the WvW timeline.
                     let added = super::trigger_bus::land_foe_disable(
@@ -891,6 +1249,11 @@ impl SimState {
                         *duration_ms,
                     );
                     self.control_ms += added as f64;
+                    // Fear and Taunt are conditions too (wiki `Fear`), as
+                    // the WvW timeline's `apply_outgoing_condition` has it.
+                    if matches!(kind, super::ControlKind::Fear | super::ControlKind::Taunt) {
+                        self.fire_triggered(ProcEvent::Condition(&format!("{kind:?}")));
+                    }
                 }
                 SkillEffect::ConvertConditions
                 | SkillEffect::Cover { .. }
@@ -1206,6 +1569,21 @@ impl SimState {
                 (name.clone(), fraction.min(1.0))
             })
             .collect();
+        let buff_presence_per_second: HashMap<String, Vec<bool>> = self
+            .buff_slots
+            .iter()
+            .zip(&self.buff_active_ms)
+            .enumerate()
+            .filter(|(_, (_, ms))| **ms > 0)
+            .map(|(slot, (name, _))| {
+                let seen = self
+                    .buff_seen_mid_second
+                    .iter()
+                    .map(|tick| tick.get(slot).copied().unwrap_or(false))
+                    .collect();
+                (name.clone(), seen)
+            })
+            .collect();
 
         // Per-skill usage
         let skill_usage: Vec<SkillUsage> = self
@@ -1317,6 +1695,8 @@ impl SimState {
             has_interrupt: kit_has_interrupt(&self.skills),
             has_cover_answer: kit_has_cover_answer(&self.skills),
             wvw: None,
+            damage_per_second: self.damage_seconds,
+            buff_presence_per_second,
         }
     }
 }
@@ -2114,6 +2494,22 @@ mod tests {
             "Bleeding uptime should be tracked"
         );
         assert!(*result.condition_uptime.get("Bleeding").unwrap() > 0.0);
+    }
+
+    #[test]
+    fn per_second_capture_adds_up_to_the_totals() {
+        let skills = vec![auto_attack(), weapon_skill(), buff_skill()];
+        let r = simulate(&skills, 10_000, 2000.0, 1500.0, 1100.0);
+        assert_eq!(r.damage_per_second.len(), 10);
+        let strike: f64 = r.damage_per_second.iter().map(|(s, _)| s).sum();
+        let condi: f64 = r.damage_per_second.iter().map(|(_, c)| c).sum();
+        assert!((strike / 10.0 - r.strike_dps).abs() < 1e-6);
+        assert!((condi / 10.0 - r.condition_dps).abs() < 1e-6);
+        // Midpoint samples agree with the tick-counted uptime to a second.
+        let might = &r.buff_presence_per_second["Might"];
+        assert_eq!(might.len(), 10);
+        let sampled = might.iter().filter(|&&p| p).count() as f64 / 10.0;
+        assert!((sampled - r.buff_uptime["Might"]).abs() <= 0.1 + 1e-9);
     }
 
     #[test]
@@ -3808,5 +4204,493 @@ mod tests {
             auto_with.abs_diff(auto_without) <= 1,
             "autos with attunes ({auto_with}) must stay within 1 of autos-only ({auto_without})"
         );
+    }
+
+    // Forms (sprint 008, shroud / Celestial Avatar in the flow simulation)
+
+    fn bar_skill(
+        id: u32,
+        name: &str,
+        slot: SkillSlot,
+        set: u8,
+        cast_time_ms: u32,
+        cooldown_ms: u32,
+        effects: Vec<SkillEffect>,
+    ) -> RotationSkill {
+        RotationSkill {
+            targets: 1,
+            categories: Vec::new(),
+            slot_name: None,
+            skill_id: id,
+            name: name.into(),
+            slot,
+            cast_time_ms,
+            cooldown_ms,
+            effects,
+            next_chain: None,
+            is_stunbreak: false,
+            reaches_allies: false,
+            weapon_set: set,
+        }
+    }
+
+    fn strike(hit_count: u32, dmg_multiplier: f64) -> Vec<SkillEffect> {
+        vec![SkillEffect::StrikeDamage {
+            hit_count,
+            dmg_multiplier,
+        }]
+    }
+
+    const FORM_ENTRY: u32 = 900;
+
+    /// A 100-point pool that lasts 10 s, 10 s recharge, no gains.
+    fn test_form(initial_pool: f64) -> FormSpec {
+        FormSpec {
+            name: "Test Form".into(),
+            entry_skill_id: FORM_ENTRY,
+            pool_cap: 100.0,
+            initial_pool,
+            entry_floor: 10.0,
+            drain_per_second: 10.0,
+            recharge_ms: 10_000,
+            gains_in_form: true,
+            exit_keep: 1.0,
+            ..Default::default()
+        }
+    }
+
+    fn run_form_sim(skills: &[RotationSkill], duration_ms: u32, form: FormSpec) -> SimState {
+        let mut params = SimParams::basic(2_000.0, 0.0, 1_000.0);
+        params.form = Some(form);
+        let mut sim = SimState::new(
+            skills,
+            duration_ms,
+            TargetState::from_seed(EnemyDummy::open()),
+            params,
+        );
+        sim.run();
+        sim
+    }
+
+    fn casts(sim: &SimState, id: u32) -> u32 {
+        sim.skill_casts.get(&id).copied().unwrap_or(0)
+    }
+
+    #[test]
+    fn a_full_pool_enters_the_form_and_an_empty_one_leaves_it() {
+        let skills = vec![
+            bar_skill(
+                1,
+                "Weapon Auto",
+                SkillSlot::Weapon1,
+                1,
+                500,
+                0,
+                strike(1, 1.0),
+            ),
+            bar_skill(
+                2,
+                "Form Auto",
+                SkillSlot::Weapon1,
+                crate::rotation::SHROUD_SET,
+                500,
+                0,
+                strike(1, 0.5),
+            ),
+        ];
+        let sim = run_form_sim(&skills, 30_000, test_form(100.0));
+        // Full pool: entered at once although the form's auto is weaker;
+        // 100 points at 10/s is 10 s; no gains, so no second entry.
+        assert_eq!(casts(&sim, FORM_ENTRY), 1);
+        assert_eq!(sim.form_active_ms, 10_000);
+        assert!(sim.form_entered_ms.is_none());
+        assert_eq!(sim.form_pool, 0.0);
+        assert_eq!(sim.active_weapon_set, 1, "the weapon bar comes back");
+        assert!(casts(&sim, 1) > 0 && casts(&sim, 2) > 0);
+    }
+
+    #[test]
+    fn the_weapon_bar_is_stowed_while_in_the_form() {
+        let skills = vec![
+            bar_skill(
+                1,
+                "Weapon Auto",
+                SkillSlot::Weapon1,
+                1,
+                500,
+                0,
+                strike(1, 1.0),
+            ),
+            bar_skill(
+                3,
+                "Weapon Burst",
+                SkillSlot::Weapon2,
+                1,
+                500,
+                4_000,
+                strike(1, 9.0),
+            ),
+            bar_skill(
+                4,
+                "Swap Skill",
+                SkillSlot::Weapon2,
+                2,
+                500,
+                4_000,
+                strike(1, 9.0),
+            ),
+            // Always ready and not an auto: the form never runs out of a
+            // reason to stay, so only the stowing rule keeps the far
+            // stronger weapon skills off the bar.
+            bar_skill(
+                2,
+                "Form Skill",
+                SkillSlot::Weapon2,
+                crate::rotation::SHROUD_SET,
+                500,
+                0,
+                strike(1, 0.5),
+            ),
+        ];
+        // The pool outlasts the window: nothing from sets 1 or 2 is cast
+        // and no weapon swap happens.
+        let sim = run_form_sim(&skills, 8_000, test_form(100.0));
+        assert_eq!(casts(&sim, FORM_ENTRY), 1);
+        assert_eq!(casts(&sim, 1) + casts(&sim, 3) + casts(&sim, 4), 0);
+        assert!(casts(&sim, 2) >= 10);
+        assert_eq!(sim.active_weapon_set, crate::rotation::SHROUD_SET);
+    }
+
+    #[test]
+    fn the_form_needs_its_entry_floor_and_fills_from_strikes() {
+        let skills = vec![
+            bar_skill(
+                1,
+                "Weapon Auto",
+                SkillSlot::Weapon1,
+                1,
+                500,
+                0,
+                strike(1, 1.0),
+            ),
+            bar_skill(
+                2,
+                "Form Auto",
+                SkillSlot::Weapon1,
+                crate::rotation::SHROUD_SET,
+                500,
+                0,
+                strike(1, 2.0),
+            ),
+        ];
+        let mut form = test_form(0.0);
+        form.entry_floor = 30.0;
+        // Below the floor the better form bar stays stowed.
+        let empty = run_form_sim(&skills, 30_000, form.clone());
+        assert_eq!(casts(&empty, FORM_ENTRY), 0);
+        assert_eq!(casts(&empty, 2), 0);
+        // 10 per landed strike: the third weapon hit meets the floor and
+        // the better form bar is taken; no gains inside (astral force).
+        form.gain_per_strike = 10.0;
+        form.gains_in_form = false;
+        let filled = run_form_sim(&skills, 3_000, form);
+        assert_eq!(casts(&filled, FORM_ENTRY), 1);
+        assert_eq!(casts(&filled, 1), 3);
+        assert!(casts(&filled, 2) > 0);
+    }
+
+    #[test]
+    fn the_exit_skill_leaves_early_and_keeps_its_share_of_the_pool() {
+        let skills = vec![
+            bar_skill(
+                1,
+                "Weapon Auto",
+                SkillSlot::Weapon1,
+                1,
+                500,
+                0,
+                strike(1, 1.0),
+            ),
+            bar_skill(
+                3,
+                "Weapon Burst",
+                SkillSlot::Weapon2,
+                1,
+                500,
+                20_000,
+                strike(1, 6.0),
+            ),
+            bar_skill(
+                2,
+                "Form Auto",
+                SkillSlot::Weapon1,
+                crate::rotation::SHROUD_SET,
+                500,
+                0,
+                strike(1, 0.5),
+            ),
+            bar_skill(
+                5,
+                "Form Burst",
+                SkillSlot::Weapon2,
+                crate::rotation::SHROUD_SET,
+                500,
+                20_000,
+                strike(1, 9.0),
+            ),
+        ];
+        let mut form = test_form(100.0);
+        form.exit_keep = 0.5;
+        let sim = run_form_sim(&skills, 2_000, form);
+        // In at 0 (full), Form Burst, then the form has only its auto and
+        // Weapon Burst outranks it: the exit skill, 50 % of the pool kept.
+        assert_eq!(casts(&sim, FORM_ENTRY), 1);
+        assert_eq!(casts(&sim, 5), 1);
+        assert_eq!(casts(&sim, 3), 1);
+        assert!(sim.form_entered_ms.is_none());
+        assert!(sim.form_active_ms < 1_000, "{}", sim.form_active_ms);
+        assert!(
+            (40.0..50.0).contains(&sim.form_pool),
+            "half of ~93 kept: {}",
+            sim.form_pool
+        );
+    }
+
+    #[test]
+    fn form_trait_records_fire_on_entry_exit_and_on_their_period() {
+        let skills = vec![
+            bar_skill(
+                1,
+                "Weapon Auto",
+                SkillSlot::Weapon1,
+                1,
+                500,
+                0,
+                strike(1, 1.0),
+            ),
+            bar_skill(
+                2,
+                "Form Auto",
+                SkillSlot::Weapon1,
+                crate::rotation::SHROUD_SET,
+                500,
+                0,
+                strike(1, 0.5),
+            ),
+        ];
+        let buff = |name: &str, stacks: u32, duration_ms: u32| FormProc::Buff {
+            name: name.into(),
+            stacks,
+            duration_ms,
+            ally: false,
+        };
+        let mut form = test_form(100.0);
+        form.on_enter = vec![buff("Might", 5, 5_000)];
+        form.on_exit = vec![buff("Fury", 1, 4_000), FormProc::Gain(20.0)];
+        form.periodic = vec![(3_000, buff("Quickness", 1, 3_000))];
+        let sim = run_form_sim(&skills, 20_000, form);
+        let result = sim.into_result();
+        // Might 5 stacks for 5 s of 20 s; Quickness every 3 s through the
+        // 10 s form (0, 3, 6, 9 s: covered to 12 s); Fury 4 s after exit.
+        assert!((result.might_stacks_avg - 5.0 * 5.0 / 20.0).abs() < 0.05);
+        assert!((result.buff_uptime["Quickness"] - 12.0 / 20.0).abs() < 0.01);
+        assert!((result.buff_uptime["Fury"] - 4.0 / 20.0).abs() < 0.01);
+    }
+
+    /// `OnSkillUse` / `OnConditionApplied` records ride on the form: a
+    /// `Shroud_1` scope admits the form bar's slot 1 only (not the weapon
+    /// auto in the same slot), a Fear scope fires on a landed fear, and the
+    /// `in_shroud` prerequisite and the internal cooldown hold.
+    #[test]
+    fn triggered_trait_records_fire_on_their_scope_only() {
+        use crate::data::normalized_effects::TriggerScope;
+        let buff = |name: &str, duration_ms: u32| FormProc::Buff {
+            name: name.into(),
+            stacks: 1,
+            duration_ms,
+            ally: false,
+        };
+        let mut weapon_auto = bar_skill(
+            1,
+            "Weapon Auto",
+            SkillSlot::Weapon1,
+            1,
+            500,
+            0,
+            strike(1, 1.0),
+        );
+        weapon_auto.slot_name = Some("Weapon_1".into());
+        let mut form_auto = bar_skill(
+            2,
+            "Form Auto",
+            SkillSlot::Weapon1,
+            crate::rotation::SHROUD_SET,
+            500,
+            0,
+            strike(1, 0.5),
+        );
+        form_auto.slot_name = Some("Weapon_1".into());
+        let mut fear = strike(1, 10.0);
+        fear.push(SkillEffect::CrowdControl {
+            kind: crate::rotation::ControlKind::Fear,
+            duration_ms: 1_000,
+            stops_dodge: true,
+        });
+        let fear_skill = bar_skill(3, "Fear", SkillSlot::Utility, 0, 500, 30_000, fear);
+        let skills = vec![weapon_auto, form_auto, fear_skill];
+        let triggered = |on, in_form, proc_| TriggeredProc {
+            on,
+            icd_ms: 1_000,
+            in_form,
+            proc_,
+        };
+        let form = |initial_pool| {
+            let mut form = test_form(initial_pool);
+            form.triggered = vec![
+                triggered(
+                    ProcTrigger::SkillUse(TriggerScope::Slot("Shroud_1".into())),
+                    None,
+                    buff("Might", 15_000),
+                ),
+                triggered(
+                    ProcTrigger::ConditionApplied(Some("Fear".into())),
+                    None,
+                    buff("Quickness", 5_000),
+                ),
+                triggered(
+                    ProcTrigger::ConditionApplied(Some("Fear".into())),
+                    Some(true),
+                    buff("Fury", 5_000),
+                ),
+                triggered(
+                    ProcTrigger::ConditionApplied(Some("Chilled".into())),
+                    None,
+                    buff("Protection", 5_000),
+                ),
+            ];
+            form
+        };
+
+        // Never enters the form: the weapon auto is not shroud skill 1 and
+        // the in-form Fury stays shut; the one fear gives 5 s of Quickness.
+        let result = run_form_sim(&skills, 20_000, form(0.0)).into_result();
+        assert_eq!(result.might_stacks_avg, 0.0);
+        assert!((result.buff_uptime["Quickness"] - 5.0 / 20.0).abs() < 0.01);
+        assert!(!result.buff_uptime.contains_key("Fury"));
+        assert!(!result.buff_uptime.contains_key("Protection"));
+
+        // Full pool: the form's auto fires Might (one stack per second at
+        // the 1 s cooldown), and the fear cast in the form opens Fury.
+        let result = run_form_sim(&skills, 20_000, form(100.0)).into_result();
+        assert!(result.might_stacks_avg > 1.0, "{}", result.might_stacks_avg);
+        assert!((result.buff_uptime["Fury"] - 5.0 / 20.0).abs() < 0.01);
+    }
+
+    /// Reaper's Shroud with the shipped numbers: `data/formulas/shroud.json`
+    /// (wiki `Life force`: pool 69 % of health; wiki `Reaper's Shroud`: 4 %
+    /// per second in PvE, 10 s recharge on exit, read 2026-09-08). A full
+    /// pool at 20,000 health is 13,800 life force and lasts 25 s. The bar
+    /// is the API's (skills 29442, 30825, 30504, 30557 as the builder
+    /// prepares them, Executioner's Scythe with its wiki 1.25 s activation
+    /// and 30 s recharge); the weapon bar is an auto only, so nothing
+    /// outranks the shroud and it runs until the pool is dry.
+    #[test]
+    fn reaper_fixture_pins_shroud_time_and_casts_to_the_wiki_numbers() {
+        let table = crate::data::shroud::table();
+        let row = table.row(30792).expect("Reaper's Shroud row");
+        let cap = table.pool_for(20_000.0);
+        let form = FormSpec {
+            name: row.name.clone(),
+            entry_skill_id: 30792,
+            pool_cap: cap,
+            initial_pool: cap,
+            entry_floor: table.entry_floor_pct / 100.0 * cap,
+            drain_per_second: row
+                .drain_pct_per_s
+                .as_ref()
+                .unwrap()
+                .for_mode(GameMode::PvE)
+                / 100.0
+                * cap,
+            recharge_ms: (table.recharge_on_exit_s * 1_000.0) as u32,
+            gains_in_form: true,
+            exit_keep: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(cap, 13_800.0);
+        assert_eq!(form.drain_per_second, 552.0);
+        let skills = vec![
+            bar_skill(
+                29_421,
+                "Greatsword Auto",
+                SkillSlot::Weapon1,
+                1,
+                500,
+                0,
+                strike(1, 0.8),
+            ),
+            bar_skill(
+                29_442,
+                "Life Rend",
+                SkillSlot::Weapon1,
+                crate::rotation::SHROUD_SET,
+                500,
+                0,
+                strike(1, 1.4),
+            ),
+            bar_skill(
+                30_825,
+                "Death's Charge",
+                SkillSlot::Weapon2,
+                crate::rotation::SHROUD_SET,
+                250,
+                6_000,
+                vec![
+                    SkillEffect::StrikeDamage {
+                        hit_count: 9,
+                        dmg_multiplier: 0.25,
+                    },
+                    SkillEffect::StrikeDamage {
+                        hit_count: 1,
+                        dmg_multiplier: 1.625,
+                    },
+                ],
+            ),
+            bar_skill(
+                30_504,
+                "Soul Spiral",
+                SkillSlot::Weapon4,
+                crate::rotation::SHROUD_SET,
+                500,
+                30_000,
+                strike(12, 0.7),
+            ),
+            bar_skill(
+                30_557,
+                "Executioner's Scythe",
+                SkillSlot::Weapon5,
+                crate::rotation::SHROUD_SET,
+                1_250,
+                30_000,
+                strike(1, 4.0),
+            ),
+        ];
+        let sim = run_form_sim(&skills, 60_000, form);
+        // One entry, 25 s in shroud, then no life force to come back with.
+        assert_eq!(casts(&sim, 30_792), 1);
+        assert!(
+            (25_000..=25_100).contains(&sim.form_active_ms),
+            "{}",
+            sim.form_active_ms
+        );
+        // 30 s recharges: once each in the 25 s window. Death's Charge's
+        // 6 s recharge (API) runs from each cast, and each comes up
+        // mid-cast of something else (Soul Spiral first at 0 s, then it
+        // at 0.7 s, 6.7+, 12.7+, 18.7+): the fifth would land past 25 s.
+        assert_eq!(casts(&sim, 30_557), 1);
+        assert_eq!(casts(&sim, 30_504), 1);
+        assert_eq!(casts(&sim, 30_825), 4);
+        assert!(casts(&sim, 29_442) > 20);
+        assert!(casts(&sim, 29_421) > 40);
     }
 }

@@ -3563,48 +3563,13 @@ impl<'a> Timeline<'a> {
     ) -> bool {
         match scope {
             crate::data::normalized_effects::TriggerScope::Any => true,
-            crate::data::normalized_effects::TriggerScope::WeaponSkillWithRecharge => skill_id
-                .and_then(|id| self.skills.iter().find(|s| s.skill_id == id))
-                .is_some_and(|s| s.weapon_set != 0 && s.cooldown_ms > 0),
-            // Sprint 3 (US2): trait-owned skill-use by category or slot, and
-            // the status name of the trigger in progress.
-            crate::data::normalized_effects::TriggerScope::Category(category) => skill_id
-                .and_then(|id| self.skills.iter().find(|s| s.skill_id == id))
-                .is_some_and(|s| {
-                    s.categories
-                        .iter()
-                        .any(|c| c.eq_ignore_ascii_case(category))
-                }),
-            crate::data::normalized_effects::TriggerScope::Slot(slot) => skill_id
-                .and_then(|id| self.skills.iter().find(|s| s.skill_id == id))
-                .is_some_and(|s| {
-                    // `Shroud_N`: the Nth skill of the shroud bar (wiki
-                    // "shroud skill N"); otherwise the slot head before `_`.
-                    if let Some(n) = slot.strip_prefix("Shroud_") {
-                        // wiki `Shade`: a Scourge has no shroud bar and its
-                        // shade skills (F1..F5) count as its shroud skills.
-                        let has_shroud_bar = self
-                            .skills
-                            .iter()
-                            .any(|k| k.weapon_set == super::SHROUD_SET);
-                        let (set, head) = if has_shroud_bar {
-                            (super::SHROUD_SET, "Weapon")
-                        } else {
-                            (s.weapon_set, "Profession")
-                        };
-                        return s.weapon_set == set
-                            && s.slot_name.as_deref() == Some(format!("{head}_{n}").as_str());
-                    }
-                    s.slot_name.as_deref().is_some_and(|name| {
-                        name.split('_')
-                            .next()
-                            .is_some_and(|head| head.eq_ignore_ascii_case(slot))
-                    })
-                }),
             crate::data::normalized_effects::TriggerScope::Status(status) => self
                 .trigger_status
                 .as_deref()
                 .is_some_and(|name| name.eq_ignore_ascii_case(status)),
+            _ => skill_id
+                .and_then(|id| self.skills.iter().find(|s| s.skill_id == id))
+                .is_some_and(|s| skill_scope_admits(scope, s, self.skills)),
         }
     }
 
@@ -4782,8 +4747,51 @@ fn strike_crit_factor_with_crit_damage(
     1.0 + chance * (crit_mult - 1.0)
 }
 
+/// Whether a cast of `skill` counts for a skill-use `scope`. `skills` is the
+/// whole bar (a `Shroud_N` scope reads whether the build has a shroud bar).
+/// `Status` is a status-trigger scope, never a skill-use one. Shared by the
+/// timeline and the flow simulation so the two cannot disagree.
+pub(crate) fn skill_scope_admits(
+    scope: &crate::data::normalized_effects::TriggerScope,
+    skill: &RotationSkill,
+    skills: &[RotationSkill],
+) -> bool {
+    use crate::data::normalized_effects::TriggerScope;
+    match scope {
+        TriggerScope::Any => true,
+        TriggerScope::WeaponSkillWithRecharge => skill.weapon_set != 0 && skill.cooldown_ms > 0,
+        // Sprint 3 (US2): trait-owned skill-use by category or slot.
+        TriggerScope::Category(category) => skill
+            .categories
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(category)),
+        TriggerScope::Slot(slot) => {
+            // `Shroud_N`: the Nth skill of the shroud bar (wiki
+            // "shroud skill N"); otherwise the slot head before `_`.
+            if let Some(n) = slot.strip_prefix("Shroud_") {
+                // wiki `Shade`: a Scourge has no shroud bar and its
+                // shade skills (F1..F5) count as its shroud skills.
+                let has_shroud_bar = skills.iter().any(|k| k.weapon_set == super::SHROUD_SET);
+                let (set, head) = if has_shroud_bar {
+                    (super::SHROUD_SET, "Weapon")
+                } else {
+                    (skill.weapon_set, "Profession")
+                };
+                return skill.weapon_set == set
+                    && skill.slot_name.as_deref() == Some(format!("{head}_{n}").as_str());
+            }
+            skill.slot_name.as_deref().is_some_and(|name| {
+                name.split('_')
+                    .next()
+                    .is_some_and(|head| head.eq_ignore_ascii_case(slot))
+            })
+        }
+        TriggerScope::Status(_) => false,
+    }
+}
+
 /// Alias-safe compare of a stored foe-condition name against a prerequisite.
-fn foe_condition_name_eq(stored: &str, want: &str) -> bool {
+pub(crate) fn foe_condition_name_eq(stored: &str, want: &str) -> bool {
     stored.eq_ignore_ascii_case(want)
         || crate::data::boon_condition_formulas::canonical_condition_name(stored)
             .eq_ignore_ascii_case(
@@ -6603,6 +6611,8 @@ mod tests {
             finished: report.target_reached,
             has_interrupt: true,
             has_cover_answer: true,
+            damage_per_second: Vec::new(),
+            buff_presence_per_second: Default::default(),
             wvw: Some(report),
         };
         let combat = CombatPerformance {

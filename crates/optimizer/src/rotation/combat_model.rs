@@ -499,6 +499,12 @@ impl EnemyDummy {
     }
 }
 
+/// How much a skill belongs in the flow simulation's opening: what it does
+/// to the foe (lock, strip, interrupt). Self-cover (Stability, Blind,
+/// Aegis, stealth) is not a setup reason there: the flow dummy never
+/// attacks, so an opening spent on it defends nothing and delays the first
+/// strike (CONN-01-05; re-found in sprint 008 once the shroud bar, with
+/// Infusing Terror, was live at t=0).
 pub fn setup_priority(skill: &RotationSkill) -> u32 {
     let mut p = 0u32;
     for e in &skill.effects {
@@ -509,13 +515,9 @@ pub fn setup_priority(skill: &RotationSkill) -> u32 {
             SkillEffect::StripBoons { .. }
             | SkillEffect::StealBoons
             | SkillEffect::CorruptBoons => 90,
-            SkillEffect::Cover { .. } => 80,
             SkillEffect::CrowdControl {
                 stops_dodge: false, ..
             } => 70,
-            SkillEffect::Mobility {
-                kind: MobilityKind::Stealth,
-            } => 60,
             _ => 0,
         });
     }

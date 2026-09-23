@@ -107,7 +107,8 @@ fn main() {
         Err(e) => fail(&format!("no addons_dir in dev.cfg ({e})")),
     };
     let corpus = gw2_optimizer::scraper::load_benchmarks(&addon_dir);
-    let cache = gw2_api::cache::DataCache::new(addon_dir.join("cache"));
+    let cache_dir = addon_dir.join("cache");
+    let cache = gw2_api::cache::DataCache::new(&cache_dir);
     let db = GameDb::load(&cache).unwrap_or_else(|e| {
         fail(&format!(
             "game data not cached ({e}) — sync it in-game first"
@@ -133,7 +134,7 @@ fn main() {
             .into_iter()
             .collect();
         codes.extend(cli_codes.iter().cloned());
-        let rows = compare::compare_log(&name, &log, &codes, &corpus, &db);
+        let rows = compare::compare_log(&name, &log, &codes, Some(&cache_dir), &corpus, &db);
         println!(
             "\n## {name} ({:?}, {:?}, {} squad players)\n",
             log.mode(),

@@ -1671,6 +1671,8 @@ mod tests {
             finished: true,
             has_interrupt: true,
             has_cover_answer: true,
+            damage_per_second: Vec::new(),
+            buff_presence_per_second: HashMap::new(),
             wvw: Some(WvwCombatReport {
                 duration_ms: 5_000,
                 target_health: Some(18_000.0),
@@ -4552,15 +4554,17 @@ coverage: {:?}",
         // boon_support and healing are ALLY-FACING (see `realized_axes`):
         // this Reaper buffs and heals only itself, so both are zero where
         // they used to count its own Might and its own heal. The intent
-        // score moves with them.
+        // score moves with them. Re-pinned in sprint 008 (forms): the flow
+        // now plays the fixture's shroud, whose invented bar strikes softer
+        // than its greatsword and controls less.
         const PINNED: [f64; 7] = [
-            0.026692371089119985,
+            0.026640683025287,
             0.0,
             0.0,
             0.0,
             0.4302897574123989,
-            0.05722222222222222,
-            0.0799838072269097,
+            0.05444444444444444,
+            0.07964220380336308,
         ];
         for (i, (g, p)) in got.iter().zip(&PINNED).enumerate() {
             assert!(
@@ -4604,6 +4608,10 @@ coverage: {:?}",
         // stability skill. With the fixture's shroud bar moved to the shroud
         // set (Sprint 2, T053) the PvE simulator no longer holds Infusing
         // Terror, and a strike lands inside the window. Audit section 8.
+        // Sprint 008 (forms): the shroud bar is live at t=0 with a full pool,
+        // and the setup priority spent the window on Infusing Terror's
+        // stability again; self-cover no longer earns setup priority
+        // (`setup_priority`), so a strike lands inside the window.
         assert!(
             rotation.total_dps > 0.0,
             "gate-sim DPS in the 2 s PvE Solo window (CONN-01-05, re-recorded in Sprint 2)"

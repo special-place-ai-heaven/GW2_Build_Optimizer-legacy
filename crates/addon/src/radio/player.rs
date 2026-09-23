@@ -19,6 +19,14 @@
 //! the public entry points safe to call from the render thread even while the
 //! STATE mutex is held (they never lock STATE on the calling thread).
 //!
+//! Each connection gets one decode thread (`gw2bo-radio-decode`, owned by the
+//! audio-owner thread through [`Decoding`]) that reads the network stream,
+//! decodes it, and appends ~[`CHUNK`] PCM buffers to the player, keeping
+//! ~[`QUEUE_TARGET`] queued. The cpal output callback therefore only reads
+//! memory: a slow network read starves the queue, never the callback.
+//! Dropping the [`Decoding`] halts the thread, cancels the download and waits
+//! for it (bounded by [`DECODE_JOIN_BUDGET`]).
+//!
 //! ## Locking discipline
 //!
 //! [`play`], [`set_volume`], [`pause`] and [`resume`] never block: safe from
@@ -42,6 +50,7 @@ use std::time::{Duration, Instant};
 
 use gw2_core::config::SavedStation;
 use icy_metadata::{IcyHeaders, IcyMetadataReader};
+use rodio::buffer::SamplesBuffer;
 use rodio::source::SeekError;
 use rodio::{ChannelCount, Decoder, DeviceSinkBuilder, Player, Sample, SampleRate, Source};
 use stream_download::http::{reqwest, HttpStream};
@@ -62,6 +71,36 @@ const PREFETCH_BYTES: u64 = 128 * 1024;
 /// exceed [`PREFETCH_BYTES`]; ~30 s of audio at 128 kbps.
 const RING_BUFFER_BYTES: usize = 512 * 1024;
 
+/// Decoded PCM per chunk the decode thread hands the player. The output
+/// callback only ever reads these in-memory chunks, never the network.
+const CHUNK: Duration = Duration::from_millis(100);
+
+/// Decoded audio the decode thread keeps queued ahead of the output callback:
+/// the callback's cushion against a slow read, a TLS stall or a frame spike
+/// starving the decode thread.
+const QUEUE_TARGET: Duration = Duration::from_millis(2500);
+
+/// Decoded audio queued before a (re)connect starts playing, so playback
+/// never opens on a near-empty queue.
+const QUEUE_PRIME: Duration = Duration::from_secs(1);
+
+/// Cap on the priming wait; past it playback starts with what is queued.
+const PRIME_BUDGET: Duration = Duration::from_secs(5);
+
+/// Decode-thread sleep while the queue sits at [`QUEUE_TARGET`] (no spin).
+const DECODE_POLL: Duration = Duration::from_millis(20);
+
+/// Queue depth below which the decode thread counts a dip.
+const LOW_WATER: Duration = Duration::from_millis(500);
+
+/// At most one low-water log line per this interval.
+const LOW_WATER_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Bounded wait for a halted decode thread. A halt cancels the download,
+/// which wakes a read blocked on the network, so the thread normally ends in
+/// milliseconds; 50ms stop poll + this stays inside [`SHUTDOWN_JOIN_BUDGET`].
+const DECODE_JOIN_BUDGET: Duration = Duration::from_millis(300);
+
 /// Cap on establishing the TCP+TLS connection to the station.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -70,7 +109,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// subject to a request timeout.
 const HEADER_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// How often the watchdog checks the sink for an unexpected stall.
+/// How often the watchdog checks for an unexpected stall.
 const WATCHDOG_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How finely the watchdog polls the stop flag between sink checks, so
@@ -186,8 +225,8 @@ fn still_current(my_gen: u64) -> bool {
     GENERATION.load(Ordering::Acquire) == my_gen
 }
 
-/// Lock-free ring of the newest decoded mono samples: written by the audio
-/// callback thread (via [`SampleTap`]), read by the render thread (via
+/// Lock-free ring of the newest decoded mono samples: written by the decode
+/// thread (via [`SampleTap`]), read by the render thread (via
 /// [`eq_levels`]). Single writer; `cursor` counts mono samples ever written
 /// and `cursor % TAP_LEN` is the next slot. Samples are stored as f32 bits in
 /// `AtomicU32`s — a window torn by a concurrent overwrite is a one-frame
@@ -209,7 +248,7 @@ impl TapBuffer {
         })
     }
 
-    /// Audio-callback write path: two relaxed stores plus one release store —
+    /// Decode-thread write path: two relaxed stores plus one release store —
     /// wait-free, no locks, no allocation, no panic.
     fn push(&self, sample: f32) {
         let at = self.cursor.load(Ordering::Relaxed);
@@ -232,6 +271,8 @@ struct EqState {
 /// sample for the visualizer tap. It wraps the decoder BEFORE the sink
 /// applies volume gain, so bar heights track the stream itself, not the
 /// volume slider — deliberate: the visualizer stays alive at low volume.
+/// It runs on the decode thread, so the bars lead the audible audio by the
+/// queue depth (~[`QUEUE_TARGET`]).
 struct SampleTap<I> {
     input: I,
     tap: Arc<TapBuffer>,
@@ -749,7 +790,9 @@ fn run_session(
             }
         });
     };
-    match open_and_append(
+    // Declared after `player`, so every early return drops (halts) the decode
+    // thread before the player and device go away.
+    let mut decoding = match open_and_append(
         &handle,
         &station,
         &player,
@@ -758,9 +801,9 @@ fn run_session(
         &tap,
         &on_headers,
     ) {
-        Ok(()) => {}
+        Ok(decoding) => Some(decoding),
         Err(SessionEnd::Cancelled) => {
-            finish_stopped(my_gen, &player, &sink_cell);
+            finish_stopped(my_gen, None, &player, &sink_cell);
             return;
         }
         Err(SessionEnd::Failed(msg)) => {
@@ -768,7 +811,7 @@ fn run_session(
             set_error(my_gen, msg);
             return;
         }
-    }
+    };
     // Apply the stored volume through the same path the UI slider uses (the
     // published sink cell), then let it sound.
     set_volume(VOLUME_PERCENT.load(Ordering::Acquire));
@@ -796,12 +839,14 @@ fn run_session(
     })
     .unwrap_or(false);
     if !published {
-        finish_stopped(my_gen, &player, &sink_cell);
+        finish_stopped(my_gen, decoding.take(), &player, &sink_cell);
         return;
     }
 
-    // Watchdog: the sink was primed above ("stream ever started" is latched by
-    // construction), so an empty sink from here on is a stall, not warm-up.
+    // Watchdog: a stall is the decoder running dry (stream ended, connection
+    // dropped, decode error) AND the queued tail having played out. A queue
+    // that merely drains while the decoder is alive is a slow network, which
+    // the low-water log reports; it is not a stall.
     let mut last_reconnect: Option<Instant> = None;
     let mut resume_grace: u32 = 0;
     loop {
@@ -809,7 +854,7 @@ fn run_session(
         for _ in 0..ticks {
             std::thread::sleep(STOP_POLL_INTERVAL);
             if stop.load(Ordering::Acquire) {
-                finish_stopped(my_gen, &player, &sink_cell);
+                finish_stopped(my_gen, decoding.take(), &player, &sink_cell);
                 return;
             }
         }
@@ -831,7 +876,8 @@ fn run_session(
             // the reconnect below re-tunes it.
             continue;
         }
-        if player.empty() {
+        let decoder_ended = decoding.as_ref().is_none_or(Decoding::ended);
+        if is_stall(decoder_ended, player.empty()) {
             // The decoder ran dry: the stream ended or the connection dropped.
             let live = crate::state::with_state(|s| {
                 if !still_current(my_gen) {
@@ -842,7 +888,7 @@ fn run_session(
             })
             .unwrap_or(false);
             if !live {
-                finish_stopped(my_gen, &player, &sink_cell);
+                finish_stopped(my_gen, decoding.take(), &player, &sink_cell);
                 return;
             }
             if !stall_wants_reconnect(last_reconnect.map(|t| t.elapsed())) {
@@ -850,6 +896,8 @@ fn run_session(
                 set_error(my_gen, "stream keeps stalling".to_string());
                 return;
             }
+            // Reap the dry decode thread before the reconnect clears the player.
+            drop(decoding.take());
             match open_and_append(
                 &handle,
                 &station,
@@ -859,7 +907,8 @@ fn run_session(
                 &tap,
                 &on_headers,
             ) {
-                Ok(()) => {
+                Ok(fresh) => {
+                    decoding = Some(fresh);
                     // A pause can land between the stall check and this line;
                     // resume() owns sink.play() in that case.
                     if !paused.load(Ordering::Acquire) {
@@ -875,12 +924,12 @@ fn run_session(
                     })
                     .unwrap_or(false);
                     if !live {
-                        finish_stopped(my_gen, &player, &sink_cell);
+                        finish_stopped(my_gen, decoding.take(), &player, &sink_cell);
                         return;
                     }
                 }
                 Err(SessionEnd::Cancelled) => {
-                    finish_stopped(my_gen, &player, &sink_cell);
+                    finish_stopped(my_gen, None, &player, &sink_cell);
                     return;
                 }
                 Err(SessionEnd::Failed(msg)) => {
@@ -901,19 +950,21 @@ enum SessionEnd {
     Failed(String),
 }
 
-/// Connect to the station, buffer it, strip ICY metadata, decode, and append
-/// to `player`. Used for both the initial tune-in and the stall reconnect.
-/// `on_headers` fires once the server answered (the buffering phase begins) —
-/// the session uses it for the gen-gated Buffering status write.
+/// Connect to the station, buffer it, strip ICY metadata, and start the
+/// decode thread feeding `player`; returns once [`QUEUE_PRIME`] is queued (or
+/// the decoder ended, or [`PRIME_BUDGET`] passed). Used for both the initial
+/// tune-in and the stall reconnect. `on_headers` fires once the server
+/// answered (the buffering phase begins) — the session uses it for the
+/// gen-gated Buffering status write.
 fn open_and_append(
     handle: &tokio::runtime::Handle,
     station: &RbStation,
-    player: &Player,
+    player: &Arc<Player>,
     now_playing: &NowPlayingCell,
     stop: &Arc<AtomicBool>,
     tap: &Arc<TapBuffer>,
     on_headers: &dyn Fn(),
-) -> Result<(), SessionEnd> {
+) -> Result<Decoding, SessionEnd> {
     // Some directory rows resolve to a dead `url_resolved` while the raw
     // `url` still answers (playlist unwrap gone stale, CDN hop down). One
     // quiet fallback to the other URL before surfacing the error.
@@ -948,11 +999,264 @@ fn open_and_append(
         .build()
         .map_err(|e| SessionEnd::Failed(short_msg("cannot decode stream", &e.to_string())))?;
 
+    // Only ever called with no live decode thread, so nothing appends while
+    // the (normally already empty) queue is cleared.
     player.clear();
-    // The tap rides between the decoder and the sink: every sample the audio
-    // callback pulls is mirrored (mono-folded) into the visualizer ring.
-    player.append(SampleTap::new(decoder, Arc::clone(tap)));
-    Ok(())
+    // The tap rides between the decoder and the player: every decoded sample
+    // is mirrored (mono-folded) into the visualizer ring on the decode thread.
+    let decoding = Decoding::spawn(
+        SampleTap::new(decoder, Arc::clone(tap)),
+        Arc::clone(player),
+        Arc::clone(stop),
+        opened.cancel,
+    )?;
+    let deadline = Instant::now() + PRIME_BUDGET;
+    while queued_audio(player.len()) < QUEUE_PRIME && !decoding.ended() {
+        if stop.load(Ordering::Acquire) {
+            return Err(SessionEnd::Cancelled); // dropping `decoding` halts it
+        }
+        if Instant::now() >= deadline {
+            break; // a trickling stream: play what is queued
+        }
+        std::thread::sleep(DECODE_POLL);
+    }
+    Ok(decoding)
+}
+
+/// One connection's decode thread. Dropping it halts the thread, cancels the
+/// download (waking a read blocked on the network) and waits for the thread
+/// to finish, bounded by [`DECODE_JOIN_BUDGET`].
+struct Decoding {
+    halt: Arc<AtomicBool>,
+    /// The decoder returned `None` (stream ended / dropped / undecodable) or
+    /// the thread panicked: nothing more will be appended.
+    ended: Arc<AtomicBool>,
+    /// Set as the thread's last act. Pinned threads leave through
+    /// `FreeLibraryAndExitThread`, so `JoinHandle::is_finished` never turns
+    /// true for them; this flag is the join.
+    done: Arc<AtomicBool>,
+    cancel: Box<dyn Fn() + Send + Sync>,
+}
+
+impl Decoding {
+    fn spawn<I: Source + Send + 'static>(
+        source: I,
+        player: Arc<Player>,
+        stop: Arc<AtomicBool>,
+        cancel: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Self, SessionEnd> {
+        let halt = Arc::new(AtomicBool::new(false));
+        let ended = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let (t_halt, t_ended, t_done) = (Arc::clone(&halt), Arc::clone(&ended), Arc::clone(&done));
+        // Same pin contract as the audio-owner thread: a decode thread that
+        // outlives its join budget must not run on unmapped `.text`.
+        let pin = crate::state::pin_addon_module();
+        let spawned = std::thread::Builder::new()
+            .name("gw2bo-radio-decode".to_string())
+            .spawn(move || {
+                // Everything captured moves into this closure and drops when
+                // it returns: the decoder (cancelling its download) and the
+                // player handle must not leak past FreeLibraryAndExitThread.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    decode_loop(source, &player, &stop, &t_halt)
+                }));
+                let ran_dry = outcome.unwrap_or_else(|_| {
+                    radio_log("radio decode thread panicked; stream ends".to_string());
+                    true
+                });
+                if ran_dry {
+                    t_ended.store(true, Ordering::Release);
+                }
+                t_done.store(true, Ordering::Release);
+                if let Some(handle) = pin {
+                    crate::state::exit_pinned_worker(handle);
+                }
+            });
+        match spawned {
+            Ok(_detached) => Ok(Self {
+                halt,
+                ended,
+                done,
+                cancel,
+            }),
+            Err(e) => {
+                crate::state::undo_module_pin(pin);
+                cancel();
+                Err(SessionEnd::Failed(short_msg(
+                    "decode thread",
+                    &e.to_string(),
+                )))
+            }
+        }
+    }
+
+    fn ended(&self) -> bool {
+        self.ended.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for Decoding {
+    fn drop(&mut self) {
+        self.halt.store(true, Ordering::Release);
+        (self.cancel)();
+        let deadline = Instant::now() + DECODE_JOIN_BUDGET;
+        while !self.done.load(Ordering::Acquire) {
+            if Instant::now() >= deadline {
+                radio_log("radio decode thread outlived its join budget; detaching".to_string());
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+/// The decode thread body: keep ~[`QUEUE_TARGET`] of decoded chunks queued on
+/// `player` until halted, stopped, or the source runs dry. Returns true when
+/// the source ran dry. Blocks only inside the source's own reads (woken by a
+/// download cancel) or in [`DECODE_POLL`] sleeps — never spins.
+fn decode_loop<I: Source>(
+    mut source: I,
+    player: &Player,
+    stop: &AtomicBool,
+    halt: &AtomicBool,
+) -> bool {
+    let mut carry = None;
+    let mut low_water = LowWater::new();
+    loop {
+        if stop.load(Ordering::Acquire) || halt.load(Ordering::Acquire) {
+            return false;
+        }
+        let queued = player.len();
+        low_water.observe(queued_audio(queued));
+        if let Some(line) = low_water.report(Instant::now()) {
+            radio_log(line);
+        }
+        if !decode_wanted(queued) {
+            std::thread::sleep(DECODE_POLL);
+            continue;
+        }
+        match pull_chunk(&mut source, &mut carry) {
+            Some(chunk) => player.append(chunk),
+            None => return true,
+        }
+    }
+}
+
+/// A sample that opened a new span (new channel count or rate), carried into
+/// the next chunk.
+type Carry = Option<(Sample, ChannelCount, SampleRate)>;
+
+/// Pull up to one [`CHUNK`] of interleaved samples from `source`, all at one
+/// channel count and rate. Spans are frame-aligned, so a format change is
+/// only checked at frame boundaries; the sample that reveals it is parked in
+/// `carry` and opens the next chunk. `None` once the source is exhausted.
+fn pull_chunk<I: Source>(source: &mut I, carry: &mut Carry) -> Option<SamplesBuffer> {
+    let (first, channels, rate) = match carry.take() {
+        Some(parked) => parked,
+        None => {
+            let sample = source.next()?;
+            (sample, source.channels(), source.sample_rate())
+        }
+    };
+    let chans = usize::from(channels.get());
+    let want = chunk_frames(rate) * chans;
+    let mut samples = Vec::with_capacity(want);
+    samples.push(first);
+    while samples.len() < want {
+        let Some(sample) = source.next() else { break };
+        if samples.len() % chans == 0 {
+            let (c, r) = (source.channels(), source.sample_rate());
+            if c != channels || r != rate {
+                *carry = Some((sample, c, r));
+                break;
+            }
+        }
+        samples.push(sample);
+    }
+    Some(SamplesBuffer::new(channels, rate, samples))
+}
+
+/// Frames in one [`CHUNK`] at `rate` (at least one).
+fn chunk_frames(rate: SampleRate) -> usize {
+    let frames = u128::from(rate.get()) * CHUNK.as_millis() / 1000;
+    usize::try_from(frames).unwrap_or(usize::MAX).max(1)
+}
+
+/// Audio held by `chunks` queued chunks. Counts the playing head chunk in
+/// full, so it overstates the true depth by at most one [`CHUNK`].
+fn queued_audio(chunks: usize) -> Duration {
+    CHUNK.saturating_mul(u32::try_from(chunks).unwrap_or(u32::MAX))
+}
+
+/// Whether the decode thread should decode another chunk now.
+fn decode_wanted(queued_chunks: usize) -> bool {
+    queued_audio(queued_chunks) < QUEUE_TARGET
+}
+
+/// Whether the watchdog sees a stall: the decoder ran dry AND its queued tail
+/// has played out. A draining queue with a live decoder is not a stall.
+fn is_stall(decoder_ended: bool, queue_empty: bool) -> bool {
+    decoder_ended && queue_empty
+}
+
+/// Per-connection queue low-water accounting. Arms once the queue first
+/// reaches [`LOW_WATER`] (the initial fill is not a dip); from then on a dip
+/// is each fall below [`LOW_WATER`], and `min` is the shallowest depth seen.
+struct LowWater {
+    armed: bool,
+    below: bool,
+    min: Duration,
+    dips: u32,
+    reported_dips: u32,
+    last_log: Option<Instant>,
+}
+
+impl LowWater {
+    fn new() -> Self {
+        Self {
+            armed: false,
+            below: false,
+            min: Duration::MAX,
+            dips: 0,
+            reported_dips: 0,
+            last_log: None,
+        }
+    }
+
+    fn observe(&mut self, queued: Duration) {
+        if !self.armed {
+            if queued < LOW_WATER {
+                return;
+            }
+            self.armed = true;
+        }
+        self.min = self.min.min(queued);
+        let below = queued < LOW_WATER;
+        if below && !self.below {
+            self.dips += 1;
+        }
+        self.below = below;
+    }
+
+    /// The log line owed, if a new dip happened and the last line is at
+    /// least [`LOW_WATER_LOG_INTERVAL`] old.
+    fn report(&mut self, now: Instant) -> Option<String> {
+        if self.dips == self.reported_dips
+            || self
+                .last_log
+                .is_some_and(|t| now.duration_since(t) < LOW_WATER_LOG_INTERVAL)
+        {
+            return None;
+        }
+        self.reported_dips = self.dips;
+        self.last_log = Some(now);
+        Some(format!(
+            "radio: audio queue low-water {:.1} s, {} dips",
+            self.min.as_secs_f32(),
+            self.dips
+        ))
+    }
 }
 
 /// The connected, buffered, ICY-stripped stream — everything `open_stream`
@@ -961,6 +1265,8 @@ fn open_and_append(
 struct OpenedStream {
     reader: Box<dyn StreamReader>,
     content_type: Option<String>,
+    /// Cancels the download from another thread, waking a blocked read.
+    cancel: Box<dyn Fn() + Send + Sync>,
 }
 
 /// Connect to the stream URL, buffer it, and wrap ICY metadata handling.
@@ -1045,6 +1351,8 @@ fn open_stream(
     )
     .ok_or(SessionEnd::Cancelled)?
     .map_err(|e| SessionEnd::Failed(short_msg("buffering failed", &e.to_string())))?;
+    let token = download.cancellation_token();
+    let cancel: Box<dyn Fn() + Send + Sync> = Box::new(move || token.cancel());
 
     // Wrap in the ICY reader only when the server actually interleaves
     // metadata; the callback writes into the shared cell, never into STATE.
@@ -1075,6 +1383,7 @@ fn open_stream(
     Ok(OpenedStream {
         reader,
         content_type,
+        cancel,
     })
 }
 
@@ -1087,9 +1396,16 @@ fn stream_host_reserved(url: &reqwest::Url) -> bool {
     crate::news_art::url_host_is_reserved(url)
 }
 
-/// Stop-flag exit path: drop the sink handle and write `Stopped`.
-/// Dropping the decoder cancels its background download via `cancel_on_drop`.
-fn finish_stopped(my_gen: u64, player: &Player, sink_cell: &Arc<Mutex<Option<Arc<Player>>>>) {
+/// Stop-flag exit path: halt the decode thread (which cancels its download),
+/// clear the player, drop the sink handle and write `Stopped`. The decode
+/// thread goes first so nothing appends while the player is cleared.
+fn finish_stopped(
+    my_gen: u64,
+    decoding: Option<Decoding>,
+    player: &Player,
+    sink_cell: &Arc<Mutex<Option<Arc<Player>>>>,
+) {
+    drop(decoding);
     player.clear();
     *lock_or_recover(sink_cell) = None;
     let _ = crate::state::with_state(|s| {
@@ -1708,6 +2024,163 @@ mod tests {
             .map(|i| f32::from_bits(tap.samples[i].load(Ordering::Relaxed)))
             .collect();
         assert_eq!(mono, vec![0.5, 0.0, 0.5], "channels average per frame");
+    }
+
+    fn stereo(rate: u32, frames: usize) -> SamplesBuffer {
+        SamplesBuffer::new(
+            ChannelCount::new(2).expect("stereo"),
+            SampleRate::new(rate).expect("rate"),
+            (0..frames * 2).map(|i| i as f32).collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn chunks_are_one_chunk_long_and_carry_every_sample_in_order() {
+        assert_eq!(chunk_frames(SampleRate::new(44_100).unwrap()), 4_410);
+        assert_eq!(chunk_frames(SampleRate::new(48_000).unwrap()), 4_800);
+        assert_eq!(chunk_frames(SampleRate::new(1).unwrap()), 1, "never zero");
+
+        let mut source = stereo(44_100, 10_000);
+        let mut carry = None;
+        let mut lens = Vec::new();
+        let mut all = Vec::new();
+        while let Some(chunk) = pull_chunk(&mut source, &mut carry) {
+            assert_eq!(chunk.channels().get(), 2);
+            assert_eq!(chunk.sample_rate().get(), 44_100);
+            let samples: Vec<f32> = chunk.collect();
+            lens.push(samples.len());
+            all.extend(samples);
+        }
+        assert_eq!(
+            lens,
+            vec![8_820, 8_820, 2_360],
+            "full chunks, then the tail"
+        );
+        let expected: Vec<f32> = (0..20_000).map(|i| i as f32).collect();
+        assert_eq!(all, expected, "no sample lost, duplicated or reordered");
+        assert!(
+            pull_chunk(&mut source, &mut carry).is_none(),
+            "stays exhausted"
+        );
+    }
+
+    #[test]
+    fn a_format_change_closes_the_chunk_and_opens_the_next_one() {
+        let (input, mut output) = rodio::queue::queue(false);
+        input.append(stereo(44_100, 100));
+        input.append(stereo(48_000, 100));
+        let mut carry = None;
+        let first = pull_chunk(&mut output, &mut carry).expect("first span");
+        assert_eq!(first.sample_rate().get(), 44_100);
+        assert_eq!(first.count(), 200, "the chunk ends at the span boundary");
+        let second = pull_chunk(&mut output, &mut carry).expect("second span");
+        assert_eq!(second.sample_rate().get(), 48_000);
+        let samples: Vec<f32> = second.collect();
+        assert_eq!(samples.len(), 200);
+        assert_eq!(samples[0], 0.0, "the carried sample opens the new chunk");
+    }
+
+    #[test]
+    fn decode_pacing_fills_to_the_target_and_then_waits() {
+        let target_chunks = (QUEUE_TARGET.as_millis() / CHUNK.as_millis()) as usize;
+        assert!(decode_wanted(0));
+        assert!(decode_wanted(target_chunks - 1));
+        assert!(
+            !decode_wanted(target_chunks),
+            "at target: sleep, do not decode"
+        );
+        assert!(!decode_wanted(usize::MAX), "no overflow on absurd counts");
+        assert_eq!(queued_audio(3), CHUNK * 3);
+        assert!(QUEUE_PRIME < QUEUE_TARGET && LOW_WATER < QUEUE_PRIME);
+        // A halted decode thread fits the unload budget with the stop poll.
+        assert!(STOP_POLL_INTERVAL + DECODE_JOIN_BUDGET < SHUTDOWN_JOIN_BUDGET);
+    }
+
+    #[test]
+    fn a_stall_is_a_dry_decoder_with_an_empty_queue_only() {
+        assert!(is_stall(true, true));
+        assert!(!is_stall(false, true), "a draining queue is a slow network");
+        assert!(!is_stall(true, false), "the queued tail still plays out");
+        assert!(!is_stall(false, false));
+    }
+
+    #[test]
+    fn low_water_ignores_the_initial_fill_counts_dips_and_rate_limits_logs() {
+        let ms = Duration::from_millis;
+        let mut lw = LowWater::new();
+        let t0 = Instant::now();
+        // Filling from empty is warm-up, not a dip.
+        for q in [0, 100, 300] {
+            lw.observe(ms(q));
+        }
+        assert_eq!(lw.dips, 0);
+        assert_eq!(lw.report(t0), None);
+        lw.observe(ms(2500));
+        lw.observe(ms(300));
+        lw.observe(ms(200)); // same dip, deeper
+        assert_eq!(lw.dips, 1);
+        assert_eq!(
+            lw.report(t0).as_deref(),
+            Some("radio: audio queue low-water 0.2 s, 1 dips")
+        );
+        assert_eq!(lw.report(t0), None, "nothing new to say");
+        lw.observe(ms(2500));
+        lw.observe(ms(400));
+        assert_eq!(lw.dips, 2);
+        assert_eq!(lw.report(t0 + ms(30_000)), None, "at most once a minute");
+        assert_eq!(
+            lw.report(t0 + LOW_WATER_LOG_INTERVAL).as_deref(),
+            Some("radio: audio queue low-water 0.2 s, 2 dips")
+        );
+    }
+
+    /// The decode thread must stop promptly on halt and on the session stop
+    /// flag, and report a dry source as ended — the unload contract.
+    #[test]
+    fn decode_thread_ends_on_a_dry_source_and_halts_promptly() {
+        let (player, _output) = Player::new();
+        let player = Arc::new(player);
+        // Dry source: ended, and its chunks landed on the player.
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let c = Arc::clone(&cancelled);
+        let decoding = Decoding::spawn(
+            stereo(48_000, 4_800),
+            Arc::clone(&player),
+            Arc::new(AtomicBool::new(false)),
+            Box::new(move || c.store(true, Ordering::Release)),
+        )
+        .ok()
+        .expect("spawn");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !decoding.ended() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(decoding.ended());
+        assert_eq!(player.len(), 1, "one 100 ms chunk queued");
+        drop(decoding);
+        assert!(
+            cancelled.load(Ordering::Acquire),
+            "drop cancels the download"
+        );
+
+        // Endless source with nothing draining the queue: the thread parks at
+        // the target; the session stop flag ends it well inside the budget.
+        let stop = Arc::new(AtomicBool::new(false));
+        let endless = rodio::source::SineWave::new(440.0);
+        let decoding = Decoding::spawn(
+            endless,
+            Arc::clone(&player),
+            Arc::clone(&stop),
+            Box::new(|| {}),
+        )
+        .ok()
+        .expect("spawn");
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!decoding.ended());
+        stop.store(true, Ordering::Release);
+        let started = Instant::now();
+        drop(decoding);
+        assert!(started.elapsed() < DECODE_JOIN_BUDGET, "halted promptly");
     }
 
     #[test]

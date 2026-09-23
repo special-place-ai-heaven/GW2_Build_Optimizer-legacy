@@ -2046,6 +2046,7 @@ fn rotation_sim_params(
                 .get(id)
                 .is_some_and(|t| t.specialization == crate::rotation::attunement::WEAVER_SPEC_ID)
         }),
+        form: None,
     }
 }
 

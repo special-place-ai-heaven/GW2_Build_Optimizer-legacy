@@ -175,6 +175,33 @@ fn the_fidelity_budget_table_is_well_formed() {
     }
 }
 
+/// Log-side burst observables of the golem fixture, facts of the file.
+/// Python over `damage1S[0]`: per-second = [s1, s2 - s1, ...] (95 seconds,
+/// 4 030 026 total); best 5 s sum 285 462, best 10 s sum 515 818. The
+/// fixture was re-downloaded and re-trimmed 2026-09-23 to keep `states`,
+/// `conditionDamage1S` and the `dpsAll` actor split, so overlap, condition
+/// share and ramp are now measured; these are the values `log_compare`
+/// reports for this log, pinned as facts of the file.
+#[test]
+fn golem_fixture_burst_observables_are_facts_of_the_file() {
+    let (_, log, _) = fixtures()
+        .into_iter()
+        .find(|(n, _, _)| n == "1f33-20260720-163045_golem.json")
+        .expect("golem fixture");
+    let p = log.squad().next().expect("one player");
+    let o = compare::observe(&log, p, &GameDb::empty_for_tests());
+    let close = |a: Option<f64>, b: f64| {
+        let a = a.expect("measured");
+        assert!((a - b).abs() < 1e-9, "{a} != {b}");
+    };
+    close(o.burst_peak_5s, 285_462.0 / 5.0);
+    close(o.burst_peak_10s, 515_818.0 / 10.0);
+    assert!(o.burst_peak_5s > Some(o.dps_engaged));
+    close(o.burst_overlap_share, 1.0);
+    close(o.condition_share, 0.0029288346379509602);
+    close(o.condition_ramp_s, 11.0);
+}
+
 fn cached_db() -> GameDb {
     let cache = gw2_api::cache::DataCache::new(
         gw2_api::dev_config::cache_dir().expect("dev.cfg with addons_dir"),
@@ -199,7 +226,7 @@ fn compare_all() -> Vec<PlayerComparison> {
                 .unwrap_or_default()
                 .into_iter()
                 .collect();
-            compare::compare_log(&name, &log, &for_log, &corpus, &db)
+            compare::compare_log(&name, &log, &for_log, None, &corpus, &db)
         })
         .collect()
 }

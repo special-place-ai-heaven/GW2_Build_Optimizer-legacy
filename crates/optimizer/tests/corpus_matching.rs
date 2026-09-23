@@ -201,12 +201,20 @@ const CASES: &[Case] = &[
         CombatTier::Solo,
         &["hardstuck:Zerg Power DPS", "guildjen:Roaming DPS"],
     ),
+    // Re-frozen in sprint 008 (forms), measured: the flow now plays
+    // Harbinger Shroud, and while in it the hardstuck Roaming Condi DPS
+    // Harbinger's weapon bar (Deathly Swarm, Enfeebling Blood, its chills
+    // and immobilizes) is stowed. Its control axis falls from 0.288 to
+    // 0.194 and its alignment from 0.353 to 0.286, below hardstuck's
+    // Scourge Zerg Support (0.348, no form: Scourge has no shroud). The
+    // shroud skills are sourced (Devouring Cut, Voracious Arc with its
+    // daze) and the aquatic twins are off the bar; the drop stands.
     (
         "Necromancer",
         GameMode::WvW,
         RoleObjective::Disabler,
         CombatTier::Solo,
-        &["guildjen:Roaming Bruiser", "hardstuck:Roaming Condi DPS"],
+        &["guildjen:Roaming Bruiser", "hardstuck:Zerg Support"],
     ),
 ];
 
@@ -424,8 +432,7 @@ const EXPECTED_REFUSALS: &[(&str, &str, usize, &str)] = &[
     ("Mesmer", "PvP", 2, "Troubadour support measures 3.9 cleanses/20s against a 4.0 floor - one tenth short, not a broken build - plus one Chrono bar that publishes no cleanse"),
     ("Mesmer", "WvW", 3, "light-armour roamers under the 15000 solo health floor; the clone economy no longer reads as starved now that generation is keyed to the API's Clone and Phantasm categories"),
     ("Necromancer", "WvW", 1, "one Reaper zerg bar with neither stunbreak nor cleanse, which cascades into the control-coverage gate"),
-    ("Ranger", "PvP", 2, "Druid stability comes from Celestial Avatar skills the timeline never enters, so the stability gate sees no cover"),
-    ("Ranger", "WvW", 4, "two more Druid Celestial-Avatar cases, plus two Soulbeast and Galeshot roamers under the 15000 health floor"),
+    ("Ranger", "WvW", 2, "Soulbeast and Galeshot roamers under the 15000 health floor; the Druid Celestial-Avatar stability cases cleared once the avatar bar joined the kit (sprint 008 forms)"),
     ("Revenant", "PvP", 3, "Herald publishes no stunbreak utility because its stunbreak is a legend swap, which the bar-only gates cannot see"),
     ("Revenant", "WvW", 4, "Herald and Vindicator bars whose stunbreak is the legend swap; the energy economy itself no longer refuses them now that the swap refills the pool, upkeep bends the regen rate, and a stunbreak scan counts one decision instead of one per candidate"),
     ("Thief", "PvE", 8, "every Thief in the game has 10249 effective health against an 11000 floor - the floor is wrong for PvE Thief, the builds are not"),

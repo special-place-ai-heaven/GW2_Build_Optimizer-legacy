@@ -442,6 +442,16 @@ pub fn profession_skills_for_build(
     slots
         .into_iter()
         .filter_map(|(_, mut skills)| {
+            // A form entry's flip is the form's exit, not the press
+            // (Release Celestial Avatar 31411 sorted ahead of Celestial
+            // Avatar 31869 by id). Other flips stay candidates: Legendary
+            // Renegade Stance flips to a second id of itself.
+            let exits: Vec<u32> = skills
+                .iter()
+                .filter(|skill| !skill.transform_skills.is_empty())
+                .filter_map(|skill| skill.flip_skill)
+                .collect();
+            skills.retain(|skill| !exits.contains(&skill.id));
             skills.sort_by_key(|skill| (u8::from(skill.specialization.is_none()), skill.id));
             // First candidate whose weapon is in hand, else the first
             // candidate: an unresolved weapon set must not empty the bar.
@@ -462,20 +472,21 @@ pub fn profession_skills_for_build(
         .collect()
 }
 
-/// The Necromancer shroud bar for the equipped specialisations
-/// (`specs/005-wvw-proc-sites`, R6). The API lists every shroud's skills in
-/// the core entry skill's `transform_skills` (Death Shroud 10574 carries all
-/// 57) with misleading slots — `Downed_1..4` and `Weapon_5` — and tags each
-/// with its specialisation. An equipped elite's skills replace the core
-/// ones; a specialisation without an entry skill (Scourge) has no bar.
-pub fn shroud_bar_for_build(
+/// The form bar for the equipped specialisations: the `transform_skills`
+/// of every profession-slot skill the build owns (`specs/005-wvw-proc-sites`,
+/// R6). The API lists every shroud's skills in the core entry skill's
+/// `transform_skills` (Death Shroud 10574 carries all 57) with misleading
+/// slots — `Downed_1..4` and `Weapon_5` — and tags each with its
+/// specialisation; Druid's Celestial Avatar lists its own. An equipped
+/// elite's skills replace the core ones; a specialisation without an entry
+/// skill (Scourge) plays no form, which the entry lookup decides. A bar slot
+/// with a `NoUnderwater` skill keeps only its land skills: the others are
+/// the aquatic palette.
+pub fn form_bar_for_build(
     db: &GameDb,
     profession_name: &str,
     equipped_spec_ids: &[u32],
 ) -> Vec<(u32, String)> {
-    if profession_name != "Necromancer" {
-        return Vec::new();
-    }
     let mut candidates: Vec<&gw2_api::models::Skill> = Vec::new();
     for skill_id in db
         .skills_by_profession
@@ -486,7 +497,15 @@ pub fn shroud_bar_for_build(
         let Some(entry) = db.skills.get(skill_id) else {
             continue;
         };
-        if entry.slot.as_deref() != Some("Profession_1") || entry.specialization.is_some() {
+        let owned_entry = entry
+            .specialization
+            .is_none_or(|spec| equipped_spec_ids.contains(&spec));
+        if !entry
+            .slot
+            .as_deref()
+            .is_some_and(|slot| slot.starts_with("Profession_"))
+            || !owned_entry
+        {
             continue;
         }
         for transform_id in &entry.transform_skills {
@@ -512,19 +531,50 @@ pub fn shroud_bar_for_build(
         .into_iter()
         .filter(|skill| skill.specialization.is_some() == elite_owned)
         .collect();
-    let position = |slot: Option<&str>| match slot {
-        Some("Downed_1") => 1,
-        Some("Downed_2") => 2,
-        Some("Downed_3") => 3,
-        Some("Downed_4") => 4,
-        Some("Weapon_5") => 5,
-        _ => 9,
+    let land_only = |skill: &gw2_api::models::Skill| {
+        skill
+            .flags
+            .iter()
+            .any(|f| f.eq_ignore_ascii_case("NoUnderwater"))
     };
+    // A bar slot holding a land-only skill is the land slot; its other
+    // skills are the underwater palette, renamed or not (Voracious Dive
+    // beside Voracious Arc, Plague Blast beside Life Blast).
+    let land_slots: std::collections::HashSet<Option<SkillSlot>> = bar
+        .iter()
+        .filter(|skill| land_only(skill))
+        .map(|skill| form_bar_slot(skill.slot.as_deref()))
+        .collect();
+    bar.retain(|skill| {
+        land_only(skill) || !land_slots.contains(&form_bar_slot(skill.slot.as_deref()))
+    });
+    // A flip that is not the auto chain's next step (Terrify after Infusing
+    // Terror) is pressed only after its parent, not free from the bar.
+    let flips_off_chain: Vec<u32> = bar
+        .iter()
+        .filter_map(|skill| {
+            skill
+                .flip_skill
+                .filter(|flip| skill.next_chain != Some(*flip))
+        })
+        .collect();
+    bar.retain(|skill| !flips_off_chain.contains(&skill.id));
+    let position = |slot: Option<&str>| form_bar_slot(slot).map_or(9, |slot| slot as u8 + 1);
     bar.sort_by_key(|skill| (position(skill.slot.as_deref()), skill.id));
     bar.dedup_by_key(|skill| skill.id);
     bar.into_iter()
         .map(|skill| (skill.id, skill.name.clone()))
         .collect()
+}
+
+/// A form bar skill's place on the bar. The API files the shroud bar under
+/// `Downed_1..4` and `Weapon_5`; on the bar they are slots 1-5.
+pub fn form_bar_slot(api_slot: Option<&str>) -> Option<SkillSlot> {
+    let slot = api_slot?;
+    let n = slot
+        .strip_prefix("Downed_")
+        .or_else(|| slot.strip_prefix("Weapon_"))?;
+    SkillSlot::from_api(&format!("Weapon_{n}"))
 }
 
 /// Extract cooldown from Fact::Recharge (seconds → milliseconds).
@@ -707,12 +757,42 @@ fn extract_effects_for_context(
         }
     }
 
+    // A control the API omits but the wiki publishes (Voracious Arc's daze):
+    // its `status_duration_ms:<status>` override supplies it when no fact did.
+    for status in CONTROL_STATUSES {
+        let Some((kind, _)) = control_kind(status) else {
+            continue;
+        };
+        let present = effects
+            .iter()
+            .any(|e| matches!(e, SkillEffect::CrowdControl { kind: k, .. } if *k == kind));
+        let field = format!("status_duration_ms:{}", status.to_lowercase());
+        if let (false, Some(duration_ms)) = (present, sourced_skill_u32(ctx, skill_id, &field)) {
+            push_status_effect(&mut effects, status, 1, duration_ms);
+        }
+    }
+
     if let Some(desc) = description {
         push_description_effects(&mut effects, desc);
     }
 
     effects
 }
+
+/// Every status [`control_kind`] reads, by its API name.
+const CONTROL_STATUSES: [&str; 11] = [
+    "Stun",
+    "Knockdown",
+    "Launch",
+    "Knockback",
+    "Pull",
+    "Fear",
+    "Taunt",
+    "Daze",
+    "Float",
+    "Sink",
+    "Immobilize",
+];
 
 fn pulse_window_ms(facts: &[Fact]) -> (u32, u32) {
     let mut interval_ms = 0u32;
@@ -1874,7 +1954,7 @@ mod tests {
     /// Sprint 2 (T046): the shroud bar comes from the core entry skill's
     /// `transform_skills`, filtered by the equipped elite, in slot order.
     #[test]
-    fn shroud_bar_is_prepared_from_transform_skills() {
+    fn form_bar_is_prepared_from_transform_skills() {
         let mut db = empty_db();
         let mut death_shroud = make_test_skill(10574, "Death Shroud", "Profession_1", vec![]);
         death_shroud.flip_skill = Some(10585);
@@ -1913,7 +1993,7 @@ mod tests {
         }
         db.skills_by_profession.insert("Necromancer".into(), ids);
 
-        let reaper: Vec<u32> = shroud_bar_for_build(&db, "Necromancer", &[53, 2, 34])
+        let reaper: Vec<u32> = form_bar_for_build(&db, "Necromancer", &[53, 2, 34])
             .into_iter()
             .map(|(id, _)| id)
             .collect();
@@ -1922,13 +2002,130 @@ mod tests {
             vec![29442, 29458, 30278, 30825, 29958, 30504, 30557]
         );
 
-        let core: Vec<u32> = shroud_bar_for_build(&db, "Necromancer", &[53, 2, 19])
+        let core: Vec<u32> = form_bar_for_build(&db, "Necromancer", &[53, 2, 19])
             .into_iter()
             .map(|(id, _)| id)
             .collect();
         assert_eq!(core, vec![10554, 10604, 10645, 10643, 19504]);
 
-        assert!(shroud_bar_for_build(&db, "Warrior", &[34]).is_empty());
+        assert!(form_bar_for_build(&db, "Warrior", &[34]).is_empty());
+    }
+
+    /// Celestial Avatar's shape in the API: the entry (Profession_5, spec
+    /// Druid) lists its own bar, each skill with an aquatic twin of the same
+    /// name, and its flip (Release) sorts ahead of it by id. Off-chain flips
+    /// on the bar (Terrify after Infusing Terror) are not free presses.
+    #[test]
+    fn druid_form_bar_is_the_land_bar_and_f5_is_the_entry() {
+        let mut db = empty_db();
+        let mut avatar = make_test_skill(31869, "Celestial Avatar", "Profession_5", vec![]);
+        avatar.specialization = Some(5);
+        avatar.flip_skill = Some(31411);
+        avatar.transform_skills = vec![31796, 33387, 31503, 34070, 9, 7, 8];
+        let mut release =
+            make_test_skill(31411, "Release Celestial Avatar", "Profession_5", vec![]);
+        release.specialization = Some(5);
+        let mut skills = vec![avatar, release];
+        for (id, name, slot, land) in [
+            (31796, "Cosmic Ray", "Weapon_1", true),
+            (33387, "Cosmic Ray", "Weapon_1", false),
+            (31503, "Natural Convergence", "Weapon_5", true),
+            (34070, "Natural Convergence", "Weapon_5", false),
+            // A renamed aquatic twin (Voracious Dive beside Voracious Arc):
+            // its slot holds a land-only skill, so it is off the land bar.
+            (9, "Renamed Dive", "Weapon_5", false),
+        ] {
+            let mut skill = make_test_skill(id, name, slot, vec![]);
+            if land {
+                skill.flags = vec!["NoUnderwater".into()];
+            }
+            skills.push(skill);
+        }
+        let mut parent = make_test_skill(7, "Infusing Terror", "Weapon_3", vec![]);
+        parent.flip_skill = Some(8);
+        skills.push(parent);
+        skills.push(make_test_skill(8, "Terrify", "Weapon_3", vec![]));
+        let ids: Vec<u32> = skills.iter().map(|s| s.id).collect();
+        for skill in skills {
+            db.skills.insert(skill.id, skill);
+        }
+        db.skills_by_profession.insert("Ranger".into(), ids);
+
+        let bar: Vec<u32> = form_bar_for_build(&db, "Ranger", &[5])
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(bar, vec![31796, 7, 31503]);
+        assert!(form_bar_for_build(&db, "Ranger", &[55]).is_empty());
+        assert_eq!(form_bar_slot(Some("Downed_2")), Some(SkillSlot::Weapon2));
+        assert_eq!(form_bar_slot(Some("Weapon_5")), Some(SkillSlot::Weapon5));
+        assert_eq!(form_bar_slot(Some("Profession_1")), None);
+
+        let f5 = profession_skills_for_build(
+            &db,
+            "Ranger",
+            &[5],
+            &crate::validation::ValidatedWeapons::default(),
+        );
+        assert_eq!(f5, vec![(31869, "Celestial Avatar".into())]);
+    }
+
+    /// Harbinger shroud skills the API publishes without damage or daze
+    /// facts are sourced from the wiki per mode (balance overrides), so
+    /// they are never silent zeros on the bar; the Scythe's activation too.
+    #[test]
+    fn sourced_shroud_skills_carry_the_wiki_numbers() {
+        use gw2_core::types::GameMode;
+        let mut db = empty_db();
+        let recharge = |s: f64| Fact::Recharge {
+            text: None,
+            icon: None,
+            value: Some(s),
+        };
+        for (id, name, slot, rech) in [
+            (62672, "Devouring Cut", "Downed_3", 8.0),
+            (62539, "Voracious Arc", "Downed_4", 10.0),
+            (30557, "Executioner's Scythe", "Weapon_5", 30.0),
+        ] {
+            db.skills
+                .insert(id, make_test_skill(id, name, slot, vec![recharge(rech)]));
+        }
+        let get = |mode: GameMode, id: u32| {
+            build_rotation_skills_for_context(&[id], &db, &BalanceContext::new(mode))
+                .pop()
+                .expect("skill")
+        };
+        let strike = |skill: &RotationSkill| -> f64 {
+            skill
+                .effects
+                .iter()
+                .map(|e| match e {
+                    SkillEffect::StrikeDamage {
+                        hit_count,
+                        dmg_multiplier,
+                    } => *hit_count as f64 * dmg_multiplier,
+                    _ => 0.0,
+                })
+                .sum()
+        };
+        let arc_wvw = get(GameMode::WvW, 62539);
+        assert_eq!(arc_wvw.cooldown_ms, 18_000);
+        assert_eq!(arc_wvw.cast_time_ms, 750);
+        assert!((strike(&arc_wvw) - 1.0).abs() < 1e-9);
+        assert!(arc_wvw.effects.iter().any(|e| matches!(
+            e,
+            SkillEffect::CrowdControl {
+                kind: ControlKind::Daze,
+                duration_ms: 500,
+                ..
+            }
+        )));
+        assert!((strike(&get(GameMode::PvE, 62539)) - 1.4).abs() < 1e-9);
+        assert_eq!(get(GameMode::PvE, 62539).cooldown_ms, 10_000);
+        assert!((strike(&get(GameMode::WvW, 62672)) - 0.85).abs() < 1e-9);
+        assert!((strike(&get(GameMode::PvE, 62672)) - 1.0).abs() < 1e-9);
+        assert_eq!(get(GameMode::PvP, 62672).cooldown_ms, 10_000);
+        assert_eq!(get(GameMode::PvE, 30557).cast_time_ms, 1_250);
     }
 
     #[test]

@@ -1249,9 +1249,10 @@ pub fn prepare_validated_rotation(
         &validated.skills.profession
     };
     non_weapon_ids.extend(profession_skills.iter().map(|(id, _)| *id));
-    // The Necromancer shroud bar: held only in shroud (`SHROUD_SET`).
+    // The form bar (shroud, Celestial Avatar): held only in the form
+    // (`SHROUD_SET`).
     let shroud_ids: Vec<u32> =
-        rotation::builder::shroud_bar_for_build(db, profession_name, &equipped_spec_ids)
+        rotation::builder::form_bar_for_build(db, profession_name, &equipped_spec_ids)
             .into_iter()
             .map(|(id, _)| id)
             .filter(|id| !non_weapon_ids.contains(id))
@@ -1302,6 +1303,9 @@ pub fn prepare_validated_rotation(
         rotation::builder::build_rotation_skills_for_context(&shroud_ids, db, &sim_ctx);
     for skill in &mut shroud_skills {
         skill.weapon_set = rotation::SHROUD_SET;
+        if let Some(slot) = rotation::builder::form_bar_slot(skill.slot_name.as_deref()) {
+            skill.slot = slot;
+        }
     }
     rotation_skills.extend(shroud_skills);
     let ne = crate::data::normalized_effects::effects().effects_for_mode(mode.label());
@@ -1352,6 +1356,11 @@ pub fn prepare_validated_rotation(
         intent: None,
         deferred_target: mods.deferred_target.clone(),
         weaver: equipped_spec_ids.contains(&rotation::attunement::WEAVER_SPEC_ID),
+        // An unmodelled form abstains here (its bar stays stowed) and is
+        // named on the WvW resource gap line.
+        form: form_for_build(validated, &rotation_skills, db, &mode, derived.health)
+            .ok()
+            .flatten(),
     };
 
     Some(PreparedRotation {
@@ -2335,8 +2344,253 @@ pub(crate) fn wvw_resource_rules(
         .iter()
         .any(|rule| rule.enters_shroud && rule.drain_per_second.is_nan());
     let complete = !unread_shroud && resource_model_complete(&rules, rotation_skills, db);
-    let gaps = resource_model_gap_names(validated, &rules, rotation_skills, db, profession_name);
+    let mut gaps =
+        resource_model_gap_names(validated, &rules, rotation_skills, db, profession_name);
+    match form_for_build(validated, rotation_skills, db, &ctx.game_mode, max_health) {
+        Err(name) => gaps.push(format!("{name} form")),
+        Ok(Some(form)) => gaps.extend(form.unmodelled),
+        Ok(None) => {}
+    }
+    gaps.sort();
+    gaps.dedup();
     (rules, complete, gaps)
+}
+
+/// The build's profession form for the gate and flow simulations
+/// ([`rotation::simulator::FormSpec`]), from data only: the pressed entry
+/// skill (a profession-slot skill with a flip) that has a pool row, the
+/// pool from `data/formulas/shroud.json` (life force, the row the equipped
+/// elite wears) or `data/formulas/forms.json` (entry floor = the entry's API
+/// `cost` percent, drain = the pool over its API `Duration` fact), and the
+/// equipped traits' `OnShroudEnter` / `OnShroudExit` / in-shroud `Periodic`
+/// records, plus their scoped `OnSkillUse` and `OnConditionApplied` records,
+/// that apply a boon or grant life force.
+///
+/// `Ok(None)`: no form bar, or no entry pressed (Scourge). `Err(name)`: an
+/// entry that carries a bar but no pool the data can read; the form
+/// abstains and the name reaches the gap line (doctrine 6).
+pub(crate) fn form_for_build(
+    validated: &ValidatedBuild,
+    rotation_skills: &[rotation::RotationSkill],
+    db: &GameDb,
+    mode: &GameMode,
+    max_health: f64,
+) -> Result<Option<rotation::simulator::FormSpec>, String> {
+    use crate::data::normalized_effects::{
+        EffectCategory, OperationType, SourceType, TargetSide, TriggerRule, TriggerScope,
+    };
+    use crate::data::quality::FactualValue;
+    use rotation::simulator::{FormProc, FormSpec, ProcTrigger, TriggeredProc};
+
+    if !rotation_skills
+        .iter()
+        .any(|skill| skill.weapon_set == rotation::SHROUD_SET)
+    {
+        return Ok(None);
+    }
+    let pressed: Vec<(&rotation::RotationSkill, &gw2_api::models::Skill)> = rotation_skills
+        .iter()
+        .filter(|skill| skill.weapon_set == 0)
+        .filter_map(|rs| db.skills.get(&rs.skill_id).map(|skill| (rs, skill)))
+        .filter(|(_, skill)| {
+            skill
+                .slot
+                .as_deref()
+                .is_some_and(|slot| slot.starts_with("Profession_"))
+        })
+        .collect();
+    let shrouds = crate::data::shroud::table();
+    let pools = crate::data::forms::table();
+    let equipped: Vec<u32> = validated
+        .specializations
+        .iter()
+        .map(|spec| spec.spec_id)
+        .collect();
+
+    let mut form = None;
+    for (rs, entry) in &pressed {
+        if entry.flip_skill.is_none() {
+            continue;
+        }
+        // The API tags every shroud entry spec-less, so the equipped
+        // elite's row wins over the pressed F1's own (Reaper resolves its F1
+        // to Death Shroud 10574 by id).
+        let own_row = shrouds
+            .row(entry.id)
+            .or_else(|| shrouds.row_by_name(&entry.name));
+        if let Some(own_row) = own_row {
+            let row = shrouds
+                .row_for_elite(&equipped)
+                .map_or(own_row, |(_, row)| row);
+            let Some(drain) = row.drain_pct_per_s.as_ref() else {
+                return Err(row.name.clone());
+            };
+            let cap = shrouds.pool_for(max_health);
+            form = Some((
+                FormSpec {
+                    name: row.name.clone(),
+                    entry_skill_id: entry.id,
+                    pool_cap: cap,
+                    initial_pool: if shrouds.pool_persists_out_of_combat {
+                        cap
+                    } else {
+                        0.0
+                    },
+                    entry_floor: shrouds.entry_floor_pct / 100.0 * cap,
+                    drain_per_second: drain.for_mode(mode.clone()) / 100.0 * cap,
+                    recharge_ms: (shrouds.recharge_on_exit_s * 1_000.0) as u32,
+                    gains_in_form: true,
+                    exit_keep: 1.0,
+                    unmodelled: row.unmodelled.clone(),
+                    ..Default::default()
+                },
+                true,
+            ));
+            break;
+        }
+        if let Some(row) = pools.forms.get(&entry.id) {
+            let duration_s = entry.facts.iter().find_map(|fact| match fact {
+                Fact::Time {
+                    text: Some(text),
+                    duration: Some(duration),
+                    ..
+                } if text == "Duration" && *duration > 0 => Some(f64::from(*duration)),
+                _ => None,
+            });
+            let (Some(cost), Some(duration_s)) = (entry.cost, duration_s) else {
+                return Err(entry.name.clone());
+            };
+            form = Some((
+                FormSpec {
+                    name: row.name.clone(),
+                    entry_skill_id: entry.id,
+                    pool_cap: row.pool,
+                    initial_pool: if row.persists_out_of_combat {
+                        row.pool
+                    } else {
+                        0.0
+                    },
+                    entry_floor: f64::from(cost) / 100.0 * row.pool,
+                    drain_per_second: row.pool / duration_s,
+                    recharge_ms: rs.cooldown_ms,
+                    gain_per_strike: row.gain_pct_per_strike / 100.0 * row.pool,
+                    // ponytail: heals feed astral force only on a damaged
+                    // target and the flow dummy damages no one, so
+                    // `gain_pct_per_heal` is not credited; wire it when the
+                    // flow sim models incoming damage.
+                    gains_in_form: row.gains_in_form,
+                    exit_keep: row.early_exit_keep_pct / 100.0,
+                    ..Default::default()
+                },
+                false,
+            ));
+            break;
+        }
+    }
+    let Some((mut form, life_force)) = form else {
+        return match pressed
+            .iter()
+            .find(|(_, skill)| !skill.transform_skills.is_empty())
+        {
+            Some((_, skill)) => Err(skill.name.clone()),
+            None => Ok(None),
+        };
+    };
+
+    if life_force {
+        for rs in rotation_skills {
+            let Some(skill) = db.skills.get(&rs.skill_id) else {
+                continue;
+            };
+            let (on_use, per_hit) = life_force_fact_shares(skill);
+            if on_use > 0.0 || per_hit > 0.0 {
+                form.skill_gains.push((
+                    rs.skill_id,
+                    on_use * form.pool_cap,
+                    per_hit * form.pool_cap,
+                ));
+            }
+        }
+    }
+
+    let trait_ids: std::collections::HashSet<u32> = validated
+        .specializations
+        .iter()
+        .flat_map(|spec| spec.all_trait_ids.iter().copied())
+        .collect();
+    let records = crate::data::normalized_effects::effects().effects_for_mode(mode.label());
+    for effect in records {
+        if effect.source_type != SourceType::Trait
+            || !trait_ids.contains(&effect.source_id)
+            || !effect.gates.is_empty()
+            || effect.scale.is_some()
+            || effect.scale_by.is_some()
+        {
+            continue;
+        }
+        let prerequisite = effect.prerequisite.as_ref();
+        if prerequisite.is_some_and(|p| {
+            p.foe_condition.is_some() || p.foe_health.is_some() || p.attunement.is_some()
+        }) {
+            continue;
+        }
+        let proc_ = match (&effect.category, &effect.status_operation, &effect.value) {
+            (EffectCategory::AppliesBoon, Some(op), _)
+                if op.operation_type == OperationType::AppliesBoon =>
+            {
+                let (FactualValue::Resolved(stacks), Some(FactualValue::Resolved(duration_ms))) =
+                    (&op.amount_value, &op.base_duration_ms)
+                else {
+                    continue;
+                };
+                FormProc::Buff {
+                    name: op.status_kind.clone(),
+                    stacks: stacks.round().max(1.0) as u32,
+                    duration_ms: *duration_ms,
+                    ally: op.target_side == TargetSide::Ally,
+                }
+            }
+            (EffectCategory::GainsLifeForce, _, FactualValue::Resolved(percent)) if life_force => {
+                FormProc::Gain(percent / 100.0 * form.pool_cap)
+            }
+            _ => continue,
+        };
+        match effect.trigger_rule {
+            TriggerRule::OnShroudEnter => form.on_enter.push(proc_),
+            TriggerRule::OnShroudExit => form.on_exit.push(proc_),
+            TriggerRule::Periodic if prerequisite.and_then(|p| p.in_shroud) == Some(true) => {
+                if let Some(FactualValue::Resolved(seconds)) = &effect.internal_cooldown {
+                    form.periodic.push(((seconds * 1_000.0) as u32, proc_));
+                }
+            }
+            // A skill-use record without a scope stays unexecuted (validation
+            // rule 11); a status record without one fires on any condition.
+            TriggerRule::OnSkillUse | TriggerRule::OnConditionApplied => {
+                let on = match (&effect.trigger_rule, effect.trigger_scope.clone()) {
+                    (TriggerRule::OnSkillUse, Some(TriggerScope::Status(_)) | None) => continue,
+                    (TriggerRule::OnSkillUse, Some(scope)) => ProcTrigger::SkillUse(scope),
+                    (_, Some(TriggerScope::Status(status))) => {
+                        ProcTrigger::ConditionApplied(Some(status))
+                    }
+                    (_, None | Some(TriggerScope::Any)) => ProcTrigger::ConditionApplied(None),
+                    _ => continue,
+                };
+                let icd_ms = match &effect.internal_cooldown {
+                    Some(FactualValue::Resolved(seconds)) => (seconds * 1_000.0) as u32,
+                    None => 0,
+                    Some(_) => continue,
+                };
+                form.triggered.push(TriggeredProc {
+                    on,
+                    icd_ms,
+                    in_form: prerequisite.and_then(|p| p.in_shroud),
+                    proc_,
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(Some(form))
 }
 
 fn wvw_weapon_swap_cooldown_ms(profession_name: &str, validated: &ValidatedBuild) -> Option<u32> {
@@ -3135,6 +3389,90 @@ pub fn llm_advisor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture_prepared(
+        db: &GameDb,
+        build: &ValidatedBuild,
+    ) -> (PreparedRotation, crate::scenario::ScenarioSpec) {
+        let (ctx, scenario) = rotation::reaper_fixture::pve_scenario();
+        let (stats, _) = calculate_validated_stats(build, db, "Necromancer", &ctx);
+        let prepared = prepare_validated_rotation(build, db, &stats, Some(&scenario))
+            .expect("the fixture prepares a rotation");
+        (prepared, scenario)
+    }
+
+    /// Doctrine 8: the addon's own path (prepare, flow) enters the
+    /// fixture's shroud with the shipped `shroud.json` numbers (PvE
+    /// Reaper's Shroud: 4 %/s of a pool 69 % of health, 10 s recharge).
+    #[test]
+    fn the_flow_plays_the_fixture_reapers_shroud_from_data() {
+        use rotation::reaper_fixture as fx;
+        let db = fx::db();
+        let (prepared, scenario) = fixture_prepared(&db, &fx::build());
+        let form = prepared.params.form.as_ref().expect("the shroud is a form");
+        let pool = crate::data::shroud::table().pool_for(prepared.params.max_health);
+        assert_eq!(form.name, "Reaper's Shroud");
+        assert_eq!(form.entry_skill_id, fx::REAPER_SHROUD);
+        assert!((form.pool_cap - pool).abs() < 1e-9);
+        assert!((form.drain_per_second - 0.04 * pool).abs() < 1e-9);
+        assert!((form.entry_floor - 0.10 * pool).abs() < 1e-9);
+        assert_eq!(form.recharge_ms, 10_000);
+        assert_eq!(form.initial_pool, form.pool_cap);
+        let life_rend = prepared
+            .skills
+            .iter()
+            .find(|s| s.skill_id == fx::SHROUD_1)
+            .expect("Life Rend on the bar");
+        assert_eq!(life_rend.weapon_set, rotation::SHROUD_SET);
+        assert_eq!(life_rend.slot, rotation::SkillSlot::Weapon1);
+
+        let flow = simulate_flow(&prepared, &OptimizationWeights::default(), Some(&scenario));
+        for name in ["Life Rend", "Death's Charge", "Soul Spiral"] {
+            assert!(
+                flow.skill_usage
+                    .iter()
+                    .any(|u| u.name == name && u.cast_count > 0 && u.dps_contribution > 0.0),
+                "{name} cast in shroud: {:?}",
+                flow.skill_usage
+            );
+        }
+    }
+
+    /// Doctrine 6: a pressed entry that brings a bar but has no pool
+    /// record plays no form and is named on the gap line.
+    #[test]
+    fn an_unmodelled_form_abstains_by_name() {
+        use rotation::reaper_fixture as fx;
+        let mut db = fx::db();
+        db.skills
+            .get_mut(&fx::REAPER_SHROUD)
+            .expect("fixture entry")
+            .name = "Unread Shroud".into();
+        let mut build = fx::build();
+        build.skills.profession = vec![(fx::REAPER_SHROUD, "Unread Shroud".into())];
+        let (prepared, _) = fixture_prepared(&db, &build);
+        assert!(prepared.params.form.is_none());
+        assert_eq!(
+            form_for_build(
+                &build,
+                &prepared.skills,
+                &db,
+                &GameMode::PvE,
+                prepared.params.max_health
+            ),
+            Err("Unread Shroud".to_string())
+        );
+        let ctx = BalanceContext::new(GameMode::WvW);
+        let (_, _, gaps) = wvw_resource_rules(
+            &build,
+            &prepared.skills,
+            &db,
+            "Necromancer",
+            &ctx,
+            prepared.params.max_health,
+        );
+        assert!(gaps.contains(&"Unread Shroud form".to_string()), "{gaps:?}");
+    }
 
     /// Sprint 2 (T047, FR-015): the derived completeness rule reproduces the
     /// profession list it replaces and adds Necromancer once life force

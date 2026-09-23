@@ -46,6 +46,77 @@ Increment log:
   now divides out the trait's share, test
   `wvw_params_divides_out_trait_percent_with_executed_conditional`).
 
+- 2026-09-23, engine increment: forms in the flow sim. Shroud and Celestial
+  Avatar are now data-driven timed states (`data/formulas/shroud.json` tagged
+  by elite spec, new `data/formulas/forms.json` from the wiki); `SimParams.form`
+  replaces the weapon bar on entry, blocks weapon swap, keeps utilities live,
+  and enters/exits by pool floor and best-skill comparison rather than a fixed
+  schedule. Trait records with `OnShroudEnter`/`OnShroudExit` and in-shroud
+  `Periodic` triggers now fire for equipped traits (boons and life force only).
+  `builder.rs` renamed `shroud_bar_for_build` to `form_bar_for_build` and fixed
+  underwater-twin, off-chain-flip and `Downed_N` slot handling. Balance
+  overrides added for Executioner's Scythe, Devouring Cut and Voracious Arc
+  from the wiki. Measured on the player's own golem logs: Reaper `dps_engaged`
+  error -0.716 -> -0.671, `skill_share` TVD 0.647 -> 0.472; Druid -0.863 ->
+  -0.859. Reaper self Fury/Quickness unchanged (PvE record file has no
+  shroud-trigger records, gap E12). `calibrate` WvW viable 116 -> 118,
+  StabilityAccess 136 -> 138, nothing fell.
+
+- 2026-09-23, Fidelity: burst and condition observables. `log_compare` gained
+  five observables per player: `burst_peak_5s` / `burst_peak_10s` (peak
+  damage in any 5s / 10s window; log side from EI `damage1S` cumulative
+  totals, sim side a new per-second capture in the flow simulation),
+  `burst_overlap_share` (share of damage dealt while Quickness and Fury are
+  both present; log side samples `buffUptimes[].states` at each second's
+  midpoint), `condition_share` (`dpsAll actorCondiDamage / actorDamage`,
+  minions excluded; the older `condi_fraction` counted pet damage and stays
+  as is), `condition_ramp_s` (seconds until condition damage per second first
+  reaches 80% of its median; abstains below `condition_share` 0.2). Each side
+  abstains by name when it lacks the data; a missing log value prints NaN,
+  never 0. `SimulationResult` carries per-second strike/condition damage and
+  per-second boon presence; scheduling never reads them; a test checks
+  per-second sums equal the totals. Measured on the player's Reaper golem
+  log: `burst_peak_5s` 18856 log vs 8989 sim (-0.523), `burst_peak_10s` 15392
+  vs 7131 (-0.537), `burst_overlap_share` 0.888 vs 0.496 (-0.391); the log's
+  best five seconds run 1.6x its engaged average. Druid golem:
+  `condition_share` 0.921 vs 0.726, `condition_ramp_s` 9 vs 7, overlap 0 on
+  both sides (the log has no Quickness). WvW Druid 210742: `burst_peak_5s`
+  4652 vs 2424, `condition_share` 0.891 vs 0.755, ramp 6 vs 10. The three
+  committed fixtures were trimmed before these fields existed, so overlap,
+  `condition_share` and ramp abstain on them; a fixture refresh is in
+  progress.
+
+- 2026-09-23, data increment: Necromancer PvE shroud and fear trigger
+  records. 30 records added to `data/normalized_effects/2026-01-13/pve.json`,
+  each citing its wiki line (wiki text saved under
+  `GW2_Build_Optimizer-work/necro-pve-2026-09-23/wiki/`). Shroud enter (11):
+  Awaken the Pain, Armored Shroud, Shrouded Removal, Furious Demise, Speed of
+  Shadows x4, Soul Barbs x2, Eternal Life. Shroud exit (5): Life from Death,
+  Unholy Martyr x2, Soul Barbs x2. In shroud (6): Shrouded Removal every 3s,
+  Vampiric Presence x2, Death Perception, Reaper's Onslaught x2. Shroud skill
+  1 (3): Reaper's Might, Unyielding Blast, Dhuumfire. On fear (4): Dread x3
+  (Fury 10s, Quickness 5s, +20% strike 2s, 1s ICD), Fear of Death. On
+  condition removed (1): Shrouded Removal. Finding: on the player's Reaper
+  (Spite: Bitter Chill, Spiteful Fortitude, Dread; Death Magic: Shrouded
+  Removal, Dark Defense, Corrupter's Fervor; Reaper: Chilling Nova, Decimate
+  Defenses, Blighter's Boon), Fury and Quickness come from Dread on fear and
+  the "Chilled to the Bone!" shout, not from the shroud traits. Consumer:
+  `engine::form_for_build` also loads scoped `OnSkillUse` and
+  `OnConditionApplied` records (boons and life force only) into
+  `FormSpec::triggered` with ICD and in-shroud condition; simulator
+  `fire_triggered` runs on cast, on condition applied, and on Fear/Taunt
+  landed; `skill_scope_admits` is shared by both simulators
+  (`wvw_timeline.rs`). Measured, Reaper golem: `dps_engaged` 4814 -> 5197
+  (error -0.589 -> -0.556), Fury 0.383 -> 0.705 (log 0.993), Quickness
+  0.383 -> 0.515 (log 0.830), Might 6.6 -> 8.0 (log 19.0),
+  `burst_overlap_share` 0.496 -> 0.622 (log 0.888), `burst_peak_10s`
+  7131 -> 7300 (log 15392). Side effect: Druid WvW rows self Fury
+  0.00 -> 0.30 (logs 0.52-0.85) from the existing WvW Ranger Survival-skill
+  record. `effect_coverage` Necromancer unchanged (it reports each trait's
+  best verdict across modes; the shroud traits were already executable
+  through their WvW records). `calibrate` PvE identical; WvW
+  ProtectedExecution 55 -> 56, nothing fell.
+
 Engine gaps the review measured (counted Executable, never run). The next
 engine increment (single-writer) closes these before more professions are
 authored, or the executable column overstates:
@@ -61,6 +132,13 @@ authored, or the executable column overstates:
 | E8 | `is_attuned` counts a Weaver's off-hand for core traits | `attunement.rs:102` |
 | E9 | `AppliesBoon` with a non-boon `status_kind` (auras, Elemental Empowerment) fires as an inert marker scaled by boon duration | timeline |
 | E10 | fact parser sums 3- and 4-way API splits and takes PvE values in WvW (Electric Discharge +100 crit damage, Pure of Sight ~+42 %, Laser's Edge ~+45 %, Vow of the Untamed ~+51 %) | `combat.rs` `absorb_pair` |
+| E11 | auto-attack chains: the simulator casts only step 1 of every chain and drops the follow-ups (`context.rs` skips `prev_chain` skills; nothing in `simulator.rs` reads `next_chain`); Life Slash/Life Reap and every weapon's chain 2/3 never happen | `rotation/builder.rs`, `rotation/simulator.rs` |
+| E12 | PvE record file has no shroud-trigger records, so Reaper Fury/Quickness inside shroud never fire in PvE (WvW records exist) | `data/normalized_effects/*/pve.json` |
+| E13 | forms not covered by the form mechanism: Photon Forge, kits, Tempest overloads, Lich Form and other elite transforms; the WvW timeline does not enter Celestial Avatar | `engine::form_for_build` |
+| E14 | astral force from healing is not credited (the flow dummy takes no damage), Eclipse/Grace of the Land/pet boon sources absent | flow sim |
+| E15 | triggered trait records (`OnSkillUse`, `OnConditionApplied`) ride on `FormSpec`, so a build with no form (Scourge, core) fires none of them in the flow sim | `engine::form_for_build`, `simulator.rs fire_triggered` |
+| E16 | flow sim ignores timed damage modifiers (Dread +20%, Soul Barbs +10%, in-shroud crit damage) and condition-applying procs | flow sim |
+| E17 | WvW record file: Fear of Death lacks the wiki 5s recharge; Dhuumfire uses the Scourge values (1s burning, 5s recharge) for every Necromancer because the format has no elite-spec gate | `wvw.json`, format |
 
 Format gaps the builders named (each is a coverage block today): on-weapon-swap,
 on-struck, on-ally-healed, on-kill, on-combo / on-aura, first-strike-after-
@@ -69,6 +147,14 @@ category, distance scale with a floor, "either boon" gates, per-virtue / single-
 skill scope, pet-side stats and boon targets, heat / astral force / unleashed /
 Photon Forge / Radiant Forge / Celestial Avatar state, distinct-condition-count
 scale, "others only" healing.
+
+Necromancer traits still on the gap line by name: Soul Comprehension (no
+carapace resource), Unholy Sanctuary, Soul Eater, Relentless Pursuit, Vital
+Persistence, Gluttony, Soul Battery, Sinister Shroud, Shroud Knight (percent
+heals, damage-scaled heals, incoming duration, life-force scaling,
+recharge), Spiteful Spirit and Weakening Shroud (trait skills cast on entry),
+the Dhuumfire Scourge/Harbinger variants (elite-spec gate), and the
+Harbinger shroud traits (not in scope).
 
 ## Gate 2: the state machine runs on data
 
@@ -110,6 +196,13 @@ suite: `crates/optimizer/tests/fidelity_logs.rs`; fixtures: three trimmed
 logs under `tests/fixtures/ei_logs/` (one Snow Crows golem log with its chat
 code, two WvW party logs).
 
+The three committed fixtures were re-downloaded from dps.report (the
+permalink id is the full file stem) and re-trimmed with `log_compare --trim`,
+and now carry `damage1S`, `conditionDamage1S`, `buffUptimes[].states` and
+`dpsAll` actor damage/condi-damage splits (sizes 66 -> 71 KB, 160 -> 182 KB,
+173 -> 198 KB); the golem test pins `burst_overlap_share` 1.0,
+`condition_share` 0.0029 and `condition_ramp_s` 11 as facts of the file.
+
 A log carries no traits, gear or chat code (verified against the EI model and
 the EVTC format), so WvW players without a supplied code are compared on
 corpus traits and the band partly measures distance from meta. Chat codes per
@@ -126,11 +219,84 @@ empty and is seeded from the next run after the items below):
 | `skill_share` TVD | 0.58-0.96 across WvW bands | the two items above plus name joins | re-measure after both |
 | `condi_fraction` | Engineer .005, Necromancer PvE .003, Mesmer .02 median | duration-free, the honest signal today | seed the ratchet on this and on uptimes once PvE boons are handled |
 
+Player's own logs (2026-09-23 evening, gear and traits from the account
+cache, no external boons on the golem; converted locally, not committed):
+
+| Character | Log DPS | Ours | condi share log / ours | skill_share TVD | Self Fury log / ours |
+|---|---|---|---|---|---|
+| Druid (condition), golem stationary | 7325 | 1656 (dps_engaged error -0.774) | 0.85 / 0.74 | 0.205 | 0.68 / 0.00 |
+| Druid, golem moving | 5511 | 1651 | 0.88 / 0.74 | 0.20 | 0.46 / 0.00 |
+| Reaper (power, Demolisher), golem | 11707 | 4814 (dps_engaged error -0.589) | 0.005 / 0.000 | 0.478 | 0.99 / 0.38 |
+| Willbender (power, corpus build), golem | 11343 | 7156 | 0.09 / 0.04 | 0.41 | 0.34 / 0.33 |
+| Druid, six WvW solo fights | 500-2766 | 1479 | median error 0.07 | 0.15-0.24 | 0.52-0.85 / 0.00 |
+
+After forms (measured on the main tree, forms and the 1.14.41
+Account-provenance comparator together): `skill_share` TVD moved to 0.478 for
+Reaper (was 0.647) and 0.205 for Druid (was 0.716). The Druid gain comes from
+two changes landing together: Account gear provenance (the character's real
+Ritualist/Apothecary gear from the addon cache instead of a corpus neighbour)
+plus Celestial Avatar in the flow sim. Boons did not move, because the PvE
+record file has no shroud-trigger records yet (gap E12).
+
+Reads: every shroud and Celestial Avatar skill is 0 on our side (forms never
+entered in the flow sim); self-generated boons from pets and forms are absent;
+the moving golem lost 1.8k DPS with hit rate and availability both still 1.00,
+so cast density is a third fight-shape term next to hit rate and availability.
+
+New WvW squad logs (Hammerhand The Bold, Willbender, kit from the corpus
+neighbour Celestial Willbender roaming, because the character has no chat
+code and is not in the addon cache):
+
+| Log | Squad | Duration | Availability | CC/min | dps_engaged log/sim (error) | burst_peak_5s log/sim | burst_overlap_share log/sim | Fury self/total | Quickness self/total |
+|---|---|---|---|---|---|---|---|---|---|
+| 20260923-221546 | 6 | 77s | 0.33 | 1.3 | 4149 / 1417 (-0.658) | 10053 / 2309 | 0.667 / 0.171 | 0.28 / 0.57 | 0.25 / - |
+| 20260923-221837 | 13 | 156s | 0.27 | 0.6 | 4150 / 1242 (-0.701) | 8699 / 1986 | 0.796 / 0.162 | 0.24 / 0.81 | 0.21 / 0.35 |
+
+In the 13-player fight, melee power players undershoot in the sim (Willbender,
+Reapers) while Dragonhunter (+2.1) and Berserker (+1.6) overshoot, because
+every simulated hit lands on a target present 27% of the time; group boons
+(total vs self uptime) are a scenario input the simulator does not take.
+
 Fight profiles the logs yielded (WvW party, 77-84 s): target availability
 0.27 / 0.46; incoming 1.8-1.9k DPS; CC received 1.9 / 5.2 per minute; strips
 received 11 per minute; downs 0.9-1.0 per player-minute. These are the numbers
 the scripted `WvwProfile::for_scenario` pressure cycle and the every-hit-lands
 assumption are to be replaced with.
+
+### Yardsticks (player doctrine, 2026-09-23)
+
+Power builds have no sustained damage; damage comes in bursts where Quickness,
+Fury, 100% crit and the form/burst skills overlap for about five seconds.
+Average DPS and average uptime are secondary. Headline observables to add to
+`log_compare`: peak N-second damage and the share of damage dealt while
+Quickness and Fury are both up (the EI JSON carries per-second damage and
+per-second buff states).
+
+Condition damage is the only sustained damage. Condition builds are judged on
+sustained pressure: condition DPS over the fight, ramp time, stack upkeep. The
+Druid golem log (92% condition) is the reference case.
+
+WvW: no enemy stands still, none lets themselves be disabled, all try to
+disable you. The longer the synergy chain a rotation strings together the
+better, but only if it survives disruption (non-damaging conditions, CC,
+strips). Stability, evades, blocks prolong the window; cleanses restore it.
+The fight profile (availability 0.27-0.46, 2-5 CC/min, 1.8-1.9k incoming DPS)
+is the disruption budget the simulator must spend against the burst windows.
+
+Playstyle picks the window: surprise builds are judged on the opening burst
+before the opponent reacts; duelists/brawlers/trolls on the prolonged fight
+under the full disruption budget. Never rank one on the other's yardstick;
+directional intent chooses the shape.
+
+Planned order: burst observable + Necromancer PvE shroud-trigger records
+(E12), condition-pressure observable, disruption scenarios from the fight
+profile, then E11 auto chains.
+
+The first two yardsticks are now measured: `burst_peak_5s`,
+`burst_peak_10s` and `burst_overlap_share` for the power/burst yardstick,
+`condition_share` and `condition_ramp_s` for the sustained-condition yardstick
+(see the 2026-09-23 "Fidelity: burst and condition observables" increment).
+The WvW disruption-budget and playstyle-window yardsticks remain unmeasured.
 
 ## Gate 4: intent and matching
 

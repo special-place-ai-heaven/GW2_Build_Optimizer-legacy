@@ -300,7 +300,7 @@ mod tests {
             3,
             "expected 3 override files (PvE, PvP, WvW)"
         );
-        assert_eq!(o.entity_count(), 9, "three sourced skills per mode");
+        assert_eq!(o.entity_count(), 21, "seven sourced skills per mode");
 
         assert!(matches!(
             o.lookup("2026-07-15", "WvW", "Skill", 13113, "initiative_cost"),

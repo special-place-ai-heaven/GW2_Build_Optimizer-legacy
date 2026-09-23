@@ -2,11 +2,15 @@
 //!
 //! A log carries the elite spec, the weapons it saw, what was cast and four
 //! squad-relative stat ranks; it carries no traits, gear, rune, sigils or
-//! relic. So the kit is assembled from three sources in priority order: the
-//! log, a chat code supplied beside it, and the nearest published build of the
-//! same elite spec and mode. Every field records which one it came from.
+//! relic. So the kit is assembled from four sources in priority order: the
+//! log, a chat code supplied beside it, the character's own active tabs in
+//! the addon's account cache, and the nearest published build of the same
+//! elite spec and mode. Every field records which one it came from.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use gw2_api::models::characters::{BuildTab, EquipmentPiece, EquipmentTab};
 
 use crate::benchmark::{plate_from, BenchmarkBuild};
 use crate::build_template::{self, BuildTemplate};
@@ -20,6 +24,8 @@ use super::ei_log::{EiLog, EiPlayer};
 pub enum Provenance {
     Log,
     ChatCode,
+    /// The character's active equipment or build tab in the addon cache.
+    Account,
     Corpus,
     Missing,
 }
@@ -33,7 +39,8 @@ pub struct ReconstructedKit {
     /// The least direct source any of the five slots came from.
     pub skills: Provenance,
     pub weapons: Provenance,
-    /// Prefix, rune, sigils, relic. Always the neighbour's: logs carry no gear.
+    /// Prefix, rune, sigils, relic: the account's when the character is
+    /// cached, else the neighbour's. Logs carry no gear.
     pub gear: Provenance,
     /// `source_url` of the corpus build used.
     pub neighbour: Option<String>,
@@ -130,6 +137,174 @@ fn split_sets(names: &[String], profession: &str) -> [Vec<String>; 2] {
     out
 }
 
+/// The character's own kit: the ACTIVE equipment and build tabs the addon
+/// cached as `char_<name>_equiptabs.json` / `_buildtabs.json`.
+#[derive(Debug, Default)]
+struct Account {
+    /// Armour and trinket rows, each with its own stat, so a mixed set stays
+    /// mixed. Weapons are in `sets`.
+    gear: Vec<GearRow>,
+    /// Land weapon rows per set (A, B), slot named by weapon type.
+    sets: [Vec<GearRow>; 2],
+    rune_id: Option<u32>,
+    /// A1, A2, B1, B2 in that order.
+    sigil_ids: Vec<u32>,
+    relic_id: Option<u32>,
+    /// Active build tab: its name, spec lines and heal / 3 utilities / elite.
+    build: Option<(String, Vec<SpecLine>, Vec<Option<u32>>)>,
+}
+
+const ARMOUR: [&str; 6] = ["Helm", "Shoulders", "Coat", "Gloves", "Leggings", "Boots"];
+const WEAPON_SLOTS: [[&str; 2]; 2] = [["WeaponA1", "WeaponA2"], ["WeaponB1", "WeaponB2"]];
+
+impl Account {
+    /// Most frequent stat over every row, weapons included.
+    fn prefix(&self) -> Option<String> {
+        ProviderBuild {
+            gear: self
+                .gear
+                .iter()
+                .chain(self.sets.iter().flatten())
+                .cloned()
+                .collect(),
+            ..Default::default()
+        }
+        .dominant_stat()
+    }
+}
+
+/// `Ok(None)`: the character is not cached, or has no active equipment tab.
+/// The file name comes from `DataCache::load_character`, the same function
+/// that sanitises the name when the addon writes it.
+fn load_account(cache_dir: &Path, character: &str, db: &GameDb) -> Result<Option<Account>, String> {
+    let cache = gw2_api::cache::DataCache::new(cache_dir);
+    let err = |e: gw2_api::cache::CacheError| format!("account cache for {character}: {e}");
+    let Some(tab) = cache
+        .load_character::<Vec<EquipmentTab>>(character, "equiptabs")
+        .map_err(err)?
+        .and_then(|tabs| tabs.into_iter().find(|t| t.is_active))
+    else {
+        return Ok(None);
+    };
+    // Selectable-stat items record `stats`; fixed-stat items only name
+    // their itemstat in the item's own infix upgrade.
+    let stat_of = |p: &EquipmentPiece| -> String {
+        p.stats
+            .as_ref()
+            .map(|s| s.id)
+            .or_else(|| {
+                db.items
+                    .get(&p.id)?
+                    .details
+                    .as_ref()?
+                    .infix_upgrade
+                    .as_ref()?
+                    .id
+            })
+            .and_then(|id| db.itemstats.get(&id))
+            .map(|s| s.name.clone())
+            .unwrap_or_default()
+    };
+    let row = |p: &EquipmentPiece, slot: String| GearRow {
+        slot,
+        stat: stat_of(p),
+        item_id: Some(p.id),
+        upgrade_ids: p.upgrades.clone(),
+    };
+    let mut acc = Account::default();
+    let mut runes: BTreeMap<u32, usize> = BTreeMap::new();
+    for p in &tab.equipment {
+        let slot = p.slot.as_str();
+        if slot == "Relic" {
+            acc.relic_id = Some(p.id);
+        } else if !slot.starts_with("Weapon") && !slot.contains("Aquatic") {
+            if ARMOUR.contains(&slot) {
+                for u in &p.upgrades {
+                    *runes.entry(*u).or_default() += 1;
+                }
+            }
+            acc.gear.push(row(p, p.slot.clone()));
+        }
+    }
+    acc.rune_id = runes
+        .into_iter()
+        .max_by_key(|&(id, n)| (n, std::cmp::Reverse(id)))
+        .map(|(id, _)| id);
+    for (k, slots) in WEAPON_SLOTS.iter().enumerate() {
+        for p in slots
+            .iter()
+            .filter_map(|s| tab.equipment.iter().find(|p| p.slot == *s))
+        {
+            acc.sigil_ids.extend(&p.upgrades);
+            let kind = db
+                .items
+                .get(&p.id)
+                .and_then(|i| i.details.as_ref()?.detail_type.as_deref())
+                .map(gw2_core::i18n::canonical_weapon_type);
+            if let Some(kind) = kind.filter(|k| is_weapon(k)) {
+                acc.sets[k].push(row(p, kind));
+            }
+        }
+    }
+    acc.build = cache
+        .load_character::<Vec<BuildTab>>(character, "buildtabs")
+        .map_err(err)?
+        .and_then(|tabs| tabs.into_iter().find(|t| t.is_active))
+        .map(|t| {
+            let specs = t
+                .build
+                .specializations
+                .iter()
+                .filter_map(|s| {
+                    Some(SpecLine {
+                        id: s.id?,
+                        trait_ids: s.traits.iter().flatten().copied().collect(),
+                    })
+                })
+                .collect();
+            let bar = t
+                .build
+                .skills
+                .map(|s| {
+                    std::iter::once(s.heal)
+                        .chain(s.utilities)
+                        .chain([s.elite])
+                        .collect()
+                })
+                .unwrap_or_default();
+            let name = t.build.name.unwrap_or_else(|| format!("tab {}", t.tab));
+            (name, specs, bar)
+        });
+    Ok(Some(acc))
+}
+
+/// How near two stat prefixes are: 2 for the same stat (as the db spells
+/// it, so "Ritualist" meets "Ritualist's"), plus the Jaccard overlap of
+/// their major attributes, so with no exact match Viper's (Power +
+/// Condition Damage) still outranks Harrier's for a Ritualist's kit.
+fn stat_nearness(a: &str, b: &str, db: &GameDb) -> f64 {
+    let stat = |name: &str| db.itemstat_by_name(name);
+    let key =
+        |name: &str| stat(name).map_or_else(|| gw2_core::i18n::alnum_key(name), |s| s.name.clone());
+    let majors = |name: &str| -> BTreeSet<String> {
+        let Some(s) = stat(name) else {
+            return BTreeSet::new();
+        };
+        let top = s
+            .attributes
+            .iter()
+            .map(|a| a.multiplier)
+            .fold(0.0, f64::max);
+        s.attributes
+            .iter()
+            .filter(|a| a.multiplier >= top)
+            .map(|a| a.attribute.clone())
+            .collect()
+    };
+    let exact = if key(a) == key(b) { 2.0 } else { 0.0 };
+    exact + jaccard(&majors(a), &majors(b))
+}
+
 /// The addon's gate for a build: plate, then the validator with no errors.
 pub fn validate(build: &BenchmarkBuild, db: &GameDb) -> Result<ValidatedBuild, String> {
     let plate =
@@ -142,14 +317,17 @@ pub fn validate(build: &BenchmarkBuild, db: &GameDb) -> Result<ValidatedBuild, S
     Ok(validated)
 }
 
+/// `account_dir`: the addon's cache dir holding `char_*_equiptabs.json`;
+/// `None` skips the account source.
 pub fn reconstruct(
     log: &EiLog,
     player: &EiPlayer,
     chat_code: Option<&str>,
+    account_dir: Option<&Path>,
     corpus: &[BenchmarkBuild],
     db: &GameDb,
 ) -> Result<ReconstructedKit, String> {
-    reconstruct_with(log, player, chat_code, corpus, db, |b| {
+    reconstruct_with(log, player, chat_code, account_dir, corpus, db, |b| {
         validate(b, db).map(|_| ())
     })
 }
@@ -160,6 +338,7 @@ fn reconstruct_with(
     log: &EiLog,
     player: &EiPlayer,
     chat_code: Option<&str>,
+    account_dir: Option<&Path>,
     corpus: &[BenchmarkBuild],
     db: &GameDb,
     neighbour_ok: impl Fn(&BenchmarkBuild) -> Result<(), String>,
@@ -180,6 +359,39 @@ fn reconstruct_with(
         }
         None => None,
     };
+
+    let mut notes: Vec<String> = Vec::new();
+    let account = match account_dir.map(|d| load_account(d, &player.name, db)) {
+        Some(Ok(a)) => a,
+        Some(Err(e)) => {
+            notes.push(e);
+            None
+        }
+        None => None,
+    };
+    let account_prefix = account.as_ref().and_then(Account::prefix);
+    // The active tab may have moved on since the log; one of another elite
+    // is not the build that was played.
+    let account_build =
+        account
+            .as_ref()
+            .and_then(|a| a.build.as_ref())
+            .filter(|(name, specs, _)| {
+                let same = specs.len() == 3
+                    && elite_of(specs.iter().map(|l| l.id), db) == elite
+                    && specs.iter().all(|l| {
+                        db.specializations
+                            .get(&l.id)
+                            .is_some_and(|s| s.profession == profession)
+                    });
+                if !same {
+                    notes.push(format!(
+                        "active build tab {name} is not {}: not used",
+                        player.profession
+                    ));
+                }
+                same
+            });
 
     // Log bar: palette-equippable casts only, so flips and chains of a
     // utility (same slot, not on the palette) never take a seat.
@@ -224,9 +436,11 @@ fn reconstruct_with(
         .collect();
 
     // Neighbour: same profession, mode and elite spec, platable and
-    // validator-clean; one score. Ties go to the LAST row, which is
-    // `find_best_benchmark`'s tie order with no role hint.
-    let mut candidates: Vec<(f64, usize, &BenchmarkBuild)> = corpus
+    // validator-clean. With the account's gear known, the row on the
+    // nearest dominant stat comes first, since the neighbour now supplies
+    // only the role objective; then one overlap score. Ties go to the LAST row, which
+    // is `find_best_benchmark`'s tie order with no role hint.
+    let mut candidates: Vec<(f64, f64, usize, &BenchmarkBuild)> = corpus
         .iter()
         .enumerate()
         .filter(|(_, b)| {
@@ -244,7 +458,14 @@ fn reconstruct_with(
                 .filter(|g| is_weapon(&g.slot))
                 .map(|g| g.slot.to_lowercase())
                 .collect();
+            let stat = b
+                .published
+                .dominant_stat()
+                .unwrap_or_else(|| b.gear_prefix.clone());
             (
+                account_prefix
+                    .as_deref()
+                    .map_or(0.0, |want| stat_nearness(want, &stat, db)),
                 jaccard(&log_skill_set, &skills) + jaccard(&log_weapon_set, &weapons),
                 i,
                 b,
@@ -254,12 +475,16 @@ fn reconstruct_with(
     if candidates.is_empty() {
         return Err(format!("no published {} {mode} build", player.profession));
     }
-    candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)));
+    candidates.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then(b.1.total_cmp(&a.1))
+            .then(b.2.cmp(&a.2))
+    });
     // Best first; every better row the validator refused is named.
     let mut skipped: Vec<String> = Vec::new();
     let neighbour = candidates
         .iter()
-        .find_map(|&(_, _, b)| match neighbour_ok(b) {
+        .find_map(|&(_, _, _, b)| match neighbour_ok(b) {
             Ok(()) => Some(b),
             Err(e) => {
                 skipped.push(format!("neighbour {} skipped: {e}", b.source_url));
@@ -275,8 +500,8 @@ fn reconstruct_with(
         })?;
 
     // Traits.
-    let (specs, traits) = match &template {
-        Some(t) => (
+    let (specs, traits): (Vec<SpecLine>, Provenance) = match (&template, account_build) {
+        (Some(t), _) => (
             t.specs
                 .iter()
                 .map(|s| SpecLine {
@@ -290,10 +515,12 @@ fn reconstruct_with(
                 .collect(),
             Provenance::ChatCode,
         ),
-        None => (neighbour.published.specs.clone(), Provenance::Corpus),
+        (None, Some((_, specs, _))) => (specs.clone(), Provenance::Account),
+        (None, None) => (neighbour.published.specs.clone(), Provenance::Corpus),
     };
 
-    // Skill bar: heal, three utilities, elite; gaps from code, then neighbour.
+    // Skill bar: heal, three utilities, elite; gaps from code, then the
+    // account's build tab, then neighbour.
     let code_bar: Vec<Option<u32>> = template
         .as_ref()
         .map(|t| {
@@ -303,6 +530,27 @@ fn reconstruct_with(
                 .collect()
         })
         .unwrap_or_default();
+    let account_bar: Vec<Option<u32>> = account_build
+        .map(|(_, _, bar)| bar.clone())
+        .unwrap_or_default();
+    if let (Some(code), Some((tab, tab_specs, _))) = (chat_code, account_build) {
+        let lines = |v: &[SpecLine]| -> BTreeSet<(u32, Vec<u32>)> {
+            v.iter().map(|l| (l.id, l.trait_ids.clone())).collect()
+        };
+        let mut differ = Vec::new();
+        if lines(&specs) != lines(tab_specs) {
+            differ.push("traits");
+        }
+        if code_bar != account_bar {
+            differ.push("skills");
+        }
+        if !differ.is_empty() {
+            notes.push(format!(
+                "chat code {code} disagrees with active build tab {tab} on {}; chat code used",
+                differ.join(" and ")
+            ));
+        }
+    }
     let corpus_bar = neighbour.published.slot_skills(db);
     let mut skills = Provenance::Log;
     let mut bar: Vec<Option<u32>> = Vec::with_capacity(5);
@@ -314,6 +562,7 @@ fn reconstruct_with(
         let mut picked: Vec<u32> = from.clone();
         for (source, prov) in [
             (&code_bar, Provenance::ChatCode),
+            (&account_bar, Provenance::Account),
             (&corpus_bar, Provenance::Corpus),
         ] {
             for id in seats
@@ -349,12 +598,16 @@ fn reconstruct_with(
                 .collect()
         })
         .unwrap_or_default();
-    let prefix = neighbour
-        .published
-        .dominant_stat()
-        .unwrap_or_else(|| neighbour.gear_prefix.clone());
+    let prefix = account_prefix.clone().unwrap_or_else(|| {
+        neighbour
+            .published
+            .dominant_stat()
+            .unwrap_or_else(|| neighbour.gear_prefix.clone())
+    });
     // Per land set: the log where it saw the set, else the chat code, else
-    // the neighbour's own rows. Provenance is the weakest source used.
+    // the account's tab, else the neighbour's own rows. Provenance is the
+    // weakest source used. A log set the account also holds keeps the
+    // account's rows, so their per-row stats survive.
     let code_sets = split_sets(&code_weapons, &profession);
     let neighbour_weapons: Vec<&GearRow> = neighbour
         .published
@@ -372,14 +625,27 @@ fn reconstruct_with(
     };
     let mut weapon_rows: Vec<GearRow> = Vec::new();
     let mut set_sources: Vec<(usize, Provenance)> = Vec::new();
+    let account_set = |k: usize| -> &[GearRow] { account.as_ref().map_or(&[], |a| &a.sets[k]) };
     for k in 0..2 {
         let (rows, prov): (Vec<GearRow>, Provenance) = if !log_sets[k].is_empty() {
-            (log_sets[k].iter().map(new_row).collect(), Provenance::Log)
+            let same = account_set(k).len() == log_sets[k].len()
+                && account_set(k)
+                    .iter()
+                    .zip(&log_sets[k])
+                    .all(|(g, w)| g.slot.eq_ignore_ascii_case(w));
+            let rows = if same {
+                account_set(k).to_vec()
+            } else {
+                log_sets[k].iter().map(new_row).collect()
+            };
+            (rows, Provenance::Log)
         } else if !code_sets[k].is_empty() {
             (
                 code_sets[k].iter().map(new_row).collect(),
                 Provenance::ChatCode,
             )
+        } else if !account_set(k).is_empty() {
+            (account_set(k).to_vec(), Provenance::Account)
         } else {
             let rows = neighbour_weapons
                 .iter()
@@ -408,18 +674,53 @@ fn reconstruct_with(
     } else {
         Vec::new()
     };
-    let gear: Vec<GearRow> = neighbour
-        .published
-        .gear
-        .iter()
-        .filter(|g| !is_weapon(&g.slot))
-        .cloned()
-        .chain(weapon_rows)
-        .collect();
+    let (armour, rune_id, sigil_ids, relic_id, gear_prov) = match &account {
+        Some(a) => {
+            // An upgrade the tab does not hold stays the neighbour's, named.
+            let p = &neighbour.published;
+            for (missing, what) in [
+                (a.rune_id.is_none(), "rune"),
+                (a.sigil_ids.is_empty(), "sigils"),
+                (a.relic_id.is_none(), "relic"),
+            ] {
+                if missing {
+                    notes.push(format!("{what} not in account tab: neighbour's"));
+                }
+            }
+            (
+                a.gear.clone(),
+                a.rune_id.or(p.rune_id),
+                if a.sigil_ids.is_empty() {
+                    p.sigil_ids.clone()
+                } else {
+                    a.sigil_ids.clone()
+                },
+                a.relic_id.or(p.relic_id),
+                Provenance::Account,
+            )
+        }
+        None => (
+            neighbour
+                .published
+                .gear
+                .iter()
+                .filter(|g| !is_weapon(&g.slot))
+                .cloned()
+                .collect(),
+            neighbour.published.rune_id,
+            neighbour.published.sigil_ids.clone(),
+            neighbour.published.relic_id,
+            Provenance::Corpus,
+        ),
+    };
+    let gear: Vec<GearRow> = armour.into_iter().chain(weapon_rows).collect();
 
-    let build_code = chat_code
-        .map(str::to_string)
-        .or_else(|| neighbour.build_code.clone());
+    // The neighbour's code would contradict account traits.
+    let build_code = match (chat_code, traits) {
+        (Some(code), _) => Some(code.to_string()),
+        (None, Provenance::Account) => None,
+        _ => neighbour.build_code.clone(),
+    };
     let build = BenchmarkBuild {
         source: "ei_log".into(),
         profession,
@@ -427,7 +728,7 @@ fn reconstruct_with(
         mode: mode.into(),
         role: neighbour.role.clone(),
         build_code: build_code.clone(),
-        gear_prefix: neighbour.gear_prefix.clone(),
+        gear_prefix: account_prefix.unwrap_or_else(|| neighbour.gear_prefix.clone()),
         source_url: neighbour.source_url.clone(),
         scraped_at: neighbour.scraped_at.clone(),
         published: ProviderBuild {
@@ -435,15 +736,22 @@ fn reconstruct_with(
             specs,
             skill_ids,
             gear,
-            rune_id: neighbour.published.rune_id,
-            sigil_ids: neighbour.published.sigil_ids.clone(),
-            relic_id: neighbour.published.relic_id,
+            rune_id,
+            sigil_ids,
+            relic_id,
             amulet_id: None,
             prose: String::new(),
         },
         benchmark_dps: None,
         log_url: None,
     };
+    if gear_prov == Provenance::Account {
+        notes.push(format!(
+            "role objective {:?} from neighbour role '{}'",
+            super::compare::published_objective(&build),
+            neighbour.role
+        ));
+    }
 
     Ok(ReconstructedKit {
         build,
@@ -451,10 +759,11 @@ fn reconstruct_with(
         traits,
         skills,
         weapons,
-        gear: Provenance::Corpus,
+        gear: gear_prov,
         neighbour: Some(neighbour.source_url.clone()),
         stat_flags: skipped
             .into_iter()
+            .chain(notes)
             .chain(weapon_notes)
             .chain(stat_flags(player, &prefix, db))
             .collect(),
@@ -523,8 +832,9 @@ fn weaker(a: Provenance, b: Provenance) -> Provenance {
     let rank = |p| match p {
         Provenance::Log => 0,
         Provenance::ChatCode => 1,
-        Provenance::Corpus => 2,
-        Provenance::Missing => 3,
+        Provenance::Account => 2,
+        Provenance::Corpus => 3,
+        Provenance::Missing => 4,
     };
     if rank(b) > rank(a) {
         b
@@ -734,7 +1044,7 @@ mod tests {
         corpus: &[BenchmarkBuild],
         db: &GameDb,
     ) -> Result<ReconstructedKit, String> {
-        reconstruct_with(log, p, code, corpus, db, |_| Ok(()))
+        reconstruct_with(log, p, code, None, corpus, db, |_| Ok(()))
     }
 
     #[test]
@@ -751,8 +1061,16 @@ mod tests {
                 }
             }
         };
-        let kit = reconstruct_with(&EiLog::default(), &p, None, &corpus(), &db, refuse("far"))
-            .expect("kit");
+        let kit = reconstruct_with(
+            &EiLog::default(),
+            &p,
+            None,
+            None,
+            &corpus(),
+            &db,
+            refuse("far"),
+        )
+        .expect("kit");
         assert_eq!(kit.neighbour.as_deref(), Some("near"));
         // The log saw set 1 only; "near" supplies set 2 and says so.
         assert_eq!(
@@ -763,12 +1081,20 @@ mod tests {
             ]
         );
         // Refusing the worse row changes nothing and flags nothing.
-        let kit = reconstruct_with(&EiLog::default(), &p, None, &corpus(), &db, refuse("near"))
-            .expect("kit");
+        let kit = reconstruct_with(
+            &EiLog::default(),
+            &p,
+            None,
+            None,
+            &corpus(),
+            &db,
+            refuse("near"),
+        )
+        .expect("kit");
         assert_eq!(kit.neighbour.as_deref(), Some("far"));
         assert!(kit.stat_flags.is_empty());
         // All refused: the error names every skip.
-        let err = reconstruct_with(&EiLog::default(), &p, None, &corpus(), &db, |_| {
+        let err = reconstruct_with(&EiLog::default(), &p, None, None, &corpus(), &db, |_| {
             Err("validator: x".to_string())
         })
         .unwrap_err();
@@ -919,11 +1245,309 @@ mod tests {
         assert_eq!(err, "no published Harbinger PvE build");
     }
 
+    /// The toy db plus Viper's and three weapon items: 900 Greatsword,
+    /// 901 Axe, 902 Focus.
+    fn account_db() -> GameDb {
+        let mut db = db();
+        let mut vipers = db.itemstats[&584].clone();
+        vipers.id = 585;
+        vipers.name = "Viper's".into();
+        db.itemstats.insert(585, vipers);
+        for (id, kind) in [(900, "Greatsword"), (901, "Axe"), (902, "Focus")] {
+            let item = serde_json::from_value(serde_json::json!({
+                "id": id, "name": kind, "type": "Weapon", "rarity": "Exotic",
+                "level": 80, "details": {"type": kind}
+            }))
+            .expect("item json");
+            db.items.insert(id, item);
+        }
+        db
+    }
+
+    /// A test-scratch account cache holding "Fun Detected": Berserker's
+    /// armour with rune 7 (one boot on 8), a Viper's trinket and
+    /// greatsword, Axe/Focus on set B, relic 555, and an active build tab
+    /// HOME on 53/50/34 with `traits` in every line.
+    fn account_dir(tag: &str, traits: [u32; 3]) -> std::path::PathBuf {
+        use serde_json::json;
+        let dir = std::env::temp_dir().join(format!("gw2bo_kit_{tag}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("test dir");
+        let piece = |slot: &str, id: u32, stat: u32, upgrades: &[u32]| json!({"id": id, "slot": slot, "stats": {"id": stat, "attributes": {}}, "upgrades": upgrades});
+        let mut equipment: Vec<serde_json::Value> = ARMOUR
+            .iter()
+            .map(|s| piece(s, 1, 584, &[if *s == "Boots" { 8 } else { 7 }]))
+            .collect();
+        equipment.extend([
+            piece("Accessory1", 2, 585, &[]),
+            piece("WeaponB2", 902, 584, &[43]),
+            piece("WeaponB1", 901, 584, &[42]),
+            piece("WeaponA1", 900, 585, &[40, 41]),
+            piece("WeaponAquaticA", 900, 584, &[44]),
+            json!({"id": 555, "slot": "Relic"}),
+        ]);
+        let equip = json!([
+            {"tab": 1, "is_active": false, "equipment": []},
+            {"tab": 2, "name": "gear", "is_active": true, "equipment": equipment}
+        ]);
+        let lines: Vec<serde_json::Value> = [53, 50, 34]
+            .iter()
+            .map(|id| json!({"id": id, "traits": traits}))
+            .collect();
+        let build = json!([{"tab": 1, "is_active": true, "build": {
+            "name": "HOME", "profession": "Necromancer", "specializations": lines,
+            "skills": {"heal": 10, "utilities": [20, 21, 22], "elite": 30}
+        }}]);
+        for (kind, v) in [("equiptabs", equip), ("buildtabs", build)] {
+            std::fs::write(
+                dir.join(format!("char_fun_detected_{kind}.json")),
+                v.to_string(),
+            )
+            .expect("write tab");
+        }
+        dir
+    }
+
+    fn account_player(name: &str) -> EiPlayer {
+        let mut p = player(&[], &["Unknown", "Unknown", "Unknown", "Unknown"]);
+        p.name = name.into();
+        p
+    }
+
+    /// "far" on Viper's, so only the stat preference picks "near".
+    fn stat_corpus() -> Vec<BenchmarkBuild> {
+        let mut rows = corpus();
+        for g in &mut rows[1].published.gear {
+            g.stat = "Viper's".into();
+        }
+        rows
+    }
+
+    #[test]
+    fn a_cached_character_supplies_gear_traits_skills_and_weapons() {
+        let db = account_db();
+        let dir = account_dir("full", [5301, 5302, 5303]);
+        // The cache writer lower-cases the name and turns the space into `_`.
+        let p = account_player("FUN Detected");
+        let kit = reconstruct_with(
+            &EiLog::default(),
+            &p,
+            None,
+            Some(&dir),
+            &stat_corpus(),
+            &db,
+            |_| Ok(()),
+        )
+        .expect("kit");
+        std::fs::remove_dir_all(&dir).ok();
+        let b = &kit.build.published;
+        assert_eq!(
+            (kit.gear, kit.traits, kit.specs, kit.skills, kit.weapons),
+            (
+                Provenance::Account,
+                Provenance::Account,
+                Provenance::Account,
+                Provenance::Account,
+                Provenance::Account
+            )
+        );
+        assert_eq!(kit.build.gear_prefix, "Berserker's");
+        assert_eq!(b.rune_id, Some(7));
+        assert_eq!(b.sigil_ids, [40, 41, 42, 43]);
+        assert_eq!(b.relic_id, Some(555));
+        let rows: Vec<(&str, &str)> = b
+            .gear
+            .iter()
+            .map(|g| (g.slot.as_str(), g.stat.as_str()))
+            .collect();
+        assert_eq!(rows[6], ("Accessory1", "Viper's"));
+        assert_eq!(
+            rows[7..],
+            [
+                ("Greatsword", "Viper's"),
+                ("Axe", "Berserker's"),
+                ("Focus", "Berserker's")
+            ]
+        );
+        assert_eq!(b.skill_ids, [10, 20, 21, 22, 30]);
+        assert_eq!(
+            b.specs.iter().map(|l| l.id).collect::<Vec<_>>(),
+            [53, 50, 34]
+        );
+        assert_eq!(b.specs[0].trait_ids, [5301, 5302, 5303]);
+        assert_eq!(b.build_code, None);
+        // Same stat beats the overlap tie-break, and the objective is named.
+        assert_eq!(kit.neighbour.as_deref(), Some("near"));
+        assert_eq!(
+            kit.stat_flags,
+            ["role objective PowerDps from neighbour role 'Power DPS'"]
+        );
+        assert!(plate_from(&kit.build, &db).is_some());
+    }
+
+    #[test]
+    fn a_chat_code_that_disagrees_with_the_build_tab_is_flagged() {
+        let db = account_db();
+        let dir = account_dir("code", [5309, 5309, 5309]);
+        let p = account_player("Fun Detected");
+        let kit = reconstruct_with(
+            &EiLog::default(),
+            &p,
+            Some(CODE),
+            Some(&dir),
+            &stat_corpus(),
+            &db,
+            |_| Ok(()),
+        )
+        .expect("kit");
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(kit.traits, Provenance::ChatCode);
+        assert_eq!(kit.gear, Provenance::Account);
+        assert_eq!(kit.build.build_code.as_deref(), Some(CODE));
+        let want = format!("chat code {CODE} disagrees with active build tab HOME on traits");
+        assert!(
+            kit.stat_flags.iter().any(|f| f.starts_with(&want)),
+            "{:?}",
+            kit.stat_flags
+        );
+    }
+
+    #[test]
+    fn an_uncached_character_falls_back_to_the_corpus() {
+        let db = account_db();
+        let dir = account_dir("miss", [5301, 5302, 5303]);
+        let p = account_player("Someone Else");
+        let kit = reconstruct_with(
+            &EiLog::default(),
+            &p,
+            None,
+            Some(&dir),
+            &stat_corpus(),
+            &db,
+            |_| Ok(()),
+        )
+        .expect("kit");
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(kit.gear, Provenance::Corpus);
+        assert_eq!(kit.traits, Provenance::Corpus);
+        // No stat to prefer: the overlap tie goes to the last row.
+        assert_eq!(kit.neighbour.as_deref(), Some("far"));
+        assert!(kit.stat_flags.is_empty(), "{:?}", kit.stat_flags);
+    }
+
+    #[test]
+    fn stat_nearness_prefers_the_same_stat_then_shared_majors() {
+        let mut db = GameDb::empty_for_tests();
+        for (id, name, attrs) in [
+            (
+                1,
+                "Ritualist's",
+                &[
+                    ("Vitality", 0.3),
+                    ("ConditionDamage", 0.3),
+                    ("BoonDuration", 0.16),
+                ][..],
+            ),
+            (
+                2,
+                "Viper's",
+                &[
+                    ("Power", 0.3),
+                    ("ConditionDamage", 0.3),
+                    ("Precision", 0.16),
+                ][..],
+            ),
+            (
+                3,
+                "Harrier's",
+                &[("Power", 0.35), ("Healing", 0.25), ("BoonDuration", 0.25)][..],
+            ),
+        ] {
+            let attributes = attrs
+                .iter()
+                .map(|&(a, m)| StatAttribute {
+                    attribute: a.into(),
+                    multiplier: m,
+                    value: 0,
+                })
+                .collect();
+            db.itemstats.insert(
+                id,
+                ItemStat {
+                    id,
+                    name: name.into(),
+                    attributes,
+                },
+            );
+        }
+        let near = |b: &str| stat_nearness("Ritualist's", b, &db);
+        assert_eq!(near("Ritualist"), 3.0);
+        assert!((near("Viper's") - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(near("Harrier's"), 0.0);
+    }
+
     fn cached_db() -> GameDb {
         let cache = gw2_api::cache::DataCache::new(
             gw2_api::dev_config::cache_dir().expect("dev.cfg with addons_dir"),
         );
         GameDb::load(&cache).expect("game data cached \u{2014} sync it in-game first")
+    }
+
+    /// The player's own golem log, kept beside the repo, not in it.
+    const OWN_GOLEM_LOG: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../GW2_Build_Optimizer-work/ownlogs-2026-09-23/logs/20260923-202730_StdGolem_kill.json"
+    );
+
+    #[test]
+    #[ignore = "needs a synced game-data cache, the character cache and the own golem log"]
+    fn the_players_druid_comes_from_the_account_cache() {
+        let db = cached_db();
+        let cache = gw2_api::dev_config::cache_dir().expect("dev.cfg with addons_dir");
+        let corpus = crate::scraper::load_benchmarks(cache.parent().expect("addon dir"));
+        let log =
+            super::super::ei_log::load(std::path::Path::new(OWN_GOLEM_LOG)).expect("own golem log");
+        let p = log
+            .squad()
+            .find(|p| p.name == "Fun Detected")
+            .expect("Fun Detected in the log");
+        let kit = reconstruct(&log, p, None, Some(&cache), &corpus, &db).expect("kit");
+        println!(
+            "gear {:?} traits {:?} skills {:?} weapons {:?} prefix {} rune {:?} sigils {:?} relic {:?} specs {:?} <- {:?} flags {:?}",
+            kit.gear,
+            kit.traits,
+            kit.skills,
+            kit.weapons,
+            kit.build.gear_prefix,
+            kit.build.published.rune_id,
+            kit.build.published.sigil_ids,
+            kit.build.published.relic_id,
+            kit.build.published.specs,
+            kit.neighbour,
+            kit.stat_flags
+        );
+        assert_eq!(kit.gear, Provenance::Account);
+        assert_eq!(kit.traits, Provenance::Account);
+        let stat = db
+            .itemstat_by_name(&kit.build.gear_prefix)
+            .expect("prefix resolves");
+        let top = stat
+            .attributes
+            .iter()
+            .map(|a| a.multiplier)
+            .fold(0.0, f64::max);
+        assert!(
+            stat.attributes
+                .iter()
+                .any(|a| a.attribute == "ConditionDamage" && a.multiplier >= top),
+            "{} is not condition-damage dominant",
+            stat.name
+        );
+        // The active DRUID build tab's lines and first-line traits.
+        let tab: Vec<u32> = kit.build.published.specs.iter().map(|l| l.id).collect();
+        assert_eq!(tab, [30, 33, 5]);
+        assert_eq!(kit.build.published.specs[0].trait_ids, [1075, 1846, 1912]);
+        assert!(plate_from(&kit.build, &db).is_some());
+        validate(&kit.build, &db).expect("validator-clean");
     }
 
     #[test]
@@ -960,7 +1584,7 @@ mod tests {
                     .get(&file)
                     .and_then(|m| m.get(&p.name))
                     .map(String::as_str);
-                match reconstruct(&log, p, code, &corpus, &db) {
+                match reconstruct(&log, p, code, None, &corpus, &db) {
                     Ok(kit) if plate_from(&kit.build, &db).is_some() => {
                         plated += 1;
                         println!(

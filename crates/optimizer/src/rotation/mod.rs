@@ -318,6 +318,13 @@ pub struct SimulationResult {
     pub has_cover_answer: bool,
     /// Counterplay-aware WvW execution report. Present only for WvW scenarios.
     pub wvw: Option<WvwCombatReport>,
+    /// Measurement capture, one entry per second `[k, k+1)` of the window:
+    /// (strike, condition) damage landed in it. Nothing schedules on it.
+    pub damage_per_second: Vec<(f64, f64)>,
+    /// Buff name -> present at each second's midpoint tick, indexed like
+    /// `damage_per_second`. Only names that were ever active, as
+    /// `buff_uptime`.
+    pub buff_presence_per_second: HashMap<String, Vec<bool>>,
 }
 
 /// Per-skill breakdown in a simulation result.

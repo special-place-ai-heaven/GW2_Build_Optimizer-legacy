@@ -64,6 +64,10 @@ pub struct EiPlayer {
     /// `[phase][second]`, cumulative damage to all targets.
     #[serde(rename = "damage1S")]
     pub damage1_s: Vec<Vec<i64>>,
+    /// `[phase][second]`, cumulative condition damage to all targets. Empty
+    /// in fixtures trimmed before it was read.
+    #[serde(rename = "conditionDamage1S", skip_serializing_if = "Vec::is_empty")]
+    pub condition_damage1_s: Vec<Vec<i64>>,
     /// `[phase][]`, incoming damage by skill.
     pub total_damage_taken: Vec<Vec<EiDamageDist>>,
 }
@@ -90,6 +94,12 @@ pub struct EiDps {
     pub damage: i64,
     pub power_damage: i64,
     pub condi_damage: i64,
+    /// The player alone, minions excluded. `None` in fixtures trimmed before
+    /// it was read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_damage: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_condi_damage: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -128,6 +138,11 @@ pub struct EiCast {
 pub struct EiBuffUptime {
     pub id: i64,
     pub buff_data: Vec<EiBuffData>,
+    /// Step function `[time ms from log start, stacks]`, whole fight; the
+    /// last entry at or before `t` holds at `t`. Empty in fixtures trimmed
+    /// before it was read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<(i64, i64)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

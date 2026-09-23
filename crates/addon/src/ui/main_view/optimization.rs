@@ -736,6 +736,7 @@ pub(super) fn simulate_suggestion_rotation(
                 .specializations
                 .iter()
                 .any(|(label, _)| label.replace(" [E]", "").eq_ignore_ascii_case("Weaver")),
+            form: None,
         },
         gw2_optimizer::rotation::combat_model::EnemyDummy::default(),
     );

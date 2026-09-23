@@ -1,0 +1,15 @@
+{
+  "source": "https://wiki.guildwars2.com/wiki/Astral_force, https://wiki.guildwars2.com/wiki/Celestial_Avatar (read 2026-09-23). Astral force fills 0.75 % of the bar per strike and 1.5 % per heal on a damaged target (condition damage and barrier give none); Celestial Avatar needs a full bar (the API publishes cost 100 on skill 31869), drains the bar to 0 over its 15 s Duration fact, gains nothing while active, and an early exit loses 50 % of what remains; since 2015-10-27 astral force no longer degenerates out of combat (Celestial Avatar version history), so a fight starts with the bar its player brought. Shroud forms live in shroud.json.",
+  "forms": {
+    "31869": {
+      "name": "Celestial Avatar",
+      "resource": "astral force",
+      "pool": 100.0,
+      "gain_pct_per_strike": 0.75,
+      "gain_pct_per_heal": 1.5,
+      "gains_in_form": false,
+      "persists_out_of_combat": true,
+      "early_exit_keep_pct": 50.0
+    }
+  }
+}

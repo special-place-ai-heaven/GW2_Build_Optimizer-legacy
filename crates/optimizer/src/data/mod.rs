@@ -8,6 +8,7 @@ pub mod combos;
 mod consistency_tests;
 pub mod effect_coverage;
 pub mod fight_population;
+pub mod forms;
 pub mod hit_timing;
 pub mod manifests;
 pub mod modifier_buckets;

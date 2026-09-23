@@ -55,6 +55,16 @@ const DPS_FLOOR: f64 = 100.0;
 const CLEANSE_FLOOR: f64 = 0.5;
 /// Might cap, so the Might error is on the same 0..1 scale as uptimes.
 const MIGHT_CAP: f64 = 25.0;
+/// Burst windows in seconds: `burst_peak_5s`, `burst_peak_10s`.
+const BURST_WINDOWS_S: [usize; 2] = [5, 10];
+/// The boons whose overlap `burst_overlap_share` measures, by EI `buffMap`
+/// name (= our `buff_slots` name).
+const BURST_BOONS: [&str; 2] = ["Quickness", "Fury"];
+/// Below this condition share there is no condition pressure to ramp.
+const RAMP_MIN_CONDI_SHARE: f64 = 0.2;
+/// `condition_ramp_s` ends when condition DPS first reaches this fraction of
+/// its fight median.
+const RAMP_FRACTION: f64 = 0.8;
 
 /// Log-side numbers for one player, whole-fight phase `[0]`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -67,6 +77,10 @@ pub struct Observed {
     pub dps_active: f64,
     /// `condiDamage / damage`, 0..1.
     pub condi_fraction: f64,
+    /// `actorCondiDamage / actorDamage`: the player alone, minions excluded
+    /// (a Druid's pet is strike damage in `condi_fraction`). `None` when the
+    /// log lacks the actor split or the player dealt no damage.
+    pub condition_share: Option<f64>,
     /// `totalDamageDist[0]` share by skill name; every `indirectDamage` row
     /// in one `Conditions` row. Sums to 1 when there is any damage.
     pub skill_share: BTreeMap<String, f64>,
@@ -97,6 +111,20 @@ pub struct Observed {
     pub incoming_dps: f64,
     /// `downCount > 0`.
     pub downed: bool,
+    /// Peak DPS over any 5 s / 10 s window of the per-second damage from
+    /// `damage1S[0]` (cumulative, all targets; see [`per_second`]). `None`
+    /// when the log has fewer seconds than the window.
+    pub burst_peak_5s: Option<f64>,
+    pub burst_peak_10s: Option<f64>,
+    /// Share of `damage1S[0]` damage landed in seconds where every
+    /// [`BURST_BOONS`] boon is on the player at the second's midpoint, from
+    /// `buffUptimes[].states`. `None` when a boon the log lists has no
+    /// states (fixtures trimmed before they were read). A boon the log does
+    /// not list was never present.
+    pub burst_overlap_share: Option<f64>,
+    /// [`condition_ramp`] over `damage1S[0]` and `conditionDamage1S[0]`.
+    /// `None` when the log has no `conditionDamage1S` or no condition damage.
+    pub condition_ramp_s: Option<f64>,
 }
 
 /// Simulator-side numbers: the 60 s flow `SimulationResult`, plus the WvW
@@ -124,6 +152,12 @@ pub struct Simulated {
     pub downed: Option<bool>,
     /// WvW timeline only: its length in seconds (the referee's gate window).
     pub sim_s: Option<f64>,
+    /// The flow run's `damage_per_second` / `buff_presence_per_second`
+    /// through the same measures as [`Observed`]'s fields of these names.
+    pub burst_peak_5s: Option<f64>,
+    pub burst_peak_10s: Option<f64>,
+    pub burst_overlap_share: Option<f64>,
+    pub condition_ramp_s: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -241,6 +275,32 @@ fn observe_with<'a>(
         }
     }
 
+    let damage_1s = p.damage1_s.first().map_or_else(Vec::new, |d| per_second(d));
+    let condition_1s = p.condition_damage1_s.first().map(|d| per_second(d));
+    let boon_states: Option<Vec<&[(i64, i64)]>> = BURST_BOONS
+        .iter()
+        .map(|&name| {
+            let listed = p.buff_uptimes.iter().find(|b| {
+                u32::try_from(b.id)
+                    .ok()
+                    .and_then(|id| log.buff_name(id))
+                    .is_some_and(|n| n == name)
+            });
+            match listed {
+                None => Some(&[][..]),
+                Some(b) if b.states.is_empty() => None,
+                Some(b) => Some(&b.states[..]),
+            }
+        })
+        .collect();
+    // Interval k is ((k) s, (k + 1) s]; its midpoint is (k + 0.5) s.
+    let burst_overlap_share = boon_states.and_then(|states| {
+        overlap_share(&damage_1s, |k| {
+            let mid_ms = k as i64 * 1000 + 500;
+            states.iter().all(|s| stacks_at(s, mid_ms) > 0)
+        })
+    });
+
     let support = p.support.first().cloned().unwrap_or_default();
     let defenses = p.defenses.first().cloned().unwrap_or_default();
     Observed {
@@ -266,14 +326,98 @@ fn observe_with<'a>(
         stunbreaks: support.stun_break,
         incoming_dps: per_active(defenses.damage_taken as f64),
         downed: defenses.down_count > 0,
+        condition_share: dps
+            .actor_damage
+            .zip(dps.actor_condi_damage)
+            .filter(|&(d, _)| d > 0)
+            .map(|(d, c)| c as f64 / d as f64),
+        burst_peak_5s: burst_peak(&damage_1s, BURST_WINDOWS_S[0]),
+        burst_peak_10s: burst_peak(&damage_1s, BURST_WINDOWS_S[1]),
+        burst_overlap_share,
+        condition_ramp_s: condition_1s.and_then(|c| condition_ramp(&damage_1s, &c)),
     }
+}
+
+/// Damage per second from an EI cumulative `*1S` series. Sample 0 is the
+/// instant t = 0, so interval `i >= 1` is sample `i` minus sample `i - 1`,
+/// and the first interval takes sample 1 whole (as
+/// [`EiPlayer::engaged_seconds`]): a pre-cast landing at t = 0 counts in it.
+fn per_second(cumulative: &[i64]) -> Vec<f64> {
+    let mut prev = 0;
+    cumulative
+        .iter()
+        .skip(1)
+        .map(|&d| {
+            let x = (d - prev) as f64;
+            prev = d;
+            x
+        })
+        .collect()
+}
+
+/// EI `states` step function: the stacks of the last entry at or before `t`.
+fn stacks_at(states: &[(i64, i64)], t_ms: i64) -> i64 {
+    states
+        .iter()
+        .take_while(|&&(t, _)| t <= t_ms)
+        .last()
+        .map_or(0, |&(_, s)| s)
+}
+
+/// Peak mean DPS over any `w` consecutive seconds; `None` when shorter.
+fn burst_peak(per_s: &[f64], w: usize) -> Option<f64> {
+    (per_s.len() >= w).then(|| {
+        per_s
+            .windows(w)
+            .map(|x| x.iter().sum::<f64>())
+            .fold(0.0, f64::max)
+            / w as f64
+    })
+}
+
+/// Share of the damage in seconds `k` where `both(k)`; `None` without damage.
+fn overlap_share(per_s: &[f64], both: impl Fn(usize) -> bool) -> Option<f64> {
+    let total: f64 = per_s.iter().sum();
+    (total > 0.0).then(|| {
+        per_s
+            .iter()
+            .enumerate()
+            .filter(|&(k, _)| both(k))
+            // Not `.sum()`: the empty f64 sum is -0.0.
+            .fold(0.0, |acc, (_, d)| acc + d)
+            / total
+    })
+}
+
+/// Seconds from engagement (the first second with any damage) to the end of
+/// the first second whose condition damage reaches [`RAMP_FRACTION`] of the
+/// median over the seconds with condition damage. 1 = reached in the first
+/// engaged second. `None` without condition damage.
+fn condition_ramp(total: &[f64], condi: &[f64]) -> Option<f64> {
+    let start = total.iter().position(|&d| d > 0.0)?;
+    let mut live: Vec<f64> = condi.iter().copied().filter(|&c| c > 0.0).collect();
+    if live.is_empty() {
+        return None;
+    }
+    live.sort_by(f64::total_cmp);
+    let n = live.len();
+    let median = if n % 2 == 1 {
+        live[n / 2]
+    } else {
+        (live[n / 2 - 1] + live[n / 2]) / 2.0
+    };
+    let reached = condi
+        .iter()
+        .skip(start)
+        .position(|&c| c >= RAMP_FRACTION * median)?;
+    Some((reached + 1) as f64)
 }
 
 /// The objective `published_scenario` chose from the build's role words,
 /// recovered from the scenario it returns (profile id + combat kind) instead
 /// of re-parsing the words here. `combat_kind.role_objective()` alone is
 /// lossy (Healer -> Buffer, Sustain -> PowerDps) and is only the fallback.
-fn published_objective(build: &BenchmarkBuild) -> RoleObjective {
+pub(super) fn published_objective(build: &BenchmarkBuild) -> RoleObjective {
     use RoleObjective::*;
     let base = benchmark::published_scenario(build);
     // The objectives published_scenario can produce.
@@ -351,6 +495,13 @@ fn simulated_from(
         .filter(|u| is_proc(&u.name))
         .map(|u| of_total(u.dps_contribution))
         .sum();
+    let damage_1s: Vec<f64> = r.damage_per_second.iter().map(|(s, c)| s + c).collect();
+    let condition_1s: Vec<f64> = r.damage_per_second.iter().map(|(_, c)| *c).collect();
+    let present = |name: &str, k: usize| {
+        r.buff_presence_per_second
+            .get(name)
+            .is_some_and(|v| v.get(k).copied().unwrap_or(false))
+    };
     let sim_s = |ms: u32| f64::from(ms.max(1)) / 1000.0;
     let (cleanse_per_20s, cleanse_measured) = match wvw {
         Some(w) => (
@@ -375,6 +526,12 @@ fn simulated_from(
         incoming_dps: wvw.map(|w| w.incoming_damage / sim_s(w.duration_ms)),
         downed: wvw.map(|w| !w.player_survived),
         sim_s: wvw.map(|w| sim_s(w.duration_ms)),
+        burst_peak_5s: burst_peak(&damage_1s, BURST_WINDOWS_S[0]),
+        burst_peak_10s: burst_peak(&damage_1s, BURST_WINDOWS_S[1]),
+        burst_overlap_share: overlap_share(&damage_1s, |k| {
+            BURST_BOONS.iter().all(|b| present(b, k))
+        }),
+        condition_ramp_s: condition_ramp(&damage_1s, &condition_1s),
     }
 }
 
@@ -412,6 +569,24 @@ fn abstain(observable: &'static str, log: f64, note: String) -> Diff {
     }
 }
 
+/// Both sides measured -> scored with `error(ours, log)`, else an abstain
+/// naming the side that could not. An absent log value prints as NaN.
+fn paired(
+    observable: &'static str,
+    log: Option<f64>,
+    ours: Option<f64>,
+    error: impl Fn(f64, f64) -> f64,
+    note: &str,
+    log_gap: &str,
+    sim_gap: &str,
+) -> Diff {
+    match (log, ours) {
+        (Some(l), Some(x)) => scored(observable, l, x, error(x, l), note),
+        (None, _) => abstain(observable, f64::NAN, log_gap.to_string()),
+        (Some(l), None) => abstain(observable, l, sim_gap.to_string()),
+    }
+}
+
 fn diffs(o: &Observed, s: &Simulated, wvw: bool) -> Vec<Diff> {
     let mut out = vec![
         scored(
@@ -436,6 +611,71 @@ fn diffs(o: &Observed, s: &Simulated, wvw: bool) -> Vec<Diff> {
             "",
         ),
     ];
+    out.push(paired(
+        "condition_share",
+        o.condition_share,
+        Some(s.condi_fraction),
+        |x, l| x - l,
+        "log: actorCondiDamage / actorDamage, minions excluded",
+        "log has no actorDamage / actorCondiDamage (trimmed) or no damage",
+        "",
+    ));
+    for (observable, w, l, x) in [
+        (
+            "burst_peak_5s",
+            BURST_WINDOWS_S[0],
+            o.burst_peak_5s,
+            s.burst_peak_5s,
+        ),
+        (
+            "burst_peak_10s",
+            BURST_WINDOWS_S[1],
+            o.burst_peak_10s,
+            s.burst_peak_10s,
+        ),
+    ] {
+        out.push(paired(
+            observable,
+            l,
+            x,
+            |x, l| rel(x, l, DPS_FLOOR),
+            &format!("peak {w} s window DPS; log damage1S, ours flow 60 s"),
+            &format!("log has fewer than {w} s of damage1S"),
+            &format!("flow run has fewer than {w} s"),
+        ));
+    }
+    out.push(paired(
+        "burst_overlap_share",
+        o.burst_overlap_share,
+        s.burst_overlap_share,
+        |x, l| x - l,
+        "damage share in seconds with Quickness and Fury both on",
+        "log has no Quickness/Fury states (trimmed) or no damage1S",
+        "flow run dealt no damage",
+    ));
+    out.push(match o.condition_share {
+        None => abstain(
+            "condition_ramp_s",
+            o.condition_ramp_s.unwrap_or(f64::NAN),
+            "no log condition_share to gate the ramp on".into(),
+        ),
+        Some(c) if c < RAMP_MIN_CONDI_SHARE => abstain(
+            "condition_ramp_s",
+            o.condition_ramp_s.unwrap_or(f64::NAN),
+            format!(
+                "condition share {c:.3} < {RAMP_MIN_CONDI_SHARE}: no condition pressure to ramp"
+            ),
+        ),
+        Some(_) => paired(
+            "condition_ramp_s",
+            o.condition_ramp_s,
+            s.condition_ramp_s,
+            |x, l| x - l,
+            "s to 80% of median condition DPS; error in seconds",
+            "log has no conditionDamage1S or no condition damage",
+            "flow run dealt no condition damage",
+        ),
+    });
     let t = tvd(&o.skill_share, &s.skill_share);
     out.push(scored(
         "skill_share",
@@ -562,10 +802,13 @@ fn share_rows(o: &Observed, s: &Simulated) -> Vec<(String, f64, f64)> {
 }
 
 /// Every squad player of one log. `codes`: character name -> chat code.
+/// `account_dir`: the addon cache holding the characters' equipment and
+/// build tabs, see [`kit::reconstruct`].
 pub fn compare_log(
     log_name: &str,
     log: &EiLog,
     codes: &HashMap<String, String>,
+    account_dir: Option<&std::path::Path>,
     corpus: &[BenchmarkBuild],
     db: &GameDb,
 ) -> Vec<PlayerComparison> {
@@ -588,7 +831,7 @@ pub fn compare_log(
                 refused: None,
             };
             let code = codes.get(&p.name).map(String::as_str);
-            let kit = match kit::reconstruct(log, p, code, corpus, db) {
+            let kit = match kit::reconstruct(log, p, code, account_dir, corpus, db) {
                 Ok(k) => k,
                 Err(e) => {
                     row.refused = Some(format!("kit: {e}"));
@@ -930,7 +1173,7 @@ mod tests {
         let incoming = diff(&d, "incoming_dps");
         close(incoming.error.unwrap(), -0.2);
         assert!(incoming.note.contains("sim_s 15.0"), "{}", incoming.note);
-        assert_eq!(d.len(), 5 + BOONS.len() + 5);
+        assert_eq!(d.len(), 6 + 4 + BOONS.len() + 5);
     }
 
     #[test]
@@ -976,6 +1219,32 @@ mod tests {
             assert_eq!((x.ours, x.error), (None, None), "{name}");
             assert!(x.note.contains("no source split"), "{name}: {}", x.note);
         }
+    }
+
+    #[test]
+    fn burst_measures_match_hand_numbers() {
+        // Sample 0 (100 at t = 0) falls into the first interval.
+        assert_eq!(per_second(&[100, 300, 300, 1300]), [300.0, 0.0, 1000.0]);
+        let per_s = [0.0, 100.0, 900.0, 1000.0, 0.0, 0.0];
+        close(burst_peak(&per_s, 2).unwrap(), 950.0);
+        assert_eq!(burst_peak(&per_s, 7), None);
+        // Seconds 2 and 3 overlap: 1900 of 2000.
+        close(
+            overlap_share(&per_s, |k| (2..=3).contains(&k)).unwrap(),
+            0.95,
+        );
+        assert_eq!(overlap_share(&[0.0; 3], |_| true), None);
+        // Duplicate timestamp: the last entry wins.
+        let states = [(0, 0), (0, 1), (2000, 0)];
+        assert_eq!(stacks_at(&states, 500), 1);
+        assert_eq!(stacks_at(&states, 2500), 0);
+        assert_eq!(stacks_at(&[(100, 1)], 50), 0);
+        // Engaged from second 1; condition seconds 10, 50, 100, 100: median
+        // 75, 80% = 60, first reached in second 3 = the 3rd engaged second.
+        let total = [0.0, 500.0, 500.0, 500.0, 500.0];
+        let condi = [0.0, 10.0, 50.0, 100.0, 100.0];
+        close(condition_ramp(&total, &condi).unwrap(), 3.0);
+        assert_eq!(condition_ramp(&total, &[0.0; 5]), None);
     }
 
     #[test]

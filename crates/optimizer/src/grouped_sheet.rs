@@ -361,6 +361,8 @@ fn dummy_rotation() -> SimulationResult {
         finished: true,
         has_interrupt: true,
         has_cover_answer: true,
+        damage_per_second: Vec::new(),
+        buff_presence_per_second: HashMap::new(),
         wvw: Some(WvwCombatReport {
             duration_ms: 8_000,
             target_reached_at_ms: Some(6_000),

@@ -487,6 +487,643 @@
       "uptime_model": { "kind": "AlwaysOn" },
       "evidence_level": "Factual",
       "source": "https://wiki.guildwars2.com/wiki/Superior_Rune_of_the_Nightmare"
+    },
+    {
+      "effect_id": "trait:913:0",
+      "source_type": "Trait",
+      "source_id": 913,
+      "source_name": "Reaper's Might",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Reaper%27s_Might (read 2026-09-23: shroud skill 1 grants might 15 s (PvE; 6 s WvW/PvP))",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Might",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 15000
+      },
+      "trigger_scope": {
+        "Slot": "Shroud_1"
+      }
+    },
+    {
+      "effect_id": "trait:915:0",
+      "source_type": "Trait",
+      "source_id": 915,
+      "source_name": "Awaken the Pain",
+      "category": "AppliesBoon",
+      "value": 5.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Awaken_the_Pain (read 2026-09-23: entering shroud grants 5 might 5 s, no mode split; power per might is on the stat sheet)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Might",
+        "amount_mode": "Stacks",
+        "amount_value": 5.0,
+        "target_scope": "self",
+        "base_duration_ms": 5000
+      }
+    },
+    {
+      "effect_id": "trait:919:0",
+      "source_type": "Trait",
+      "source_id": 919,
+      "source_name": "Dread",
+      "category": "TriggeredEffect",
+      "value": 20.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnConditionApplied",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Dread (read 2026-09-23: inflicting fear grants Dread +20% strike damage 2 s (PvE; 15% WvW/PvP), 1 s recharge)",
+      "inner_category": "StrikeDamagePct",
+      "trigger_scope": {
+        "Status": "Fear"
+      },
+      "internal_cooldown": 1.0,
+      "effect_duration": 2.0
+    },
+    {
+      "effect_id": "trait:919:1",
+      "source_type": "Trait",
+      "source_id": 919,
+      "source_name": "Dread",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnConditionApplied",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Dread (read 2026-09-23: inflicting fear grants fury 10 s, 1 s recharge)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Fury",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 10000
+      },
+      "trigger_scope": {
+        "Status": "Fear"
+      },
+      "internal_cooldown": 1.0
+    },
+    {
+      "effect_id": "trait:919:2",
+      "source_type": "Trait",
+      "source_id": 919,
+      "source_name": "Dread",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnConditionApplied",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Dread (read 2026-09-23: inflicting fear grants quickness 5 s, 1 s recharge)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Quickness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 5000
+      },
+      "trigger_scope": {
+        "Status": "Fear"
+      },
+      "internal_cooldown": 1.0
+    },
+    {
+      "effect_id": "trait:856:0",
+      "source_type": "Trait",
+      "source_id": 856,
+      "source_name": "Armored Shroud",
+      "category": "AppliesBoon",
+      "value": 5.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Armored_Shroud (read 2026-09-23: entering shroud grants 5 Death's Carapace 10 s, 100 toughness total (PvE/WvW))",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Death's Carapace",
+        "amount_mode": "Stacks",
+        "amount_value": 5.0,
+        "target_scope": "self",
+        "base_duration_ms": 10000
+      }
+    },
+    {
+      "effect_id": "trait:1922:0",
+      "source_type": "Trait",
+      "source_id": 1922,
+      "source_name": "Shrouded Removal",
+      "category": "RemovesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Shrouded_Removal (read 2026-09-23: lose a condition on entering shroud)",
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "self",
+        "status_kind": "Any",
+        "amount_mode": "Count",
+        "amount_value": 1.0,
+        "target_scope": "self"
+      }
+    },
+    {
+      "effect_id": "trait:1922:1",
+      "source_type": "Trait",
+      "source_id": 1922,
+      "source_name": "Shrouded Removal",
+      "category": "RemovesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Periodic",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Shrouded_Removal (read 2026-09-23: and every 3 s while in shroud)",
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "self",
+        "status_kind": "Any",
+        "amount_mode": "Count",
+        "amount_value": 1.0,
+        "target_scope": "self"
+      },
+      "prerequisite": {
+        "in_shroud": true
+      },
+      "internal_cooldown": 3.0
+    },
+    {
+      "effect_id": "trait:1922:2",
+      "source_type": "Trait",
+      "source_id": 1922,
+      "source_name": "Shrouded Removal",
+      "category": "AppliesBoon",
+      "value": 3.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnConditionRemoved",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Shrouded_Removal (read 2026-09-23: 3 Death's Carapace 10 s (60 toughness, PvE/WvW) when removing a condition from yourself)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Death's Carapace",
+        "amount_mode": "Stacks",
+        "amount_value": 3.0,
+        "target_scope": "self",
+        "base_duration_ms": 10000
+      }
+    },
+    {
+      "effect_id": "trait:789:0",
+      "source_type": "Trait",
+      "source_id": 789,
+      "source_name": "Life from Death",
+      "category": "Heal",
+      "value": 714.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudExit",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Life_from_Death (read 2026-09-23: exiting shroud heals 714 (1.5 healing power) to 5 allies in 360, no mode split; the 10% healing increase to others is not modeled)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Healing (area)",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Party",
+        "target_count": 5
+      },
+      "healing_power_coefficient": 1.5
+    },
+    {
+      "effect_id": "trait:1844:0",
+      "source_type": "Trait",
+      "source_id": 1844,
+      "source_name": "Vampiric Presence",
+      "category": "Heal",
+      "value": 32.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnHit",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Vampiric_Presence (read 2026-09-23: siphon healing 32 (0.0333) out of shroud, 0.5 s interval, 5 targets (PvE/WvW))",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Healing (siphon)",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Party",
+        "target_count": 5
+      },
+      "prerequisite": {
+        "in_shroud": false
+      },
+      "internal_cooldown": 0.5,
+      "healing_power_coefficient": 0.0333
+    },
+    {
+      "effect_id": "trait:1844:1",
+      "source_type": "Trait",
+      "source_id": 1844,
+      "source_name": "Vampiric Presence",
+      "category": "Heal",
+      "value": 62.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnHit",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Vampiric_Presence (read 2026-09-23: siphon healing 62 (0.0666) while in shroud, 0.5 s interval, 5 targets (PvE/WvW))",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "Ally",
+        "status_kind": "Healing (siphon)",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Party",
+        "target_count": 5
+      },
+      "prerequisite": {
+        "in_shroud": true
+      },
+      "internal_cooldown": 0.5,
+      "healing_power_coefficient": 0.0666
+    },
+    {
+      "effect_id": "trait:1692:0",
+      "source_type": "Trait",
+      "source_id": 1692,
+      "source_name": "Unholy Martyr",
+      "category": "RemovesCondition",
+      "value": 3.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudExit",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Unholy_Martyr (read 2026-09-23: exiting shroud consumes 3 conditions (PvE/WvW; 2 PvP))",
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "self",
+        "status_kind": "Any",
+        "amount_mode": "Count",
+        "amount_value": 3.0,
+        "target_scope": "self"
+      }
+    },
+    {
+      "effect_id": "trait:1692:1",
+      "source_type": "Trait",
+      "source_id": 1692,
+      "source_name": "Unholy Martyr",
+      "category": "GainsLifeForce",
+      "value": 7.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudExit",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Unholy_Martyr (read 2026-09-23: 7% life force per condition consumed)",
+      "scale_by": "ConditionsRemoved"
+    },
+    {
+      "effect_id": "trait:803:0",
+      "source_type": "Trait",
+      "source_id": 803,
+      "source_name": "Furious Demise",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Furious_Demise (read 2026-09-23: entering shroud grants fury 8 s (PvE and WvW/PvP); precision on the stat sheet)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Fury",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 8000
+      }
+    },
+    {
+      "effect_id": "trait:888:0",
+      "source_type": "Trait",
+      "source_id": 888,
+      "source_name": "Speed of Shadows",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Speed_of_Shadows (read 2026-09-23: entering shroud grants swiftness 10 s, no mode split)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Swiftness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 10000
+      }
+    },
+    {
+      "effect_id": "trait:888:1",
+      "source_type": "Trait",
+      "source_id": 888,
+      "source_name": "Speed of Shadows",
+      "category": "RemovesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Speed_of_Shadows (read 2026-09-23: entering shroud removes Crippled)",
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "self",
+        "status_kind": "Crippled",
+        "amount_mode": "Count",
+        "amount_value": 1.0,
+        "target_scope": "self"
+      }
+    },
+    {
+      "effect_id": "trait:888:2",
+      "source_type": "Trait",
+      "source_id": 888,
+      "source_name": "Speed of Shadows",
+      "category": "RemovesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Speed_of_Shadows (read 2026-09-23: entering shroud removes Chilled)",
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "self",
+        "status_kind": "Chilled",
+        "amount_mode": "Count",
+        "amount_value": 1.0,
+        "target_scope": "self"
+      }
+    },
+    {
+      "effect_id": "trait:888:3",
+      "source_type": "Trait",
+      "source_id": 888,
+      "source_name": "Speed of Shadows",
+      "category": "RemovesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Speed_of_Shadows (read 2026-09-23: entering shroud removes Immobile)",
+      "status_operation": {
+        "operation_type": "RemovesCondition",
+        "target_side": "self",
+        "status_kind": "Immobile",
+        "amount_mode": "Count",
+        "amount_value": 1.0,
+        "target_scope": "self"
+      }
+    },
+    {
+      "effect_id": "trait:894:0",
+      "source_type": "Trait",
+      "source_id": 894,
+      "source_name": "Soul Barbs",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Soul_Barbs (read 2026-09-23: entering shroud: +10% all damage 15 s (PvE; 10 s WvW/PvP))",
+      "inner_category": "StrikeDamagePct",
+      "effect_duration": 15.0
+    },
+    {
+      "effect_id": "trait:894:1",
+      "source_type": "Trait",
+      "source_id": 894,
+      "source_name": "Soul Barbs",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Soul_Barbs (read 2026-09-23: entering shroud: +10% all damage 15 s (PvE), condition half)",
+      "inner_category": "ConditionDamagePct",
+      "effect_duration": 15.0
+    },
+    {
+      "effect_id": "trait:894:2",
+      "source_type": "Trait",
+      "source_id": 894,
+      "source_name": "Soul Barbs",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnShroudExit",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Soul_Barbs (read 2026-09-23: exiting shroud: +10% all damage 15 s (PvE; 10 s WvW/PvP))",
+      "inner_category": "StrikeDamagePct",
+      "effect_duration": 15.0
+    },
+    {
+      "effect_id": "trait:894:3",
+      "source_type": "Trait",
+      "source_id": 894,
+      "source_name": "Soul Barbs",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "OnShroudExit",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Soul_Barbs (read 2026-09-23: exiting shroud: +10% all damage 15 s (PvE), condition half)",
+      "inner_category": "ConditionDamagePct",
+      "effect_duration": 15.0
+    },
+    {
+      "effect_id": "trait:889:0",
+      "source_type": "Trait",
+      "source_id": 889,
+      "source_name": "Eternal Life",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnShroudEnter",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Eternal_Life (read 2026-09-23: entering shroud grants protection 3 s)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Protection",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 3000
+      }
+    },
+    {
+      "effect_id": "trait:893:0",
+      "source_type": "Trait",
+      "source_id": 893,
+      "source_name": "Death Perception",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Death_Perception (read 2026-09-23: +10% critical damage in shroud (PvE; 15% WvW/PvP), a multiplicative strike modifier on crits per the page anomaly; the 15% critical chance is a parsed percent fact)",
+      "inner_category": "CritDamagePct",
+      "prerequisite": {
+        "in_shroud": true
+      }
+    },
+    {
+      "effect_id": "trait:875:0",
+      "source_type": "Trait",
+      "source_id": 875,
+      "source_name": "Unyielding Blast",
+      "category": "AppliesCondition",
+      "value": 2.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Unyielding_Blast (read 2026-09-23: shroud skill 1 inflicts 2 vulnerability 10 s (PvE; 6 s WvW/PvP))",
+      "status_operation": {
+        "operation_type": "AppliesCondition",
+        "target_side": "Enemy",
+        "status_kind": "Vulnerability",
+        "amount_mode": "Stacks",
+        "amount_value": 2.0,
+        "target_scope": "Area",
+        "base_duration_ms": 10000
+      },
+      "trigger_scope": {
+        "Slot": "Shroud_1"
+      }
+    },
+    {
+      "effect_id": "trait:905:0",
+      "source_type": "Trait",
+      "source_id": 905,
+      "source_name": "Dhuumfire",
+      "category": "AppliesCondition",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Dhuumfire (read 2026-09-23: shroud skill 1 inflicts burning 3 s, no recharge on the base line; the Scourge (2 s, 1 s recharge) and Harbinger (1 s) PvE splits have no elite gate in the format)",
+      "status_operation": {
+        "operation_type": "AppliesCondition",
+        "target_side": "Enemy",
+        "status_kind": "Burning",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "Area",
+        "base_duration_ms": 3000
+      },
+      "trigger_scope": {
+        "Slot": "Shroud_1"
+      }
+    },
+    {
+      "effect_id": "trait:892:0",
+      "source_type": "Trait",
+      "source_id": 892,
+      "source_name": "Fear of Death",
+      "category": "GainsLifeForce",
+      "value": 15.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnConditionApplied",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Fear_of_Death (read 2026-09-23: inflicting fear generates 15% life force (PvE/WvW), 5 s recharge; the 100% fear duration increase is not modeled)",
+      "trigger_scope": {
+        "Status": "Fear"
+      },
+      "internal_cooldown": 5.0
+    },
+    {
+      "effect_id": "trait:2021:0",
+      "source_type": "Trait",
+      "source_id": 2021,
+      "source_name": "Reaper's Onslaught",
+      "category": "TriggeredEffect",
+      "value": 20.0,
+      "stacking_rule": "Multiplicative",
+      "trigger_rule": "Conditional",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Reaper%27s_Onslaught (read 2026-09-23: 300 ferocity in Reaper's Shroud as +20% critical damage (15 ferocity per 1%), no mode split)",
+      "inner_category": "CritDamagePct",
+      "prerequisite": {
+        "in_shroud": true
+      },
+      "derived_from": [300.0]
+    },
+    {
+      "effect_id": "trait:2021:1",
+      "source_type": "Trait",
+      "source_id": 2021,
+      "source_name": "Reaper's Onslaught",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "Periodic",
+      "uptime_model": { "kind": "Unknown" },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Reaper%27s_Onslaught (read 2026-09-23: quickness 3 s every 3 s in Reaper's Shroud, no mode split; the Life Reap recharge reduction is not modeled)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Quickness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 3000
+      },
+      "prerequisite": {
+        "in_shroud": true
+      },
+      "internal_cooldown": 3.0
     }
   ]
 }

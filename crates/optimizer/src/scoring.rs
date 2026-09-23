@@ -1002,6 +1002,8 @@ mod tests {
             finished: false,
             has_interrupt: false,
             has_cover_answer: false,
+            damage_per_second: Vec::new(),
+            buff_presence_per_second: Default::default(),
             wvw: None,
         }
     }
