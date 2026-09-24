@@ -6,351 +6,333 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-In-game Guild Wars 2 addon for [Nexus](https://raidcore.gg/Nexus). It reads your
-characters through the official GW2 API and suggests builds for PvE, WvW, and PvP.
+An in-game Guild Wars 2 addon for [Nexus](https://raidcore.gg/Nexus) that builds, improves and explains character builds for PvE, PvP and WvW.
 
-Pick a mode, fight scale, and role. The optimizer searches gear, traits, and skills,
-checks viability, and shows Current vs Optimized side by side. A chat-code strip
-copies a GW2 build-template onto the Windows clipboard so **Paste Build Template**
-in the hero panel can use it. **Choya** is its own tab: talk through a new build or
-improve the selected character, get a plated kit with stats (not a text-only recipe),
-and open that result onto Improve. History is saved across sessions. You can keep
-typing while Choya is thinking; a new send cancels the in-flight reply.
+GW2 Build Optimizer reads your characters through the official GW2 API. It searches specializations, traits, skills, weapons, gear stats, runes, sigils, relics, food, utility and infusions for the mode, fight size and role you pick. Every candidate is measured in a combat simulator driven by GW2 API data and cited GW2 Wiki records, then compared with your equipped build and with builds published by Snow Crows, Hardstuck and GuildJen. Choya, the chat assistant, lets you ask for a build in your own words through the AI provider you choose.
 
-## Screenshots
+It is for players who already use Nexus and want a starting build they can check, adjust and paste into the game.
 
-**Open the overlay** from the Nexus Quick Access icon, or press **Ctrl+Shift+O**.
-Hover the icon and the tooltip names both.
+![New Build result for a WvW roamer, with the reference-build tab and the fine-tune weights radar](docs/screenshots/improve.png)
 
-![Quick Access icon and hotkey](docs/screenshots/icon.png)
+## Contents
 
-**Improve Build** starts from the selected character's equipped skills, traits,
-and gear. Lock anything that must stay, choose the WvW/PvP/PvE role profile,
-then let the optimizer search for a stronger version around those constraints.
-
-![Improve Build view](docs/screenshots/improve.png)
-
-**Settings** configures the AI provider and model, overlay language, scale,
-theme, News sources, benchmark sync, and the local game-data cache.
-
-![Settings view](docs/screenshots/settings.png)
-
-**Themes** are picked in Settings. Five premade palettes (Tyrian Gold, Glacial
-Ward, Verdant Wilds, Molten Ember, Void Orchid), or Custom: name it and set
-background, panel, accent, text, and muted. The overlay updates live and
-the choice persists.
-
-![Themes](docs/screenshots/themes.png)
-
-**First-time game data** downloads the catalog (items, skills, pets, official
-names). The wait is filled with official Guild Wars 2 news: read an article,
-open it in the browser, or copy the link.
-
-![Game-data download](docs/screenshots/loading.png)
-
-**News** (Tyria Dispatch) lists official RSS, patch notes, forums, GuildJen, and
-ArenaNet YouTube. Compact, Card, or Detail; stills on or off. YouTube is a
-thumbnail — **Open in browser** to watch.
-
-![News desk](docs/screenshots/news.png)
-
-**Radio** plays internet streams in the background while you fight. Search
-30,000+ stations (radio-browser.info) by name, 16 genres, language (Auto
-follows the overlay — French UI gets French stations), country (34,
-including Slovenia), or bitrate cap. Sort by Popular, Name, Bitrate, or
-Country. Filters compose and persist. Heart favourites; last station
-resumes next session. HLS-only and undecodable codecs (OGG/FLAC/Opus)
-are not offered.
-
-Play, pause (short pause keeps the buffer; long pause re-tunes), or stop.
-Volume persists. Optional combat ducking lowers the stream when Mumble
-reports combat. Station logos, live song titles, a 24-band equalizer from
-the decoded audio, and Choya DJ sit in the player bar. Assign a Nexus
-keybind to pause or resume.
-
-![Radio tab](docs/screenshots/radio.png)
-
-**Stats** compares Current and Optimized passive Hero-panel attributes and
-defenses using profession, armor weight, gear, upgrades, traits, and the selected
-game mode. Temporary effects and modeled rotation output stay in separately
-labeled sections instead of looking like permanent character-sheet values.
-
-![Stats comparison](docs/screenshots/Stats.png)
-
-**Saves** keeps named optimized builds grouped by character. A saved result can
-be loaded back into the overlay, updated in place, or deleted when it is obsolete.
-
-![Saved builds view](docs/screenshots/saved_builds.png)
-
-**Choya** is the conversational build assistant. Ask for a playstyle or a change
-to the selected build; it parses the response into a plated build, flags names
-it cannot resolve in game data, and can open the result directly in Improve.
-
-![Choya build assistant](docs/screenshots/ai_choya.png)
-
-**About** is Choya's mailbag: message the developer, report a bug, or send a
-fistbump. Replies land under Messages.
-
-![About / mailbag](docs/screenshots/about.png)
-
-## Download
-
-Always use the **latest** GitHub Release. These URLs do not include a version and stay correct after every publish:
-
-- **[gw2_build_optimizer.dll](https://github.com/special-place-ai-heaven/GW2_Build_Optimizer/releases/latest/download/gw2_build_optimizer.dll)** — current Nexus addon
-- [SHA256SUMS.txt](https://github.com/special-place-ai-heaven/GW2_Build_Optimizer/releases/latest/download/SHA256SUMS.txt) — checksum for that DLL
-- [Latest release notes](https://github.com/special-place-ai-heaven/GW2_Build_Optimizer/releases/latest)
-
-A source build writes:
-
-```text
-target/release/gw2_build_optimizer.dll
-```
-
-> [!IMPORTANT]
-> Copy `gw2_build_optimizer.dll` into the Guild Wars 2 **addons** folder.
-> Not a nested folder. The file name must stay exactly `gw2_build_optimizer.dll`.
->
-> ```text
-> C:\GAMES\Guild Wars 2\addons\gw2_build_optimizer.dll
-> ```
->
-> If the game lives somewhere else, use `<GW2 folder>\addons\gw2_build_optimizer.dll`
-> (same folder Nexus uses, next to `Gw2-64.exe`).
+- [Requirements](#requirements)
+- [Install](#install)
+- [First-run setup](#first-run-setup)
+- [API keys](#api-keys)
+- [Using the overlay](#using-the-overlay)
+- [The tabs](#the-tabs)
+- [How builds are measured](#how-builds-are-measured)
+- [Files on your computer](#files-on-your-computer)
+- [What leaves your computer](#what-leaves-your-computer)
+- [Troubleshooting](#troubleshooting)
+- [Build from source](#build-from-source)
+- [License](#license)
 
 ## Requirements
 
 - Guild Wars 2 on Windows.
-- [Nexus](https://raidcore.gg/Nexus) ([RaidcoreGG/Nexus](https://github.com/RaidcoreGG/Nexus)).
-- A GW2 API key from ArenaNet.
-- An AI provider key for the setup wizard. A free OpenRouter or Google account is enough.
+- [Nexus](https://raidcore.gg/Nexus), the Raidcore addon manager ([RaidcoreGG/Nexus](https://github.com/RaidcoreGG/Nexus)).
+- A GW2 API key from your ArenaNet account.
+- An API key from one AI provider: Google Gemini, OpenRouter, OpenAI or Anthropic. Google and OpenRouter both offer free models.
 
 ## Install
 
-1. Install Nexus and launch GW2 once so the Nexus menu appears.
-2. Download [`gw2_build_optimizer.dll`](https://github.com/special-place-ai-heaven/GW2_Build_Optimizer/releases/latest/download/gw2_build_optimizer.dll) (or build with `cargo build --release`).
-3. Copy it into `C:\GAMES\Guild Wars 2\addons\` (see the Important note above).
-4. Restart Guild Wars 2. Nexus loads the addon at startup.
-
-## First-time setup
-
-The overlay opens a wizard until setup is complete.
-
-### 1. GW2 API key
-
-Create a key at <https://account.arena.net/applications> with:
-
-- Required: `account`, `characters`, `builds`
-- Recommended: `inventories`, `unlocks`
+1. Install Nexus and start Guild Wars 2 once so the Nexus menu appears.
+2. Download the addon from the latest release:
+   - [gw2_build_optimizer.dll](https://github.com/special-place-ai-heaven/GW2_Build_Optimizer/releases/latest/download/gw2_build_optimizer.dll)
+   - [SHA256SUMS.txt](https://github.com/special-place-ai-heaven/GW2_Build_Optimizer/releases/latest/download/SHA256SUMS.txt), the checksum for that DLL
+   - [Release notes](https://github.com/special-place-ai-heaven/GW2_Build_Optimizer/releases/latest)
+3. Copy the DLL into the `addons` folder inside your Guild Wars 2 folder.
+4. Restart Guild Wars 2. Nexus loads the addon at startup and the setup wizard opens.
 
 > [!IMPORTANT]
-> Select `account`, `characters`, `builds`, `inventories`, and `unlocks`.
-> The first three are required. The last two let suggestions account for more
-> of what the account owns.
+> The file must sit directly in `<Guild Wars 2 folder>\addons\`, next to the other Nexus addons, and keep the exact name `gw2_build_optimizer.dll`. A nested folder or a renamed file is not loaded.
 
-### 2. AI provider key
+To check the download, compare the SHA-256 hash of the DLL with the line in `SHA256SUMS.txt`:
 
-You need a key from an AI company. You do not have to pay. Most people
-create a free OpenRouter or Google account and stay on free models.
+```powershell
+Get-FileHash .\gw2_build_optimizer.dll -Algorithm SHA256
+```
 
-The URL opens a sign-in page first. Create the account there, then make a
-key and paste it into the wizard.
+**Updating.** The addon registers this GitHub repository as its update source with Nexus, so Nexus can offer new releases. You can also replace the DLL by hand with the one from the latest release and restart the game.
 
-**Free path (pick one):**
+**Uninstalling.** Remove the addon in Nexus or delete `gw2_build_optimizer.dll` from the `addons` folder. The addon's own data, including your API keys, stays in `addons\gw2_build_optimizer\` until you delete that folder. The [files table](#files-on-your-computer) lists what is in it.
 
-- OpenRouter (one key, many free models): <https://openrouter.ai/keys>
-  Sign in with Google, GitHub, or email (Sign up if you need an account).
-  Then create a key and copy it. Skip adding credits — free models work at $0.
-- Google Gemini: <https://aistudio.google.com/apikey>
-  Sign in with Google (Create account if you need one). Then create an API
-  key, pick any project, and copy it.
+## First-run setup
 
-**Paid, if you already have an account there:**
+Open the overlay from the Nexus Quick Access icon or with **Ctrl+Shift+O**. You can rebind the hotkey in the Nexus keybind settings. The overlay shows a four-step wizard until setup is complete:
 
-- OpenAI: <https://platform.openai.com/api-keys>
-- Anthropic: <https://console.anthropic.com/settings/keys>
+1. **Language.** Pick the overlay language.
+2. **GW2 key.** Paste your GW2 API key and click Validate. The wizard lists each permission the key carries.
+3. **AI key.** Pick a provider, paste its key and validate it.
+4. **Game data.** The addon downloads professions, specializations, traits, skills, legends, pets, PvP amulets, item stats, level-80 equipment, food and utility items, icons and, for Deutsch, Español, Français and 简体中文, the official names. Progress is shown step by step. The item catalog resumes where it stopped if the download is interrupted. Its length depends on the GW2 API rate limit the addon respects: 300 requests in a burst, then 5 per second.
 
-The wizard still defaults to Gemini. Switch the radio to OpenRouter if that
-is the account you made. After setup, Settings has a Free filter on by default.
+Setup counts as complete only when a GW2 key, a key for the active AI provider and the game data are all present.
 
-### 3. Game data download
+Installs whose item catalog predates food and utility support run a one-off backfill on the next **Refresh Game Data**. It shows as "Items (food and utility)" and does not repeat once the rows exist.
 
-The wizard downloads professions, traits, skills, items, runes, sigils, relics,
-legends, PvP amulets, and related data, then caches them locally. After a GW2
-patch, use Settings → refresh game data if skills or traits look wrong.
+## API keys
 
-## Overlay
+### GW2 API key (mandatory)
 
-Tabs: **New Build**, **Improve**, **Choya**, **Saves**, **News**, **Radio**, **Settings**, **About**. Overlay chrome
-follows Settings → Language. Skill, trait, and item names use the official GW2 API
-`lang=` pack (Deutsch, Español, Français, 简体中文).
+Create a key at <https://account.arena.net/applications>: sign in, choose **New Key**, give it any name and tick these permissions.
 
-Left rail:
+| Permission | Needed | Used for |
+|---|---|---|
+| `account` | Yes | Key check, and your account name if you choose to attach it to a message to the developer |
+| `characters` | Yes | Your character list |
+| `builds` | Yes | Build tabs and equipment tabs of each character |
+| `inventories`, `unlocks` | No | The wizard lists them as recommended, but this version calls no endpoint that needs them |
 
-- Character, build tab, and equipment tab from the GW2 API.
-- **Mode:** PvE / PvP / WvW.
-- **Scale:** Roam / Havoc / Cloud/Zerg (fight size). Same Support chip: small
-  groups must be self-reliant under focus; large groups can specialize
-  (stability vs heal/cleanse vs boon uptime).
-- **Role** chips: Roamer, Damage, Bruiser, Troll, Support, Disable, Commander.
-  Each is a family — conversation picks the lean (power vs condi, celestial
-  fight-support vs zerg stab specialist, and so on). The optimizer maps the
-  chip onto that mode’s objective profile; Scale retunes Support in WvW.
-- **Optimize Build** and **Refresh Data**.
+The wizard refuses a key that lacks one of the three required permissions and names the missing ones.
 
-Center pane shows the focused build (skills, specs/traits, armor, trinkets,
-weapons) with **Build** / **Stats** and **Current** / **Optimized** toggles.
+### AI provider key (mandatory for setup)
 
-### Chat code
+You need a key from one provider. You can switch provider and model at any time in Settings.
 
-One strip under the tab bar is always the copy target. Click the plate. ImGui’s
-internal clipboard is not enough; the addon writes Unicode text to the Windows
-clipboard so GW2 paste works.
+| Provider | Where to get a key | Cost |
+|---|---|---|
+| Google Gemini | <https://aistudio.google.com/apikey> | Most Flash and Flash-Lite models and Gemini 2.5 Pro have a free tier. Sign in with Google, create an API key, pick any project. |
+| OpenRouter | <https://openrouter.ai/keys> | One key for many models, including free ones (model ids ending in `:free`). No credits are needed for free models. |
+| OpenAI | <https://platform.openai.com/api-keys> | Needs billing set up on the account. |
+| Anthropic | <https://console.anthropic.com/settings/keys> | Needs billing set up on the account. |
 
-- **Blue** `Chat · Character` — loaded character, Current toggle, or a character /
-  build / equipment change.
-- **Green** `Chat · Optimized` — Optimized toggle, a suggestion tab, a finished
-  optimize, or a loaded saved build.
+**Free models.** The model picker in Settings has a **Free** filter that is on by default. Google's free tier allows about 5 requests per minute per model. When a request hits that limit, the addon waits for the next free slot and shows a countdown instead of failing. OpenRouter hides some free models unless your workspace guardrail allows free endpoints that train on prompts. The Settings tab links the page where you change that.
 
-Load/save stores names, not template bytes. Loading a save encodes a `[&…]` code
-from those names against the game database.
+**Key check.** Validation separates a wrong key from a billing problem. A rejected key reads as invalid. A key that works but hits a quota or billing limit is accepted with a warning, so you can fix the account instead of replacing the key.
 
-Chat codes are build templates (profession, specs, traits, skills, weapons). They
-are not a full gear dump. Land **Spear** (Janthir Wilds) encodes in the weapon
-trailer. Trident and Speargun stay underwater-only and are not written there.
+**What the AI does.**
 
-### New Build vs Improve
+- **New Build and Improve Build** do not depend on the AI. The search and the scoring run in the addon. If a key is set, the model may suggest changes to the best build, and each suggestion is kept only if it scores higher. It also writes the explanation text. If the model fails or is unavailable, the run still ends in a build.
+- **Choya Assist** needs a working key. The model proposes a build. The addon checks every name against the game data, fixes or refuses illegal picks, and measures the result. If the model does not answer, Choya shows the optimizer's own build for the same request.
 
-- **New Build** — pick mode, scale, and role, then optimize.
-- **Improve** — start from the equipped build. Lock an elite spec or other pieces
-  so the search keeps them.
+**Cost.** Every run records its token count and a cost estimate, shown in USD or EUR (Settings, "Cost estimates in"). The estimate multiplies tokens by list prices from a bundled price table, or uses the cost the provider reports. A model with no price row shows "cost n/a". OpenRouter `:free` models count as zero. The table does not know whether your Gemini key is on the free tier, so free Gemini requests are still priced at the paid list rate.
 
-### Choya
+> [!WARNING]
+> Choya and the AI step of New Build and Improve send your request to the provider you chose. The request includes the mode, scale and role, your character's build and gear, the build on the results tab, pasted chat codes and the recent chat messages. That provider's terms and prices apply. Your API keys are stored unencrypted in `config.json` in the addon folder. Do not share that file.
 
-Talk through a new build or the selected character. Choya plates a full kit with
-estimated stats, not a text-only recipe, and can open that result onto Improve.
-History is saved across sessions. You can type (and send) while a request is in
-flight; a new send cancels the old reply. The header mascot idles; the composer
-Choya sleeps until you type.
+## Using the overlay
 
-The deterministic search and viability checks stay in charge. The LLM explains
-and refines (“keep axe/dagger”, “more cleanse”, “raise the weak axes”).
+**Left rail.** Pick a character, its build tab and its equipment tab. Then pick:
+
+- **Mode:** PvE, PvP or WvW.
+- **Scale:** Roam, Havoc or Cloud/Zerg in WvW. Open World, Group or Squad in PvE. PvP has no scale.
+- **Role:** WvW offers Roamer, Damage, Bruiser, Troll, Support, Disable and Commander. PvE offers Damage, Condi, Support, Heal and Tank. PvP offers Damage, Roamer, Bruiser, Support and Disable. Hover a chip for its meaning.
+- **Fine-tune weights:** a radar with six axes: Power, Condition, Boon Support, Heal, Sustain and Control. Drag a point to change how much that goal counts. The radar overlays the current and the optimized build.
+
+The line under the chips repeats your intent as mode · scale · role. The action button reads "Optimize: <role>".
+
+**Results pane.** Results appear as tabs: **Current** for the equipped build, one tab per candidate build, and one tab per synced reference build. Each result has a **Build** view and a **Stats** view:
+
+- **Build** shows skills, specializations and traits, armor, trinkets and weapons with their stats, runes, sigils and relic.
+- **Stats** shows attributes, damage, modifiers, boons, conditions and the simulated rotation with its skill usage. It also compares Solo, Party and Full Squad buff levels.
+- **Viability report** gives a VIABLE or NON-VIABLE verdict with the reasons, such as too few stunbreaks or too little cleansing in WvW and PvP.
+- **Versus reference** gives a meter against the closest published build as a percentage, from on-par to far below. When no reference exists for your role, the meter compares against another role and is labelled "Different role: not a like-for-like comparison".
+- **Not simulated** names every trait, skill or effect the simulator could not play for this build, marked Provisional.
+
+**Run feed.** While a run is working, its steps appear live: each search tier, fallbacks with their reason, each AI request with its tokens, quota waits, validation and the final measurement. A pill at the right of the results tabs shows duration, model, tokens and estimated cost. Its tooltip splits AI wait time from compute time. After the run, the steps stay available as a collapsible **Run log**. Hover any number in the feed for an explanation of what it counts.
+
+**Chat code.** The strip at the top of the overlay holds a GW2 build template. Click it to copy the code to the Windows clipboard, then use **Paste Build Template** in the Hero panel. It shows "Chat · Character" for the equipped build and "Chat · Optimized" for a result. A chat code carries profession, specializations, traits, skills and weapons, not gear stats.
+
+## The tabs
+
+### New Build
+
+Pick a character, mode, scale and role, then click Optimize. The optimizer runs up to three tiers. A beam search keeps the best complete builds and changes one piece at a time. If it fails, a synergy engine picks each piece in turn. If that also fails, an older stat-prefix search runs. Each tier falls back to the next and the run log says why. Food, utility and infusions are chosen for each finished build before it is ranked.
+
+### Improve Build
+
+Starts from the selected character's equipped build and gear. The **Spec & Trait Locks** panel shows specializations and their trait grid. Click a specialization or a trait to lock it, or use Lock All and Unlock All. Opening the tab locks the equipped elite specialization. Gear stat prefixes can be locked on the gear sheet. Your current build is scored by the same judge as every candidate. If nothing ranks above it, the addon keeps your build and says so rather than offering a worse one.
+
+### Choya Assist
+
+![Choya Assist answering a request for a WvW roaming build](docs/screenshots/ai_choya.png)
+
+Describe the build you want, or ask Choya to fix the selected character. Starter prompts cover common requests, and you can paste GW2 chat codes. Choya's thinking bubble shows the live steps with **Stop** and **Retry**. An accepted answer becomes a full build card with stats. The card opens on Improve Build when a character is loaded, and on New Build otherwise. The chat history is kept between sessions.
 
 ### Saves
 
-Save a result by name. Load puts it in the overlay as the Optimized view and
-encodes its chat code. Saved records are addon files, not official GW2 account
-templates.
+Name a result and save it. Saved builds are grouped by character, carry an optional note, and can be loaded, replaced or deleted. Loading a save measures it again with the current game data, the same way as any other result. Saves are addon files, not GW2 account templates.
+
+### News
+
+Hidden until you turn on at least one source in Settings. The sources are the official Guild Wars 2 site, forum news, patch notes, ArenaNet on YouTube and GuildJen guides. Layouts are Compact, Card and Detail, and a filter narrows the page to articles, notes, videos or guides. The overlay shows text and still images. Videos open in your browser.
+
+### Choya Tunes
+
+An internet radio player that keeps playing while you fight. It searches the radio-browser.info directory by name, 16 genres, language, 34 countries and a bitrate cap. With language on Auto it follows the overlay language. You can keep favourites, and the last station and volume are remembered. Other features:
+
+- **Lower volume in combat** reads the combat state from the game's Mumble link.
+- **AI quips** is off by default. When on, it sends the current song title to your AI provider, at most 30 requests a day.
+- A Nexus keybind for pause and resume is available, unbound by default.
+
+HLS streams and OGG, FLAC and Opus stations are not offered.
 
 ### Settings
 
-GW2 key check, AI provider and model, key test, game-data refresh, optional
-benchmark sync, language, opacity, font scale, and layout sizing.
+| Section | What it holds |
+|---|---|
+| AI provider | Provider, key entry and Test button, model picker with search and the Free filter, requests used today |
+| Optimization defaults | Default mode, scale and role at startup |
+| Data quality legend | Verified, Provisional and Blocked, as shown on results |
+| News | Sources, layout, stills on or off |
+| Cache & data | Game build number, cache size, Refresh Game Data, Clear Cache, Reset Setup |
+| UI preferences | Language, font, window opacity, global scale, cost currency (USD or EUR) |
+| Theme | Five presets (Tyrian Gold, Glacial Ward, Verdant Wilds, Molten Ember, Void Orchid) or a custom theme from five base colors |
+| Layout tuning | Left panel width, padding, spacing, indent |
+| Benchmark data | Sync Benchmarks, which downloads published builds from Snow Crows (PvE), Hardstuck and GuildJen (WvW and PvP) |
+
+The overlay is available in English, Deutsch, Español, Français, Italiano, Português, Nederlands, Polski, Русский, 简体中文, 日本語 and 한국어. Skill, trait and item names follow the official GW2 API translations for Deutsch, Español, Français and 简体中文, and stay in English for the other languages.
+
+Reference builds appear on the results only after a sync. A full sync fetches several hundred pages and takes minutes. It pauses by itself when a site asks it to slow down.
 
 ### About
 
-Release notes in game (the last five versions), a **Messages** list, and
-**Message developer**. Messages shows what you sent, its status on the
-developer's side (Received, Read, Answered, Closed), and the reply inline once
-the developer answers. Message developer is a short guided form: report a bug,
-a wrong build, a suggestion, a question, or a fistbump for Choya. A send that
-fails is kept locally with a **Resend** button; nothing you typed is lost.
+- **What's new** shows the release notes bundled with the DLL.
+- **Messages** lists what you sent to the developer, its status (Received, Read, Answered, Closed) and any reply. The About tab pulses when a reply arrives.
+- **Message developer** is a short form to report a bug or a wrong build, suggest something, ask a question, or send Choya a fistbump. A send that fails is kept with a Resend button.
+- **Generations** is a table of every New Build, Improve and Choya run. It shows date, type, character, scenario, model, duration, tokens, cost and a mini build card. You can filter by type, character, mode, model, date range or free text, sort by column and page through the rows. You can also expand a row to see its run log. Clicking a build card restores that character, mode, scale, role and weights, measures the build again and opens it on the matching tab.
 
-Free to use. If it saved you gold, Choya takes coffee:
-<https://ko-fi.com/specialplacerob>. The link sits in the About header and on
-the first form step, nowhere else.
+## How builds are measured
 
-#### Privacy
+Every tab measures a build the same way. New Build, Improve Build, Choya Assist, Saves, Generations and the reference-build tabs all hand a validated build to one shared measurement. The same build in the same scenario therefore shows the same numbers wherever you open it.
 
-A message contains your category and choices, the text you typed, the addon
-version, the game build number, the UI language, game mode / scale / role, the
-profession and elite spec of the current build, and the name of the AI provider
-you use (never its key). Optional and off by default: a contact line you type,
-your GW2 account name (fetched only when you tick the box), and, for wrong-build
-reports, a slim copy of your last optimize result (stat prefixes, specs and
-traits, weapons and sigils, skills, rune, relic, chat code). Never sent: API
-keys, character names, the API key label.
+```mermaid
+flowchart LR
+  accTitle: How every tab measures a build
+  accDescr: New Build and Improve run the optimizer tiers. Choya, Saves, Generations and reference builds go straight to validation. Every validated build runs the 60 second flow simulation and the gate simulation, and both feed the results pane.
+  subgraph Sources["Where a build comes from"]
+    NB["New Build"]
+    IB["Improve Build"]
+    CH["Choya Assist"]
+    SV["Saves"]
+    GN["Generations"]
+    RF["Reference builds"]
+  end
+  OPT["Optimizer tiers: beam search, synergy engine, legacy search"]
+  VAL["Validation against GW2 API data"]
+  subgraph Measure["Shared measurement"]
+    FLOW["60 s flow simulation"]
+    GATE["Gate simulation: viability"]
+  end
+  RES["Results: Build, Stats, viability, versus reference"]
+  NB --> OPT
+  IB --> OPT
+  OPT --> VAL
+  CH --> VAL
+  SV --> VAL
+  GN --> VAL
+  RF --> VAL
+  VAL --> FLOW
+  VAL --> GATE
+  FLOW --> RES
+  GATE --> RES
+```
 
-Messages go to the developer's own server at `feedback.robagentic.tech`. The
-contact line is stored there in plain text. There is no automatic deletion or
-retention policy yet. A random per-install id is stored in `config.json` so
-replies can be matched to your messages; it is not tied to your account.
+**What it models.**
 
-Local history is `messages.json` in the addon folder. Delete it to clear the
-list.
+- **Stat sheet.** Attributes come from the real items, stat prefixes, runes, sigils, relic, infusions, food and utility, traits and profession, using the GW2 attribute formulas.
+- **Flow simulation.** The build's rotation plays for 60 seconds against a training dummy set up for the scenario. The dummy is not a real opponent. The simulation includes auto-attack chains, weapon swaps, forms such as Necromancer shroud and Druid Celestial Avatar, boons and conditions with their durations and stack limits, and damage modifiers.
+- **Trigger records.** Traits, sigils, relics and some skills fire effect records from `data/normalized_effects`. Each record cites the GW2 Wiki page it was taken from. Coverage is uneven: the WvW file holds far more records than PvE or PvP.
+- **Viability gates.** In WvW and PvP, a build must clear floors such as stunbreak count, stability or other cover against control, condition cleanse rate and effective health. In WvW it must also recover after the exchange and pay its resource costs. Failing one of these marks the build non-viable, and it ranks below every viable build. Other WvW checks, such as finishing a protected attack sequence, are reported as concerns and do not veto a build.
 
-## Scoring (short)
+**What it does not model yet.**
 
-Optimization is **Scale × Task**, not a single WvW blob. Roam, Havoc, and
-Cloud/Zerg use different opponent profiles, timing windows, and viability gates.
-WvW roaming candidates are ranked through a two-sided timeline: committed actions,
-incoming pressure, interrupts, control, boon removal, defensive cover, resources,
-recovery, and an exit all occur on the clock. One applicable protection layer can
-secure a sequence; control and defensive cover are not both required. Role chips
-and fine-tune weights decide which viable exchange the search prefers. Data-quality
-warnings show when a result depends on incomplete or provisional facts.
+- Pets as damage or boon sources, and some elite transforms and kits: Photon Forge, Tempest overloads and Lich Form.
+- Allies. The simulation is self-only. Party and squad boons are fixed buff levels on the Stats view, not other players.
+- Misses, evades, disruption and target movement. The simulated build hits its target the whole time.
+- Traits whose effect has no record or needs a mechanic the simulator lacks. These are named on the Not simulated line of each result.
 
-Land **Spear** is a terrestrial two-hander for every profession that has it.
-The GW2 profession API still tags Spear as Aquatic (underwater palette); the
-optimizer treats that flag as a land exception. Trident and Speargun stay
-water-only and are never mixed into a land set.
+**Accuracy.** Treat every number as an estimate, not a benchmark. The developer compares the simulator with arcdps combat logs parsed by Elite Insights, using the `log_compare` example in this repository. In the latest measurements the simulated damage is lower than the logged damage, at roughly half to four-fifths of it. Use the ranking and the reference comparison to choose between builds, then confirm in game.
+
+## Files on your computer
+
+Everything lives in `addons\gw2_build_optimizer\` inside your Guild Wars 2 folder.
+
+| Path | Contents |
+|---|---|
+| `config.json` | Settings and API keys (unencrypted), plus a random per-install id used only to match replies to your messages |
+| `cache\` | Downloaded game data, icons, character data, news stills and radio station logos |
+| `saves\` | Your saved builds |
+| `generations.jsonl` | One line per run, read by the Generations table. Past 20 MB it is moved to `generations.1.jsonl`. |
+| `kitchen.json` | Choya chat history |
+| `messages.json` | Your messages to the developer and their replies. Delete it to clear the list. |
+| `benchmarks\` | Synced reference builds |
+| `models_dev.json`, `model_profiles.json`, `*_usage.json` | Model catalog, per-model behaviour notes, per-provider request counters |
+
+## What leaves your computer
+
+| Destination | When | What is sent |
+|---|---|---|
+| `api.guildwars2.com`, `render.guildwars2.com` | Setup, refresh, character loads, a periodic status check | Your GW2 API key for account requests. Game data and icons are fetched without it. |
+| Your AI provider | Choya, the AI step of New Build and Improve, key tests, AI quips | Your request and build context, as described in the warning under [API keys](#api-keys) |
+| `models.dev` | Each game start | A download of the public model catalog. Nothing about you is sent. |
+| Snow Crows, Hardstuck, GuildJen | Only when you click Sync Benchmarks | Page requests |
+| News sites and YouTube thumbnails | Only for sources you turn on | Page and image requests |
+| radio-browser.info and the station | Only when you use Choya Tunes | Directory searches and the audio stream |
+| `feedback.robagentic.tech` | Only when you send a message from About | See below |
+
+**Messages to the developer.** A message holds the category, your text, the addon version, game build, overlay language, mode, scale, role, the current profession and elite specialization, and the name of your AI provider. Three things are optional and off by default: a contact line, your GW2 account name, and for wrong-build reports a slim copy of your last result. That copy covers stat prefixes, specializations and traits, weapons, sigils, skills, rune, relic and chat code. API keys and character names are never sent. The contact line is stored on the server in plain text, and the server has no automatic deletion.
 
 ## Troubleshooting
 
-**Addon does not appear**
+**The addon does not appear.** Check that Nexus works, that the file is named exactly `gw2_build_optimizer.dll` and sits directly in `addons\`, and that you restarted the game after copying it.
 
-- Nexus must be installed and working.
-- File name must be exactly `gw2_build_optimizer.dll` in `C:\GAMES\Guild Wars 2\addons\` (or `<GW2 folder>\addons\`).
-- Restart GW2 after copying a new DLL.
+**"Game data stale" next to the status line.** ArenaNet shipped a new game build. Click **Refresh** there, or **Refresh Game Data** in Settings. Icons stay cached. Clear Cache is only needed to download everything again from scratch.
 
-**GW2 key missing scopes** — new key with at least `account, characters, builds`.
+**"Names still English."** The official names for your language are missing or out of date. Refresh Game Data downloads them.
 
-**Stale skills after a patch** — Settings → refresh game data.
+**The GW2 key is refused.** Create a new key with at least `account`, `characters` and `builds`.
 
-**Chat strip says no template** — load a character (blue) or Load/Optimize a
-result (green). Click **Current** if you want the equipped character’s code.
+**AI errors.** Use Test in Settings.
 
-**Paste Build Template does nothing** — click the Chat plate (not a Copy button;
-there isn’t one) and paste in the hero panel. Reload the addon after replacing
-the DLL.
+- "API key rejected" means the key is wrong.
+- "Billing or quota issue" means the key works but the account needs attention.
+- "Rate limited" means wait a minute or pick another model.
+- A slow free model can time out. Try a different one.
 
-**Optimize is empty or odd** — check mode, scale, and role; refresh data; drop
-Improve locks; match the role to the fight you actually want.
+**A result looks wrong.** Check mode, scale and role, drop locks you do not need, and read the viability reasons and the Not simulated line. Then report it from About with **Message developer**, category Wrong build, and attach your last result.
 
-**AI calls fail** — test the key in Settings; watch rate limits; try another
-model on that provider.
+**Logs.** Warnings and fallbacks go to the Nexus log. The run log of each optimization is kept in the Generations table.
+
+Bug reports and questions go through **About > Message developer** or the repository's [issues](https://github.com/special-place-ai-heaven/GW2_Build_Optimizer/issues).
 
 ## Build from source
 
-Rust toolchain, then:
+You need a Rust toolchain on Windows. CI builds on `windows-latest`.
 
-```bash
+```powershell
 cargo build --release
 ```
 
-```text
-target/release/gw2_build_optimizer.dll
+This writes `target\release\gw2_build_optimizer.dll`. Copy it into your `addons` folder.
+
+Checks, as run in CI:
+
+```powershell
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-```bash
-cargo test --workspace --all-targets
-cargo check
-cargo clippy --workspace --all-targets
+The examples and live-cache tests need to know where the game is. Copy `dev.cfg.example` to `dev.cfg`, which git ignores, and set `addons_dir`. The addon itself never reads this file. For example, the fidelity instrument compares the simulator with an Elite Insights JSON log:
+
+```powershell
+cargo run -p gw2-optimizer --example log_compare -- <log.json or folder>
 ```
 
-Crates:
+The workspace has four crates:
 
-- `crates/addon` — Nexus `cdylib`, ImGui overlay, Windows clipboard.
-- `crates/core` — config, storage, shared types.
-- `crates/gw2api` — GW2 API v2 client, cache, download.
-- `crates/optimizer` — search, combat math, viability, LLM providers.
+| Crate | Role |
+|---|---|
+| `crates/addon` | The Nexus DLL: overlay UI, tabs, radio, feedback client |
+| `crates/core` | Config, storage, shared types, translations, generation records |
+| `crates/gw2api` | GW2 API v2 client, rate limiter, cache and download |
+| `crates/optimizer` | Search, simulator, scoring, validation, AI providers, reference-build sync |
 
-## Known limits
+Contributor notes are in [CLAUDE.md](CLAUDE.md), and design and audit documents are under [docs/](docs/).
 
-- Recommendations still need in-game testing.
-- Some traited and conditional effects are approximated.
-- Chat codes cannot carry a full equipment shopping list.
-- Saved builds are local addon records.
-- Provider cost and rate limits are yours.
-- Underwater kits are not optimized. Spear on land is supported; the separate
-  water palettes (Trident, Speargun, aquatic Spear 1–5) are not a land loadout.
+## License
+
+[MIT](LICENSE). Free to use. If it saved you gold, Choya takes coffee at <https://ko-fi.com/specialplacerob>.
