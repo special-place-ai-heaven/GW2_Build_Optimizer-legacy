@@ -654,6 +654,9 @@ pub struct MainState {
     // Optimization state
     pub optimizing: bool,
     pub optimize_stage: String,
+    /// Step feed of the run in flight (optimize or Choya), or the last one.
+    /// Written only by that run's worker, through `with_state`.
+    pub run_feed: crate::ui::run_feed::LiveFeed,
     /// 6-axis optimization weights (Power, Condition, Boon Support, Heal, Sustain, Control).
     /// Drives gear search, trait selection, and build scoring.
     pub weights: OptimizationWeights,
@@ -789,6 +792,8 @@ pub struct MainState {
     pub tab_alert: Option<MainTab>,
     /// About tab: messages, taxonomy, open draft, refresh timers.
     pub feedback: crate::feedback::FeedbackState,
+    /// About > Generations: the run history, its filters, sort and page.
+    pub generations: crate::ui::main_view::GenerationsTab,
     /// Last LLM/provider failure shown on the Choya header (timeout, 429, billing).
     pub provider_issue: Option<String>,
     /// Search filter text for the Settings tab model-picker dropdown.

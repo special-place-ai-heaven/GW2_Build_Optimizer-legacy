@@ -368,6 +368,9 @@ pub(crate) struct ChatRequest {
     /// stops a model narrating its plan instead of calling anything.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_choice: Option<String>,
+    /// `{"include_usage": true}` where the provider needs asking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stream_options: Option<Value>,
 }
 
 /// The plate, as the JSON Schema the API enforces on the closing request.
@@ -536,6 +539,11 @@ pub(crate) struct ProviderCore<'a> {
     /// extend it. See [`CHAT_REQUEST_TIMEOUT`].
     pub(crate) request_timeout: std::time::Duration,
     pub(crate) max_retries: u32,
+    /// Ask for the closing usage chunk (`stream_options.include_usage`).
+    /// OpenAI streams no usage without it. OpenRouter always sends usage and
+    /// documents the parameter as deprecated, so it stays off there rather
+    /// than become one more parameter `require_parameters` routes on.
+    pub(crate) stream_usage: bool,
     /// Polled between attempts, between backoff slices, and between stream
     /// lines so an unload does not have to wait out `request_timeout`.
     /// `&|| false` where cancellation is not meaningful.
@@ -551,6 +559,8 @@ pub(crate) fn send_chat(
     messages: &[Message],
     tools: Option<&[ToolDefinition]>,
 ) -> Result<Message, LlmError> {
+    // Retries and backoff sleeps included: that is time the run waited on the model.
+    let _wait = super::usage::WaitTimer::start();
     core.rate
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -592,6 +602,9 @@ pub(crate) fn send_chat(
         }),
         response_format: core.response_format.clone(),
         tool_choice: core.tool_choice.map(str::to_string),
+        stream_options: core
+            .stream_usage
+            .then(|| serde_json::json!({ "include_usage": true })),
     };
 
     let url = format!("{}/chat/completions", core.base_url);
@@ -603,6 +616,7 @@ pub(crate) fn send_chat(
             return Err(LlmError::Unavailable(CANCELLED.to_string()));
         }
         if attempt > 0 {
+            let _waiting = super::usage::Waiting::new(next_delay, super::usage::WaitReason::Retry);
             if !sleep_observing(next_delay, core.is_cancelled) {
                 return Err(LlmError::Unavailable(CANCELLED.to_string()));
             }
@@ -959,6 +973,7 @@ mod tests {
             // Short: a hung mock must fail the test, not stall it for 420 s.
             request_timeout: Duration::from_secs(10),
             max_retries: 3,
+            stream_usage: false,
             is_cancelled,
         }
     }
@@ -1061,9 +1076,15 @@ mod tests {
         let mut core = test_core(&http, &rate, &server.base_url, &no_cancel);
         core.supports_provider_prefs = false;
         core.reasoning_effort = None;
+        core.stream_usage = true;
         send_chat(core, &[user("hi")], None).expect("ok");
 
         let body = server.posted_body(0);
+        assert_eq!(
+            body["stream_options"]["include_usage"],
+            serde_json::json!(true),
+            "OpenAI streams no usage unless asked"
+        );
         assert!(
             body.get("provider").is_none(),
             "OpenAI must not receive the OpenRouter `provider` block: {body}"
@@ -1092,6 +1113,10 @@ mod tests {
             body["reasoning"]["effort"],
             serde_json::json!(REASONING_EFFORT)
         );
+        assert!(
+            body.get("stream_options").is_none(),
+            "OpenRouter always sends usage; the parameter is deprecated there: {body}"
+        );
     }
 
     /// Claude F8 — the OpenRouter-only `provider` block was posted to
@@ -1100,6 +1125,7 @@ mod tests {
     fn openai_request_omits_the_openrouter_provider_block() {
         let base = ChatRequest {
             tool_choice: None,
+            stream_options: None,
             response_format: None,
             model: "gpt-4o".into(),
             messages: vec![user("hi")],
@@ -1118,6 +1144,7 @@ mod tests {
 
         let routed = ChatRequest {
             tool_choice: None,
+            stream_options: None,
             response_format: None,
             provider: Some(ProviderPrefs {
                 sort: None,
@@ -1216,6 +1243,7 @@ mod tests {
             require_tool_endpoints: false,
             request_timeout: CHAT_REQUEST_TIMEOUT,
             max_retries: 2,
+            stream_usage: false,
             is_cancelled: &no_cancel,
         };
 

@@ -1,5 +1,6 @@
 //! About tab - in-game changelog, Message developer wizard, message list.
 
+pub(in crate::ui::main_view) mod generations;
 pub(super) mod glyphs;
 mod wizard;
 
@@ -134,15 +135,24 @@ fn render_action_row(ui: &Ui, state: &mut AddonState) {
 
 fn render_view_toggle(ui: &Ui, state: &mut AddonState) {
     ui.dummy([0.0, 12.0]);
-    let labels = [t("about.view.messages"), t("about.view.whats_new")];
-    let refs = [labels[0].as_str(), labels[1].as_str()];
-    let selected = match state.main.feedback.view {
-        AboutView::Messages => 0,
-        AboutView::WhatsNew => 1,
-    };
-    // `segment_row` fills the available width; a two-way toggle across the
-    // whole content pane looks like a title bar, so box it like the Saves row.
-    let row_w = theme::segment_row_min_width(ui, &refs) * 1.6;
+    const VIEWS: [AboutView; 3] = [
+        AboutView::Messages,
+        AboutView::WhatsNew,
+        AboutView::Generations,
+    ];
+    let labels = [
+        t("about.view.messages"),
+        t("about.view.whats_new"),
+        t("about.view.generations"),
+    ];
+    let refs = [labels[0].as_str(), labels[1].as_str(), labels[2].as_str()];
+    let selected = VIEWS
+        .iter()
+        .position(|v| *v == state.main.feedback.view)
+        .unwrap_or(0);
+    // `segment_row` fills the available width; a toggle across the whole
+    // content pane looks like a title bar, so box it like the Saves row.
+    let row_w = theme::segment_row_min_width(ui, &refs) * 1.1;
     let row_h = ui.text_line_height() + 8.0;
     let mut picked = None;
     ChildWindow::new("##about_view_wrap")
@@ -152,11 +162,7 @@ fn render_view_toggle(ui: &Ui, state: &mut AddonState) {
         });
     if let Some(i) = picked {
         let feedback = &mut state.main.feedback;
-        feedback.view = if i == 0 {
-            AboutView::Messages
-        } else {
-            AboutView::WhatsNew
-        };
+        feedback.view = VIEWS[i];
         feedback.view_chosen = true;
     }
 }
@@ -843,6 +849,7 @@ pub(in crate::ui::main_view) fn render_about_tab(ui: &Ui, state: &mut AddonState
     match state.main.feedback.view {
         AboutView::WhatsNew => render_whats_new(ui, state),
         AboutView::Messages => render_messages(ui, state),
+        AboutView::Generations => generations::render_generations(ui, state),
     }
     // `messages.json` is flushed by `tasks::flush_dirty` from the frame loop, on any tab.
 }

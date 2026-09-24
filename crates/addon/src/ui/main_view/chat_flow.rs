@@ -361,11 +361,22 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
         }
     }
     let chat_balance_ctx = BalanceContext::new(state.main.game_mode.clone());
+    let run_meta = super::generation::RunMeta::capture(
+        state,
+        gw2_core::generations::GenerationKind::Choya,
+        &profession,
+    );
 
     let spawned = state.spawn_worker("chat-message", move |token| {
+        use gw2_core::generations::{GenerationStatus, GenerationTier, RunPhase};
         // Live output for the thinking bubble, thread-local like the cancel
         // predicate so another worker's request cannot write into it.
         let _live = gw2_optimizer::llm::live::LiveScope::new(crate::state::ChatLiveSink(chat_live));
+        // The run's step feed and LLM accounting. A run that ends without an
+        // explicit close (cancelled, superseded) is closed as cancelled when
+        // the tracker drops; the observer guard drops first.
+        let tracker = super::generation::RunTracker::start(run_meta);
+        let _llm_feed = tracker.observe();
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if token.is_cancelled() {
                 crate::state::with_state(|s| {
@@ -414,6 +425,8 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                 }
 
                 gw2_optimizer::llm::live::step(gw2_optimizer::llm::live::Step::Handshake);
+                let handshake_step = tracker.begin(RunPhase::Choya, t("run.choya_handshake"), None);
+                tracker.explain(handshake_step, "explain.choya_handshake");
                 let handshake_started = std::time::Instant::now();
                 let (profile, probed) = profiles.borrow_mut().ensure(
                     client.as_ref(),
@@ -429,6 +442,7 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                     ),
                     handshake_started.elapsed().as_secs_f32(),
                 );
+                tracker.done_with(handshake_step, profile.summary());
                 if let Some(e) = profiles.borrow().last_probe_error.as_deref() {
                     nexus::log::log(
                         nexus::log::LogLevel::Warning,
@@ -455,6 +469,9 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                     // sat at 44% and could not repeat. The floor is free;
                     // withholding it is not.
                     gw2_optimizer::llm::live::step(gw2_optimizer::llm::live::Step::Reference);
+                    let reference_step =
+                        tracker.begin(RunPhase::Reference, t("run.choya_reference"), None);
+                    tracker.explain(reference_step, "explain.choya_reference");
                     let reference_started = std::time::Instant::now();
                     let reference = reference_build(
                         db,
@@ -477,6 +494,10 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                     *fallback_reference.borrow_mut() = reference
                         .as_ref()
                         .map(|r| format!("{}\n{}", r.line, r.verdict));
+                    match reference.as_ref() {
+                        Some(r) => tracker.done_with(reference_step, r.line.clone()),
+                        None => tracker.done_with(reference_step, t("run.choya_no_reference")),
+                    }
                     nexus::log::log(
                         nexus::log::LogLevel::Info,
                         "GW2BuildOpt",
@@ -545,6 +566,15 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                     // so the model narrated "I'll start by checking what
                     // specs..." with no call to make, and a text-only turn is
                     // the final answer. A wasted round beats a wasted run.
+                    let prompt_step = tracker.note(
+                        RunPhase::Choya,
+                        t("run.choya_prompt"),
+                        Some(tf(
+                            "run.choya_prompt_detail",
+                            &[("n", &kitchen.chars().count().to_string())],
+                        )),
+                    );
+                    tracker.explain(prompt_step, "explain.choya_prompt");
                     let tools = gw2_optimizer::llm::tools::tool_definitions();
                     let empty_candidates = vec![];
                     let ctx = gw2_optimizer::gemini_tools::ToolContext {
@@ -561,6 +591,8 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                     let full_build_evaluations = std::cell::Cell::new(0u32);
                     // What the plate has to beat. Ranked once: the player's
                     // gear does not change while Choya is thinking.
+                    tracker.stage(RunPhase::Reference, &t("run.baseline"));
+                    tracker.explain_stage("explain.baseline");
                     let baseline = rank_current_build(
                         loadout.as_ref(),
                         db,
@@ -582,6 +614,11 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                         if token.is_cancelled() {
                             return Err("Cancelled".into());
                         }
+                        tracker.stage(
+                            RunPhase::Choya,
+                            &tf("run.choya_attempt", &[("n", &attempt.to_string())]),
+                        );
+                        tracker.explain_stage("explain.choya_attempt");
                         let mut prompt = gw2_optimizer::prompts::chat_refinement_prompt_with_tools(
                             &profession,
                             &game_mode_label,
@@ -694,6 +731,24 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                             );
                                         }
                                         let tools_str = humanize_tool_names(tool_names);
+                                        let lookup = tracker.note(
+                                            RunPhase::Choya,
+                                            tf(
+                                                "run.choya_lookup",
+                                                &[
+                                                    ("turn", &turn.to_string()),
+                                                    ("max", &max_turns.to_string()),
+                                                ],
+                                            ),
+                                            (!tool_names.is_empty()).then(|| tools_str.clone()),
+                                        );
+                                        tracker.explain(
+                                            lookup,
+                                            gw2_core::generations::ExplainPart::new(
+                                                "explain.choya_lookup",
+                                                &[("max", &max_turns.to_string())],
+                                            ),
+                                        );
                                         crate::state::with_state(|s| {
                                             if s.main.chat_epoch != epoch {
                                                 return;
@@ -767,6 +822,9 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                 );
                                 if let Some(p) = repaired {
                                     repair_used.set(true);
+                                    let repair =
+                                        tracker.note(RunPhase::Validation, t("run.choya_repair"), None);
+                                    tracker.explain(repair, "explain.choya_repair");
                                     p
                                 } else {
                                 let explanation: String =
@@ -825,6 +883,9 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                             );
                             if let Some(p) = plated {
                                 repair_used.set(true);
+                                let repair =
+                                    tracker.note(RunPhase::Validation, t("run.choya_repair"), None);
+                                tracker.explain(repair, "explain.choya_repair");
                                 parsed = p;
                                 if let Some(ref cur) = loadout {
                                     fill_holes_from_loadout(&mut parsed, cur);
@@ -844,12 +905,21 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                         {
                             plate_profession = inferred;
                         }
+                        tracker.stage(RunPhase::Validation, &t("run.choya_validating"));
+                        tracker.explain_stage("explain.choya_validating");
                         let validated = gw2_optimizer::validation::validate_gemini_build(
                             &parsed,
                             db,
                             &plate_profession,
                         );
                         if !plate_is_servable(&validated) {
+                            tracker.end_stage();
+                            let none = tracker.note(
+                                RunPhase::Validation,
+                                t("run.choya_no_plate"),
+                                None,
+                            );
+                            tracker.explain(none, "explain.choya_no_plate");
                             return Ok(parsed);
                         }
 
@@ -883,6 +953,13 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                             // had to say written on it. A caveat the player
                             // can read beats a gate that silently vetoes.
                             Ok((mut concerns, report)) => {
+                                tracker.end_stage();
+                                let accepted = tracker.note(
+                                    RunPhase::Validation,
+                                    t("run.choya_accepted"),
+                                    None,
+                                );
+                                tracker.explain(accepted, "explain.choya_accepted");
                                 // What the referee did not simulate is a
                                 // concern the player reads, same as a gate.
                                 if let Some(detail) = coverage_note_from(&report.quality_reasons)
@@ -907,6 +984,13 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                 return Ok(parsed);
                             }
                             Err(why) => {
+                                tracker.end_stage();
+                                let refused = tracker.warn(
+                                    RunPhase::Validation,
+                                    t("run.choya_refused"),
+                                    why.clone(),
+                                );
+                                tracker.explain(refused, "explain.choya_refused");
                                 let spent = started.elapsed();
                                 nexus::log::log(
                                     nexus::log::LogLevel::Info,
@@ -1053,6 +1137,8 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                     match result {
                         Ok(raw) => {
                             if !validated.as_ref().is_some_and(plate_is_servable) {
+                                // A reply, not a build: the run ends without a record.
+                                tracker.close(&GenerationStatus::Ok);
                                 // Unservable plate: reply with the explanation text.
                                 crate::state::with_state(|s| {
                                     if s.main.chat_epoch != epoch {
@@ -1082,6 +1168,8 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                     }
                                 });
                             } else {
+                                tracker.stage(RunPhase::Choya, &t("run.choya_plating"));
+                                tracker.explain_stage("explain.choya_plating");
                                 // Heavy phase — runs WITHOUT the state lock. The
                                 // render callback shares this mutex and ImGui only
                                 // draws on the render thread, so a stalled frame
@@ -1131,6 +1219,8 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                 if let Some(v) = &validated {
                                     suggestion.slot_prefixes = Some(v.gear_slots.clone());
                                 }
+                                tracker.stage(RunPhase::Simulation, &t("run.measuring"));
+                                tracker.explain_stage(super::generation::measuring_explain());
                                 if let Some(ref db) = live_db {
                                     // Measured like every other tab, in the
                                     // scenario the plate was refereed in.
@@ -1185,6 +1275,17 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                         .map(|c| vec![crate::chat_links::build_template_chip(c)])
                                         .unwrap_or_default(),
                                 };
+                                // The record is written here, off the render thread,
+                                // and rides on the tab the plate lands in.
+                                let record = tracker.finish(
+                                    GenerationStatus::Ok,
+                                    Some(super::generation::Served {
+                                        suggestion: &suggestion,
+                                        tier: GenerationTier::Choya,
+                                        db: live_db.as_deref(),
+                                    }),
+                                );
+                                suggestion.generation = Some(record);
                                 // Apply phase — short lock, pure state mutation.
                                 crate::state::with_state(|s| {
                                     if s.main.chat_epoch != epoch {
@@ -1210,6 +1311,12 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                             }
                         }
                         Err(e) => {
+                            // The feed stays open until the fallback below is
+                            // written, so the referee's work is a live step.
+                            let failed = GenerationStatus::Failed { message: e.clone() };
+                            let fallback =
+                                tracker.begin(RunPhase::Choya, t("run.choya_fallback"), None);
+                            tracker.explain(fallback, "explain.choya_fallback");
                             // format_provider_issue turns this into a category
                             // ("Request timed out"), which is all the player
                             // needs and nowhere near enough to diagnose from.
@@ -1228,6 +1335,7 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                 })
                             })
                             .flatten() else {
+                                tracker.close(&failed);
                                 return;
                             };
                             // The fallback answers the question asked, not a
@@ -1279,6 +1387,8 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                 &format!("{kind:?}"),
                                 fallback_started.elapsed().as_secs_f32(),
                             );
+                            tracker.done(fallback);
+                            tracker.close(&failed);
                             crate::state::with_state(|s| {
                                 if s.main.chat_epoch != epoch {
                                     return;
@@ -1305,6 +1415,9 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
             }
         }));
         if panic_result.is_err() {
+            tracker.close(&GenerationStatus::Failed {
+                message: "panicked".into(),
+            });
             nexus::log::log(
                 nexus::log::LogLevel::Warning,
                 "GW2BuildOpt",

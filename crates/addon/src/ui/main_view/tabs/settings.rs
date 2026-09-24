@@ -7,7 +7,7 @@ use nexus::imgui::{
 
 use crate::state::{AddonState, CancellationToken};
 use crate::ui::theme;
-use gw2_core::config::{CustomTheme, NewsKind, NewsLayout, NewsSource, ThemeConfig};
+use gw2_core::config::{CostCurrency, CustomTheme, NewsKind, NewsLayout, NewsSource, ThemeConfig};
 use gw2_core::i18n::{t, tf};
 
 use super::super::{build_display, stats};
@@ -42,6 +42,8 @@ pub(in crate::ui::main_view) fn render_settings_tab(ui: &Ui, state: &mut AddonSt
     render_api_keys_section(ui, state, col_w);
     ui.spacing();
     render_model_picker_section(ui, state, col_w);
+    ui.spacing();
+    render_cost_currency_toggle(ui, state);
 
     ui.dummy([0.0, 8.0]);
 
@@ -800,6 +802,27 @@ fn render_model_picker_section(ui: &Ui, state: &mut AddonState, col_w: f32) {
             &[("n", state.main.settings_usage_today.to_string().as_str())],
         ),
     );
+}
+
+/// USD/EUR toggle for cost estimates (generation pill/tooltip). Estimates are
+/// always computed and stored in USD; this only picks how they are displayed.
+fn render_cost_currency_toggle(ui: &Ui, state: &mut AddonState) {
+    ui.text(t("settings.cost_currency"));
+    let usd = t("settings.cost_currency_usd");
+    let eur = t("settings.cost_currency_eur");
+    let labels = [usd.as_str(), eur.as_str()];
+    let selected = match state.config.cost_currency {
+        CostCurrency::Usd => 0,
+        CostCurrency::Eur => 1,
+    };
+    if let Some(i) = theme::segment_row(ui, &labels, selected, "##set_cost_currency") {
+        state.config.cost_currency = if i == 1 {
+            CostCurrency::Eur
+        } else {
+            CostCurrency::Usd
+        };
+        crate::ui::save_config_detached(state);
+    }
 }
 
 /// News sources, sized to live inside one settings column.

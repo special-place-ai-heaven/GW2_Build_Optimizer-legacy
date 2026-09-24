@@ -89,6 +89,7 @@ const LATIN_RANGES: &[ImWchar] = &[
     0x0100, 0x017F, // Latin Extended-A (Polish)
     0x0400, 0x04FF, // Cyrillic (Russian)
     0x2010, 0x205E, // General Punctuation: dashes, quotes, ellipsis, bullets
+    0x20A0, 0x20CF, // Currency Symbols: the euro sign of the cost display
     0x2190, 0x21FF, // Arrows
     0x2200, 0x22FF, // Mathematical Operators
     0x2600, 0x27BF, // Misc symbols + dingbats
@@ -756,12 +757,27 @@ mod tests {
     /// 2026-09-06 it wrote an em dash and the player read a question mark.
     #[test]
     fn the_typography_a_model_writes_is_inside_the_atlas() {
-        for c in "—–…“”‘’•·→←≥≤×≈".chars() {
+        for c in "—–…“”‘’•·→←≥≤×≈€".chars() {
             assert!(
                 in_latin_ranges(c as u32),
                 "U+{:04X} {c:?} is not in LATIN_RANGES; it would draw as '?'",
                 c as u32
             );
+        }
+        // Our own cost strings, in both currencies, draw whole.
+        use gw2_core::config::CostCurrency;
+        let fx = gw2_optimizer::llm::pricing::fx();
+        for currency in [CostCurrency::Usd, CostCurrency::Eur] {
+            for usd in [0.0, 0.001, 0.02] {
+                let text = crate::ui::cost_format::format_cost(Some(usd), currency, fx);
+                for c in text.chars() {
+                    assert!(
+                        in_latin_ranges(c as u32),
+                        "U+{:04X} in {text:?} would draw as '?'",
+                        c as u32
+                    );
+                }
+            }
         }
     }
 

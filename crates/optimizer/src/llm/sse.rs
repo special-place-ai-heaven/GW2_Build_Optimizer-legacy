@@ -53,6 +53,30 @@ pub(crate) struct StreamChunk {
     /// 200 by then, so OpenRouter ships the failure in-band.
     #[serde(default)]
     error: Option<Value>,
+    /// Token usage, on the closing chunk. OpenAI sends it only when asked
+    /// (`stream_options.include_usage`); OpenRouter always does, with `cost`.
+    #[serde(default)]
+    usage: Option<WireUsage>,
+}
+
+#[derive(Deserialize)]
+struct WireUsage {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+    /// OpenRouter only: what the request was charged, in USD.
+    cost: Option<f64>,
+}
+
+impl From<WireUsage> for super::usage::ResponseUsage {
+    fn from(u: WireUsage) -> Self {
+        Self {
+            prompt: u.prompt_tokens,
+            completion: u.completion_tokens,
+            total: u.total_tokens,
+            cost_usd: u.cost,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -259,6 +283,7 @@ pub(crate) fn read_stream<R: std::io::Read>(
     // Empty diagnostic, which is the only path where dropped chunks can be
     // the reason the user sees nothing.
     let mut skipped_payloads: usize = 0;
+    let mut usage: Option<super::usage::ResponseUsage> = None;
 
     let mut capped = body_capped(reader);
     let mut buffered = std::io::BufReader::new(&mut capped);
@@ -287,7 +312,7 @@ pub(crate) fn read_stream<R: std::io::Read>(
         if payload == "[DONE]" {
             break;
         }
-        let chunk: StreamChunk = match serde_json::from_str(payload) {
+        let mut chunk: StreamChunk = match serde_json::from_str(payload) {
             Ok(chunk) => chunk,
             Err(_) => {
                 skipped_payloads += 1;
@@ -297,6 +322,9 @@ pub(crate) fn read_stream<R: std::io::Read>(
         if let Some(err) = chunk.error {
             return Err(error_object_to_llm_error(&err));
         }
+        if let Some(u) = chunk.usage.take() {
+            usage = Some(u.into());
+        }
         apply_chunk(&mut acc, &mut finish, chunk)?;
     }
 
@@ -305,6 +333,8 @@ pub(crate) fn read_stream<R: std::io::Read>(
     if hit_body_cap(&capped) {
         return Err(body_cap_exceeded("chat completion"));
     }
+    // Billed whether or not the body held anything usable.
+    super::usage::record(usage);
 
     match acc.into_message() {
         Some(message) => Ok(StreamedMessage::Message(message)),
@@ -382,6 +412,27 @@ mod tests {
             }
             StreamedMessage::Empty(finish) => panic!("expected content, got empty: {finish}"),
         }
+    }
+
+    /// OpenRouter's closing chunk, as its usage-accounting docs show it:
+    /// tokens plus the `cost` it charged. OpenAI's (with `include_usage`)
+    /// is the same minus `cost`, on a chunk with no choices.
+    #[test]
+    fn read_stream_records_the_closing_usage_chunk() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":194,\"completion_tokens\":2,\"total_tokens\":196,\"cost\":0.95}}\n",
+            "data: [DONE]\n",
+        );
+        let scope = crate::llm::usage::UsageScope::new();
+        read_stream(sse.as_bytes(), &|| false).expect("ok");
+        let run = scope.total();
+        assert_eq!(run.tokens.prompt, 194);
+        assert_eq!(run.tokens.completion, 2);
+        assert_eq!(run.tokens.total, 196);
+        assert_eq!(run.tokens.requests, 1);
+        assert_eq!(run.reported_cost_usd, Some(0.95));
     }
 
     #[test]

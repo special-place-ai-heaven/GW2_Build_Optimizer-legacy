@@ -132,6 +132,7 @@ impl OpenAiClient {
             response_format: None,
             request_timeout,
             max_retries: 2,
+            stream_usage: true,
             is_cancelled: &is_cancelled,
         };
         let message = send_chat(core, messages, tools)?;

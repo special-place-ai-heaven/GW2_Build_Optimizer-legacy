@@ -413,6 +413,41 @@ Increment log:
   coefficients; Evoker Roaming Bruiser and D/D Thief Havoc Assassin now
   pass); PvE identical. Closes E24.
 
+- 2026-09-24, addon feature: generation records, live run feed, Generations
+  tab (`GW2_Build_Optimizer-work/generations-2026-09-24/`). Every New Build,
+  Improve and Choya run now writes a `GenerationRecord` to
+  `generations.jsonl` in the addon folder (append-only, torn-tail tolerant):
+  kind, character, profession/spec, mode/scale/role and weights, LLM
+  provider/model, token usage read from each provider's own usage fields
+  (Gemini `usageMetadata`, OpenAI/OpenRouter usage chunks, Anthropic
+  `message_start`/`delta`), duration split into LLM wait and compute, tier
+  timings, a cost estimate from a cited pricing table (`data/llm_pricing.json`,
+  list prices, 2026-09-24) or "n/a", the produced build as a `SavedBuild`
+  payload plus a card summary, status, and the run's step feed. A live run
+  feed shows tier starts and fallbacks, seeds, beam generations, every LLM
+  request with tokens, quota waits, validation outcomes and the winners' 60 s
+  simulation as they happen, in the New Build/Improve progress area and
+  Choya's thinking bubble, kept afterward as a collapsible Run log; every
+  number carries a hover explanation (owner: "I don't want to start a riot").
+  A header pill (duration, model, tokens, cost) sits at the right end of the
+  results tab strip with a detail tooltip. Settings gained a USD/EUR toggle
+  (ECB rate 2026-09-24, 1 USD = 0.8797 EUR; records themselves stay USD).
+  About gained a third view, Generations: a filterable, sortable, paged table
+  of every run with mini build cards; clicking a card restores the run's
+  inputs, re-measures through `measure_validated` (the same path Saves uses)
+  and lands on the matching tab. Review
+  (`GW2_Build_Optimizer-work/generations-2026-09-24/review.md`) found one
+  blocking bug (the currency lookup called `with_state` from the render
+  thread, which already holds the state mutex, and would hang the game) plus
+  five warnings (the euro sign missing from the font atlas, failed/cancelled/
+  reply-only Choya runs left unrecorded, an opening build card that could
+  spin forever on cancel or panic, persisted step explanations frozen in the
+  run's language with no log rotation, and a partial provider-reported cost
+  mislabeled as complete); fixes for all six are part of this increment.
+  ~150 new locale keys translated in all 12 languages. `cargo test
+  --workspace`: 2261 passed, 0 failed, 42 ignored; clippy clean; locale
+  parity script clean.
+
 Engine gaps the review measured (counted Executable, never run). The next
 engine increment (single-writer) closes these before more professions are
 authored, or the executable column overstates:

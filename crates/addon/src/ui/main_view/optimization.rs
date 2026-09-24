@@ -363,6 +363,7 @@ pub(super) fn synergy_result_to_suggestion(
     let mut suggestion = BuildSuggestion {
         // Ours, not published anywhere.
         source_url: String::new(),
+        generation: None,
         label,
         build_summary: format!("Gear: {gear_summary}"),
         stat_prefix: v
@@ -577,6 +578,7 @@ pub(super) fn candidate_to_suggestion(
     let mut suggestion = BuildSuggestion {
         // Ours, not published anywhere.
         source_url: String::new(),
+        generation: None,
         label: format!("Score: {:.2}", candidate.score),
         build_summary: format!("Gear: {}", candidate.gear.stat_prefix_name),
         stat_prefix: candidate.gear.stat_prefix_name.clone(),
@@ -1649,7 +1651,7 @@ pub(super) fn humanize_tool_names(tool_names: &[String]) -> String {
 // independent inputs — grouping them adds indirection without clarity.
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::chat_flow::plate_is_servable;
     use super::{
         apply_radar_prefix, attach_chat_stats, chat_display_text, fill_holes_from_loadout,
@@ -2699,8 +2701,12 @@ mod tests {
     /// CI half of `every_tab_measures_a_build_the_same`, on the hand-built
     /// GameDb: a Choya plate (`measure_validated`) and the optimizer's tab
     /// (`synergy_result_to_suggestion`) measure one validated build the same.
-    #[test]
-    fn choya_and_optimizer_tabs_measure_alike_on_a_hand_built_db() {
+    /// A Daredevil with a full bar on the hand-built GameDb: every skill deals
+    /// damage, so the flow simulation has something to measure.
+    pub(in crate::ui::main_view) fn hand_built_thief() -> (
+        gw2_optimizer::gamedb::GameDb,
+        gw2_optimizer::validation::ValidatedBuild,
+    ) {
         use gw2_optimizer::validation::{ValidatedBuild, ValidatedSpec};
         let mut db = chat_code_db();
         for id in 10..=14u32 {
@@ -2745,6 +2751,12 @@ mod tests {
             itemstat_id: 161,
             name: "Berserker's".into(),
         });
+        (db, v)
+    }
+
+    #[test]
+    fn choya_and_optimizer_tabs_measure_alike_on_a_hand_built_db() {
+        let (db, v) = hand_built_thief();
 
         let weights = gw2_optimizer::scoring::OptimizationWeights::default();
         for mode in [
@@ -2781,5 +2793,153 @@ mod tests {
             );
             assert_eq!(measured(&optimized), measured(&chat), "{mode:?}");
         }
+    }
+
+    pub(in crate::ui::main_view) fn run_meta(
+        dir: &std::path::Path,
+    ) -> super::super::generation::RunMeta {
+        super::super::generation::RunMeta {
+            kind: gw2_core::generations::GenerationKind::NewBuild,
+            character_name: "Tester".into(),
+            profession: "Thief".into(),
+            mode: gw2_core::types::GameMode::WvW,
+            tier: gw2_optimizer::scenario::CombatTier::Solo,
+            role: Some(gw2_optimizer::scenario::RoleObjective::PowerDps),
+            weights: gw2_optimizer::scoring::OptimizationWeights::default(),
+            provider: gw2_core::config::LlmProvider::Gemini,
+            model: "gemini-2.5-flash".into(),
+            addon_dir: dir.to_path_buf(),
+        }
+    }
+
+    /// The deterministic tier's path through a run, on the hand-built GameDb:
+    /// the steps land in order and the record says no LLM was used.
+    #[test]
+    fn a_deterministic_run_records_its_steps_and_no_llm() {
+        use gw2_core::generations::{
+            GenerationLog, GenerationStatus, GenerationTier, RunPhase, StepState,
+        };
+        let dir = std::env::temp_dir().join(format!("gw2bo_gen_det_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let (db, v) = hand_built_thief();
+        let weights = gw2_optimizer::scoring::OptimizationWeights::default();
+        let ctx = gw2_optimizer::balance::BalanceContext::new(gw2_core::types::GameMode::WvW);
+        let scenario = gw2_optimizer::scenario::ScenarioSpec::for_request(
+            &ctx,
+            gw2_optimizer::scenario::CombatTier::Solo,
+            None,
+            &weights,
+        );
+
+        let tracker = super::super::generation::RunTracker::start(run_meta(&dir));
+        let _llm_feed = tracker.observe();
+        tracker.tier_begin(GenerationTier::Deterministic);
+        let result = gw2_optimizer::engine::synergy_result_from_validated(
+            v,
+            &db,
+            "Thief",
+            &ctx,
+            Some(&scenario),
+        );
+        tracker.stage(RunPhase::Deterministic, "Computing final combat metrics...");
+        tracker.tier_end(Ok(()));
+        let measure = tracker.begin(RunPhase::Simulation, "measure", None);
+        let suggestion = super::synergy_result_to_suggestion(
+            &result, &db, "Thief", &scenario, None, None, None, &weights, &ctx,
+        );
+        tracker.done(measure);
+        let record = tracker.finish(
+            GenerationStatus::Ok,
+            Some(super::super::generation::Served {
+                suggestion: &suggestion,
+                tier: GenerationTier::Deterministic,
+                db: Some(&db),
+            }),
+        );
+
+        let phases: Vec<RunPhase> = record.steps.iter().map(|s| s.phase).collect();
+        assert_eq!(
+            phases,
+            [
+                RunPhase::Run,           // started
+                RunPhase::Deterministic, // tier 2
+                RunPhase::Deterministic, // its progress stage
+                RunPhase::Simulation,    // measuring the served build
+                RunPhase::Record,        // record written
+                RunPhase::Run,           // done
+            ]
+        );
+        assert!(
+            record
+                .steps
+                .iter()
+                .all(|s| matches!(s.state, StepState::Done { .. })),
+            "every step finished: {:?}",
+            record.steps
+        );
+        assert_eq!(record.llm, None, "no LLM request was made");
+        assert_eq!(record.tokens, gw2_core::generations::TokenUsage::default());
+        assert_eq!(record.llm_wait_ms, 0);
+        assert_eq!(record.compute_ms, record.duration_ms);
+        assert_eq!(record.cost_estimate_usd, None);
+        assert_eq!(record.tier, Some(GenerationTier::Deterministic));
+        assert_eq!(record.tier_timings.len(), 1);
+        assert!(record.tier_timings[0].served);
+        assert_eq!(record.elite_spec.as_deref(), Some("Daredevil"));
+        let build = record.build.as_ref().expect("the served build is saved");
+        assert_eq!(build.profession, "Thief");
+        assert_eq!(build.skills, suggestion.skills);
+        let card = record.card.as_ref().expect("card");
+        assert_eq!(card.specs, ["Daredevil"]);
+        assert!(card.simulated_dps.is_some_and(|d| d > 0));
+
+        let on_disk = GenerationLog::new(&dir).load_all();
+        assert_eq!(on_disk.len(), 1, "one record per run");
+        assert_eq!(on_disk[0].id, record.id);
+        assert_eq!(on_disk[0].steps.len(), record.steps.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stopped run still writes its record, and its feed ends on a failed
+    /// (cancelled) step with the open tier marked failed.
+    #[test]
+    fn a_cancelled_run_ends_on_a_cancelled_step() {
+        use gw2_core::generations::{GenerationStatus, GenerationTier, RunPhase, StepState};
+        let dir = std::env::temp_dir().join(format!("gw2bo_gen_cancel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let tracker = super::super::generation::RunTracker::start(run_meta(&dir));
+        tracker.tier_begin(GenerationTier::BeamV2);
+        tracker.stage(RunPhase::Search, "Permuting kits (gen 1, 40 evals, 1s)...");
+        tracker.stage(RunPhase::Search, "Permuting kits (gen 2, 80 evals, 2s)...");
+        let record = tracker.finish(GenerationStatus::Cancelled, None);
+
+        assert_eq!(record.status, GenerationStatus::Cancelled);
+        assert!(record.build.is_none() && record.tier.is_none());
+        let last = record.steps.last().expect("steps");
+        assert_eq!(last.phase, RunPhase::Run);
+        assert!(matches!(last.state, StepState::Failed { .. }), "{last:?}");
+        let tier = record
+            .steps
+            .iter()
+            .find(|s| {
+                s.phase == RunPhase::Search
+                    && s.detail.is_none()
+                    && !s.label.starts_with("Permuting")
+            })
+            .expect("tier step");
+        assert!(matches!(tier.state, StepState::Failed { .. }), "{tier:?}");
+        let gens: Vec<_> = record
+            .steps
+            .iter()
+            .filter(|s| s.label.starts_with("Permuting"))
+            .collect();
+        assert_eq!(gens.len(), 1, "one stage step, updated in place");
+        assert!(gens[0].label.contains("gen 2"));
+        assert_eq!(record.tier_timings.len(), 1);
+        assert!(!record.tier_timings[0].served);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

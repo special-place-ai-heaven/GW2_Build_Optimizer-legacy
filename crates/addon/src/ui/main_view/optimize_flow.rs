@@ -171,19 +171,43 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
     state.main.comparison.loading = true;
     state.main.comparison.error = None;
 
+    let run_meta = super::generation::RunMeta::capture(
+        state,
+        match entry {
+            OptimizeEntry::NewBuild => gw2_core::generations::GenerationKind::NewBuild,
+            OptimizeEntry::Improve => gw2_core::generations::GenerationKind::Improve,
+        },
+        &profession_name,
+    );
+    let record_db = db.clone();
+
     // `spawn_worker` is the addon's only production thread launch: it names the
     // thread, registers the `JoinHandle` so `on_unload` can wait for it, binds
     // the LLM transports to this run's cancel token, and hands the body its own
     // token clone.
     let started = state.spawn_worker("optimize", move |token| {
+        // The run's step feed and LLM accounting live on this thread; the
+        // observer guard is declared after the tracker so it drops first.
+        let tracker = super::generation::RunTracker::start(run_meta);
+        let _llm_feed = tracker.observe();
         let panic_token = token.clone();
         let thread_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result = (|| -> Result<Vec<crate::ui::comparison::BuildSuggestion>, String> {
+            let result = (|| -> Result<
+                (
+                    Vec<crate::ui::comparison::BuildSuggestion>,
+                    gw2_core::generations::GenerationTier,
+                ),
+                String,
+            > {
+                use gw2_core::generations::{GenerationTier, RunPhase};
                 if token.is_cancelled() {
                     return Err("Cancelled".into());
                 }
 
                 let db = db.ok_or("GameDb not loaded")?;
+                let counts = super::generation::DataCounts::of(&db, &profession_name);
+                let data_step = tracker.note(RunPhase::Data, counts.label(), None);
+                tracker.explain(data_step, counts.explain());
 
                 // Build a mode + tier-aware scenario for the referee and optimize_v2.
                 let scenario =
@@ -192,6 +216,12 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                 // Improve always-better baseline (spec §12.4): rank the
                 // user's OWN current gear under this run's weights so a worse
                 // optimizer result is refused. New Build has no baseline.
+                let baseline_step = entry
+                    .wants_baseline()
+                    .then(|| tracker.begin(RunPhase::Reference, t("run.baseline"), None));
+                if let Some(id) = baseline_step {
+                    tracker.explain(id, "explain.baseline");
+                }
                 let improve_baseline = capture_improve_baseline(
                     entry,
                     loadout.as_ref(),
@@ -201,9 +231,13 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                     &balance_ctx,
                     &scenario,
                 );
+                if let Some(id) = baseline_step {
+                    tracker.done(id);
+                }
 
                 // Primary: optimize_v2 — beam search over complete build states
                 {
+                    tracker.tier_begin(GenerationTier::BeamV2);
                     let token_v2 = token.clone();
                     // Create LLM client for the advisor pass (optional — errors silently skip).
                     let llm_for_advisor: Option<Box<dyn gw2_optimizer::llm::LlmClient>> =
@@ -224,6 +258,7 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                             if token_v2.is_cancelled() {
                                 return;
                             }
+                            tracker.stage(RunPhase::Search, &progress.stage);
                             // The search's budget receipt is a diagnostic, not a
                             // status: log it and keep it out of the banner. The
                             // default 1500-eval / 10-wide budget stops the beam
@@ -248,6 +283,13 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                             if token.is_cancelled() {
                                 return Err("Cancelled".into());
                             }
+                            tracker.tier_end(Ok(()));
+                            let measure = tracker.begin(
+                                RunPhase::Simulation,
+                                t("run.measuring"),
+                                None,
+                            );
+                            tracker.explain(measure, super::generation::measuring_explain());
                             let (served, outcome) = apply_improve_baseline_gate(
                                 synergy_result,
                                 &improve_baseline,
@@ -269,9 +311,11 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                                 &balance_ctx,
                             );
                             keep_loadout_pets(&mut suggestion, &current_pets);
-                            return Ok(vec![suggestion]);
+                            tracker.done(measure);
+                            return Ok((vec![suggestion], GenerationTier::BeamV2));
                         }
                         Err(e) => {
+                            tracker.tier_end(Err(&e));
                             nexus::log::log(
                                 nexus::log::LogLevel::Warning,
                                 "GW2 Build Optimizer",
@@ -287,6 +331,7 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
 
                 // Fallback 1: Deterministic synergy engine (no LLM for build selection)
                 {
+                    tracker.tier_begin(GenerationTier::Deterministic);
                     let llm_client_opt: Option<Box<dyn gw2_optimizer::llm::LlmClient>> =
                         gw2_optimizer::llm::create_client(&config, &addon_dir).ok();
 
@@ -306,6 +351,7 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                             if token_det.is_cancelled() {
                                 return;
                             }
+                            tracker.stage(RunPhase::Deterministic, &progress.stage);
                             crate::state::with_state(|s| {
                                 s.main.optimize_stage = progress.stage.clone();
                             });
@@ -316,6 +362,13 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                             if token.is_cancelled() {
                                 return Err("Cancelled".into());
                             }
+                            tracker.tier_end(Ok(()));
+                            let measure = tracker.begin(
+                                RunPhase::Simulation,
+                                t("run.measuring"),
+                                None,
+                            );
+                            tracker.explain(measure, super::generation::measuring_explain());
                             let (served, outcome) = apply_improve_baseline_gate(
                                 synergy_result,
                                 &improve_baseline,
@@ -337,9 +390,11 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                                 &balance_ctx,
                             );
                             keep_loadout_pets(&mut suggestion, &current_pets);
-                            return Ok(vec![suggestion]);
+                            tracker.done(measure);
+                            return Ok((vec![suggestion], GenerationTier::Deterministic));
                         }
                         Err(e) => {
+                            tracker.tier_end(Err(&e));
                             nexus::log::log(
                                 nexus::log::LogLevel::Warning,
                                 "GW2 Build Optimizer",
@@ -363,6 +418,8 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                 // captured, still fall through — the latter loudly.)
                 let legacy = improve_baseline.legacy_tier();
                 if let LegacyTier::ServeBaseline(baseline) = legacy {
+                    let kept = tracker.note(RunPhase::Legacy, t("run.kept_baseline"), None);
+                    tracker.explain(kept, "explain.kept_baseline");
                     gate_log(
                         nexus::log::LogLevel::Warning,
                         "Improve: optimize_v2 and the deterministic engine both failed; the legacy tier cannot be ranked against your gear, serving your current build".to_string(),
@@ -389,7 +446,7 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                         &balance_ctx,
                     );
                     keep_loadout_pets(&mut suggestion, &current_pets);
-                    return Ok(vec![suggestion]);
+                    return Ok((vec![suggestion], GenerationTier::Legacy));
                 }
 
                 let profession = db.profession(&profession_name).ok_or_else(|| {
@@ -397,6 +454,7 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                 })?;
 
                 let token_progress = token.clone();
+                tracker.tier_begin(GenerationTier::Legacy);
                 let candidates = run_legacy_tier(
                     &db,
                     profession,
@@ -408,12 +466,15 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                         if token_progress.is_cancelled() {
                             return;
                         }
+                        tracker.stage(RunPhase::Legacy, &progress.stage);
                         crate::state::with_state(|s| {
                             s.main.optimize_stage = progress.stage.clone();
                         });
                     },
                     &|| token.is_cancelled(),
-                )?;
+                )
+                .inspect_err(|e| tracker.tier_end(Err(e.as_str())))?;
+                tracker.tier_end(Ok(()));
 
                 if token.is_cancelled() {
                     return Err("Cancelled".into());
@@ -446,6 +507,8 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                         s.main.optimize_stage = t("status.consulting");
                     });
 
+                    let enrich = tracker.begin(RunPhase::Llm, t("run.enrich"), None);
+                    tracker.explain(enrich, "explain.enrich");
                     match enrich_with_llm(
                         entry,
                         &config,
@@ -460,8 +523,9 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                         &balance_ctx,
                         &scenario,
                     ) {
-                        Ok(()) => {}
+                        Ok(()) => tracker.done(enrich),
                         Err(e) => {
+                            tracker.fail(enrich, e.clone());
                             nexus::log::log(
                                 nexus::log::LogLevel::Warning,
                                 "GW2 Build Optimizer",
@@ -478,8 +542,37 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                     return Err("legacy leftover kit is empty".into());
                 }
 
-                Ok(suggestions)
+                Ok((suggestions, GenerationTier::Legacy))
             })();
+
+            // The record is written on every ending - served, cancelled or
+            // failed - before the overlay sees the result, and off the render
+            // thread. Every tab this run served carries it.
+            let status = match &result {
+                Ok(_) => gw2_core::generations::GenerationStatus::Ok,
+                Err(e) if token.is_cancelled() || e == "Cancelled" => {
+                    gw2_core::generations::GenerationStatus::Cancelled
+                }
+                Err(e) => gw2_core::generations::GenerationStatus::Failed { message: e.clone() },
+            };
+            let result = match result {
+                Ok((mut suggestions, tier)) => {
+                    let record = tracker.finish(
+                        status,
+                        suggestions.first().map(|s| super::generation::Served {
+                            suggestion: s,
+                            tier,
+                            db: record_db.as_deref(),
+                        }),
+                    );
+                    super::generation::attach(&mut suggestions, &record);
+                    Ok(suggestions)
+                }
+                Err(e) => {
+                    tracker.finish(status, None);
+                    Err(e)
+                }
+            };
 
             if !token.is_cancelled() {
                 crate::state::with_state(|s| {
@@ -529,6 +622,12 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
             } else {
                 t("err.opt_panic")
             };
+            tracker.finish(
+                gw2_core::generations::GenerationStatus::Failed {
+                    message: msg.clone(),
+                },
+                None,
+            );
             if !panic_token.is_cancelled() {
                 crate::state::with_state(|s| {
                     s.main.optimizing = false;

@@ -228,6 +228,16 @@ impl NewsLayout {
     }
 }
 
+/// Which currency cost estimates (Settings, generation pill/tooltip) are shown in.
+/// Stored values are always USD; this only affects display.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostCurrency {
+    #[default]
+    Usd,
+    Eur,
+}
+
 fn default_show_images() -> bool {
     true
 }
@@ -594,6 +604,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub client_id: Option<String>,
 
+    /// Currency cost estimates are displayed in. Omitted on old configs; defaults USD.
+    #[serde(default)]
+    pub cost_currency: CostCurrency,
+
     /// Never persisted. Set by [`AppConfig::load`] when an existing
     /// `config.json` could not be read, so [`AppConfig::save`] will not write
     /// these defaults over settings this run never saw. `#[serde(skip)]` keeps
@@ -638,6 +652,7 @@ impl Default for AppConfig {
             news: NewsPreferences::default(),
             radio: RadioPreferences::default(),
             client_id: None,
+            cost_currency: CostCurrency::default(),
             save_policy: SavePolicy::Writable,
         }
     }
@@ -1293,6 +1308,18 @@ mod tests {
             config.window_rect(),
             (DEFAULT_WINDOW_POS, DEFAULT_WINDOW_SIZE)
         );
+    }
+
+    #[test]
+    fn old_config_without_cost_currency_defaults_usd() {
+        // Pre-currency-toggle config.json: the field is missing entirely.
+        let json = r#"{
+            "gw2_api_key": "old-key",
+            "gemini_api_key": "old-gemini-key",
+            "cache_build_number": 12345
+        }"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.cost_currency, CostCurrency::Usd);
     }
 
     #[test]

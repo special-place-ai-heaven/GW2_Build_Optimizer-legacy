@@ -19,6 +19,8 @@ pub enum AboutView {
     #[default]
     WhatsNew,
     Messages,
+    /// Every New Build, Improve and Choya run, from `generations.jsonl`.
+    Generations,
 }
 
 /// Where the Message developer wizard currently is.

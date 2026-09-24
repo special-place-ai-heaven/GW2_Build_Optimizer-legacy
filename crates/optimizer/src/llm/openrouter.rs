@@ -230,6 +230,7 @@ impl OpenRouterClient {
             response_format,
             request_timeout,
             max_retries: 2,
+            stream_usage: false,
             is_cancelled: &is_cancelled,
         };
         let message = send_chat(core, messages, tools)?;

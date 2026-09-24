@@ -177,6 +177,15 @@ fn live_view(state: &AddonState) -> crate::ui::chat_bar::LiveView {
         expanded: live.expanded,
         caption,
         body,
+        // The run's own steps: every request, wait and check as it happens.
+        steps: if state.main.run_feed.live {
+            crate::ui::run_feed::bubble_lines(
+                &state.main.run_feed,
+                if live.expanded { 40 } else { 6 },
+            )
+        } else {
+            Vec::new()
+        },
     }
 }
 

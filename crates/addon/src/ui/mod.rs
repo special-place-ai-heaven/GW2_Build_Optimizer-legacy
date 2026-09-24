@@ -3,12 +3,14 @@ pub(crate) mod fonts;
 pub mod chat_bar;
 pub mod chat_markup;
 pub mod comparison;
+pub(crate) mod cost_format;
 mod gear_diff;
 mod gear_sheet;
 pub(crate) mod icons;
 pub mod main_view;
 pub(crate) mod news_feed;
 pub mod radar_chart;
+pub(crate) mod run_feed;
 mod setup;
 pub(crate) mod theme;
 

@@ -11,6 +11,7 @@ pub mod models_dev;
 pub mod openai;
 pub(crate) mod openai_compat;
 pub mod openrouter;
+pub mod pricing;
 pub mod profile;
 pub(crate) mod rate;
 pub(crate) mod response_cache;
@@ -18,6 +19,7 @@ pub(crate) mod sse;
 pub mod tool_loop;
 pub mod tools;
 pub(crate) mod trim;
+pub mod usage;
 
 use serde_json::Value;
 

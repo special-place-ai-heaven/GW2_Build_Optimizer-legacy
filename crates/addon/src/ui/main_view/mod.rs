@@ -10,6 +10,7 @@ use gw2_optimizer::scoring::OptimizationWeights;
 pub(crate) mod build_display;
 mod character;
 mod chat_flow;
+mod generation;
 pub mod lock_panel;
 mod optimization;
 mod optimize_flow;
@@ -17,6 +18,8 @@ pub(crate) mod provider_picks;
 mod resolution;
 mod stats;
 mod tabs;
+
+pub(crate) use tabs::about::generations::GenerationsTab;
 
 /// `kitchen.json` (chat history). Saved from the frame loop whenever the chat
 /// is dirty, which can be many frames in a row while a reply streams in.
@@ -798,6 +801,66 @@ fn render_role_chips(ui: &Ui, state: &mut AddonState) {
     }
 }
 
+/// Switch the left panel to character `idx` (`name`): the combo's pick, and
+/// the Generations tab opening a record made on another character.
+pub(in crate::ui::main_view) fn select_character(state: &mut AddonState, idx: usize, name: String) {
+    state.main.selected_character = Some(idx);
+    state.main.current_build = None;
+    state.main.current_stats = None;
+    state.main.build_tabs.clear();
+    state.main.equipment_tabs.clear();
+    state.main.selected_build_tab = None;
+    state.main.selected_equipment_tab = None;
+    state.main.build_chat_code = None;
+    // Clear prior character's suggestions, combat metrics, and locks — the new
+    // character may be a different profession with different specs entirely.
+    state.main.comparison.suggestions.clear();
+    state.main.comparison.run_locked_spec = None;
+    state.main.comparison.selected_suggestion = 0;
+    state.main.comparison.error = None;
+    state.main.comparison.show_optimized = false;
+    state.main.comparison.current_combat_solo = None;
+    state.main.comparison.current_combat_party = None;
+    state.main.comparison.current_combat_squad = None;
+    state.main.build_locks = gw2_core::types::BuildLocks::default();
+    character::load_character_tabs(state, name);
+}
+
+/// Put the left panel's mode, scale, role and weights back to a stored
+/// scenario, with what the mode, scale and role controls do on a change:
+/// suggestions scored in the old scenario go, and a new mode drops the
+/// locks. The caller re-resolves the current build (a character switch does
+/// it anyway). Returns whether the mode changed.
+pub(in crate::ui::main_view) fn restore_scenario(
+    state: &mut AddonState,
+    mode: GameMode,
+    tier: CombatTier,
+    role: Option<RoleObjective>,
+    weights: OptimizationWeights,
+) -> bool {
+    let main = &mut state.main;
+    let mode_changed = main.game_mode != mode;
+    if !mode_changed
+        && main.combat_tier == tier
+        && main.selected_role == role
+        && main.weights == weights
+    {
+        return false;
+    }
+    main.game_mode = mode;
+    main.combat_tier = tier;
+    main.selected_role = role;
+    main.weights = weights;
+    main.comparison.suggestions.clear();
+    main.comparison.run_locked_spec = None;
+    main.comparison.selected_suggestion = 0;
+    main.comparison.error = None;
+    if mode_changed {
+        main.build_locks = gw2_core::types::BuildLocks::default();
+    }
+    mode_changed
+}
+
 /// Character picker + build/equip template dropdowns.
 fn render_left_character_section(ui: &Ui, state: &mut AddonState) {
     render_left_section_header(ui, &t("section.character"), state.config.section_spacing);
@@ -844,26 +907,7 @@ fn render_left_character_section(ui: &Ui, state: &mut AddonState) {
     }
 
     if let Some((idx, name)) = new_selection {
-        state.main.selected_character = Some(idx);
-        state.main.current_build = None;
-        state.main.current_stats = None;
-        state.main.build_tabs.clear();
-        state.main.equipment_tabs.clear();
-        state.main.selected_build_tab = None;
-        state.main.selected_equipment_tab = None;
-        state.main.build_chat_code = None;
-        // Clear prior character's suggestions, combat metrics, and locks — the new
-        // character may be a different profession with different specs entirely.
-        state.main.comparison.suggestions.clear();
-        state.main.comparison.run_locked_spec = None;
-        state.main.comparison.selected_suggestion = 0;
-        state.main.comparison.error = None;
-        state.main.comparison.show_optimized = false;
-        state.main.comparison.current_combat_solo = None;
-        state.main.comparison.current_combat_party = None;
-        state.main.comparison.current_combat_squad = None;
-        state.main.build_locks = gw2_core::types::BuildLocks::default();
-        character::load_character_tabs(state, name);
+        select_character(state, idx, name);
     }
 
     if !state.main.build_tabs.is_empty() {

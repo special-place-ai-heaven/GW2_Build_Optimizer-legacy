@@ -62,6 +62,10 @@ pub(in crate::ui::main_view) fn render_new_build_tab(ui: &Ui, state: &mut AddonS
         {
             crate::ui::main_view::optimize_flow::stop_optimization(state);
         }
+        crate::ui::run_feed::render_live(ui, &state.main.run_feed);
+    } else if state.main.comparison.suggestions.is_empty() && !state.main.run_feed.live {
+        // A run that served nothing (failed, cancelled) still shows what it did.
+        crate::ui::run_feed::render_log(ui, &state.main.run_feed.feed.steps, "last_run_log_new");
     }
 
     if state.main.comparison.suggestions.is_empty() && !state.main.optimizing {
@@ -87,6 +91,7 @@ pub(in crate::ui::main_view) fn render_new_build_tab(ui: &Ui, state: &mut AddonS
                     stats.as_ref(),
                     &mut state.main.comparison,
                     state.main.game_db.as_deref(),
+                    state.config.cost_currency,
                 );
                 picked = crate::ui::main_view::provider_picks::render_provider_picks(ui, state);
                 if crate::ui::main_view::provider_picks::take_sync_invite(ui, state) {

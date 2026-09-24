@@ -629,6 +629,34 @@ struct StreamGenerateResponse {
     /// Mid-stream failure: `{"error":{"code":…,"message":…,"status":…}}`.
     #[serde(default)]
     error: Option<StreamErrorPayload>,
+    /// Running token counts; the last chunk's are the request's totals.
+    #[serde(default, rename = "usageMetadata")]
+    usage_metadata: Option<UsageMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageMetadata {
+    prompt_token_count: Option<u64>,
+    candidates_token_count: Option<u64>,
+    /// Billed at the output rate ("Output price (including thinking tokens)").
+    thoughts_token_count: Option<u64>,
+    total_token_count: Option<u64>,
+}
+
+impl From<UsageMetadata> for crate::llm::usage::ResponseUsage {
+    fn from(u: UsageMetadata) -> Self {
+        let completion = match (u.candidates_token_count, u.thoughts_token_count) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+        };
+        Self {
+            prompt: u.prompt_token_count,
+            completion,
+            total: u.total_token_count,
+            cost_usd: None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -663,6 +691,7 @@ fn read_gemini_stream<R: std::io::Read>(reader: R) -> Result<Content, GeminiErro
     // multi-byte codepoint at the ceiling arrives here as `InvalidData`, so
     // the cap has to be ruled out before this is blamed on the wire.
     let mut read_error: Option<std::io::Error> = None;
+    let mut usage: Option<crate::llm::usage::ResponseUsage> = None;
 
     let mut capped = body_capped(reader);
     for line in std::io::BufReader::new(&mut capped).lines() {
@@ -691,6 +720,9 @@ fn read_gemini_stream<R: std::io::Read>(reader: R) -> Result<Content, GeminiErro
                     .message
                     .unwrap_or_else(|| "Gemini stream error".to_string()),
             });
+        }
+        if let Some(u) = chunk.usage_metadata {
+            usage = Some(u.into());
         }
         let Some(content) = chunk
             .candidates
@@ -733,6 +765,8 @@ fn read_gemini_stream<R: std::io::Read>(reader: R) -> Result<Content, GeminiErro
     if let Some(e) = read_error {
         return Err(GeminiError::Http(format!("Gemini stream read failed: {e}")));
     }
+    // Billed whether or not the body held anything usable.
+    crate::llm::usage::record(usage);
 
     if !text.is_empty() {
         parts.insert(0, Part::text(text));
@@ -1140,6 +1174,8 @@ impl GeminiClient {
     /// unless an answer actually arrived.
     fn send_request(&self, request: &GenerateRequest) -> Result<Content, GeminiError> {
         const MAX_RETRIES: u32 = 3;
+        // Pacing, retries and the stream: all of it is the run waiting on the model.
+        let _wait = crate::llm::usage::WaitTimer::start();
 
         // Pace to the model's stated per-minute quota before spending a
         // request on the 429 that would say the same thing.
@@ -1149,6 +1185,10 @@ impl GeminiClient {
             .unwrap_or_else(|e| e.into_inner())
             .wait_for_window();
         if let Some(wait) = wait {
+            let _quota = crate::llm::usage::Waiting::new(
+                wait + Duration::from_secs(1),
+                crate::llm::usage::WaitReason::Quota,
+            );
             if !sleep_observing(wait + Duration::from_secs(1), &is_cancelled) {
                 return Err(GeminiError::Unavailable(CANCELLED.to_string()));
             }
@@ -1162,12 +1202,19 @@ impl GeminiClient {
 
         let mut last_error: Option<GeminiError> = None;
         let mut next_delay = std::time::Duration::from_secs(5);
+        // A per-minute 429 sleeps out Google's stated wait: that is quota, not a retry.
+        let mut wait_reason = crate::llm::usage::WaitReason::Retry;
 
         for attempt in 0..MAX_RETRIES {
             if is_cancelled() {
                 return Err(GeminiError::Unavailable(CANCELLED.to_string()));
             }
-            if attempt > 0 && !sleep_observing(next_delay, &is_cancelled) {
+            if attempt > 0
+                && !{
+                    let _waiting = crate::llm::usage::Waiting::new(next_delay, wait_reason);
+                    sleep_observing(next_delay, &is_cancelled)
+                }
+            {
                 return Err(GeminiError::Unavailable(CANCELLED.to_string()));
             }
             if attempt > 0 {
@@ -1217,6 +1264,7 @@ impl GeminiClient {
                                 .learn_rpm(quota.limit);
                             if attempt + 1 < MAX_RETRIES && quota.retry_after <= MAX_QUOTA_WAIT {
                                 next_delay = quota.retry_after + Duration::from_secs(1);
+                                wait_reason = crate::llm::usage::WaitReason::Quota;
                                 last_error = Some(GeminiError::RateLimited(quota.summary()));
                                 continue;
                             }
@@ -1568,6 +1616,22 @@ data: {"candidates":[{"content":{"parts":[{"text":"!"}],"role":"model"},"index":
         assert_eq!(content.role.as_deref(), Some("model"));
         assert_eq!(content.parts.len(), 1);
         assert_eq!(content.parts[0].text.as_deref(), Some("Hello!"));
+    }
+
+    /// Every chunk carries running `usageMetadata`; the last one is the
+    /// request's. Thinking tokens bill as output.
+    #[test]
+    fn read_gemini_stream_records_the_last_usage_metadata() {
+        let sse = r#"data: {"candidates":[{"content":{"parts":[{"text":"Hel"}],"role":"model"}}],"usageMetadata":{"promptTokenCount":900,"candidatesTokenCount":1,"totalTokenCount":901}}
+data: {"candidates":[{"content":{"parts":[{"text":"lo"}],"role":"model"}}],"usageMetadata":{"promptTokenCount":900,"candidatesTokenCount":20,"thoughtsTokenCount":80,"totalTokenCount":1000}}
+"#;
+        let scope = crate::llm::usage::UsageScope::new();
+        read_gemini_stream(sse.as_bytes()).expect("stream parses");
+        let run = scope.total();
+        assert_eq!(run.tokens.prompt, 900);
+        assert_eq!(run.tokens.completion, 100);
+        assert_eq!(run.tokens.total, 1000);
+        assert_eq!(run.tokens.requests, 1);
     }
 
     #[test]

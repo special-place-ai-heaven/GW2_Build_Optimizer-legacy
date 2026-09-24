@@ -2,6 +2,19 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## 1.14.44
+
+Generation records, live run feed, Generations tab. SCHEMA CHANGE = N.
+
+- New Build, Improve and Choya runs each write a `GenerationRecord` to `generations.jsonl` in the addon folder (append-only, torn-tail tolerant): kind, character, profession/spec, mode·scale·role and weights, LLM provider/model, token usage (prompt/completion/requests) read from Gemini `usageMetadata`, OpenAI/OpenRouter usage chunks and Anthropic `message_start`/`delta`, duration split into LLM wait and compute, tier timings, a cost estimate from a cited pricing table (`data/llm_pricing.json`, list prices, 2026-09-24) or "n/a", the produced build as a `SavedBuild` payload plus a card summary, status ok/cancelled/failed, and the run's step feed.
+- Live run feed: every long-running action shows its steps as they happen (tier starts and fallbacks with reason, seeds, beam generations and evaluations, every LLM request with tokens, quota waits counting down, validation outcomes, the winners' 60 s simulation, record written), shown live in the New Build / Improve progress area and Choya's thinking bubble, kept afterward as a collapsible Run log. Every number carries a hover explanation of what it counts; the game-data line reads "Guardian: 227 skills · 108 traits (db 2311 profession skills / 999 traits)" instead of raw database totals.
+- Header widget: a pill at the right end of the results tab strip shows duration · model · tokens · ≈ cost, with a tooltip for start time, tier, LLM wait vs compute, per-tier times, prompt/completion split, request count and the pricing row.
+- Settings: cost estimates display in USD or EUR (ECB reference rate 2026-09-24, 1 USD = 0.8797 EUR, stored with source and date; records themselves keep USD).
+- About gains a third view, Generations: a table of every run (date, type, character, mode·scale·role, LLM, duration, tokens, cost, mini build card), page size derived from window height with the pager always visible below it, filters (type, character, mode, LLM, date preset, free text), sortable columns, and an expandable per-run timeline; clicking a build card restores character, mode, scale, role and weights, measures the build through the same path Saves uses, attaches the original run's numbers, and lands on the matching tab. History loads off-thread on its own cancellation token.
+- One evaluation path kept: the Generations tab and Saves both measure through `measure_validated`.
+- Review fixes (in progress): move the currency lookup out of the render path (a `with_state` call inside render would deadlock the game, since render already holds the state mutex), add the euro sign to the font ranges, record failed/cancelled/reply-only Choya runs too, clear the opening-card state on cancel or panic, store step explanations as i18n keys instead of frozen text, cap on-disk steps and rotate the log at 20 MB, treat a partial provider-reported cost as "n/a" instead of an undercount, and cache filtered/sorted rows per change.
+- ~150 new locale keys, translated in all 12 languages.
+
 ## 1.14.43
 
 Multi-hit skills land their full coefficient; alignment stops outranking power on sustain. SCHEMA CHANGE = N.

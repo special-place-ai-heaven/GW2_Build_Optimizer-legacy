@@ -158,7 +158,7 @@ fn action_btn_size(ui: &Ui) -> [f32; 2] {
     [w, theme::control_height(ui)]
 }
 
-fn clip_label(ui: &Ui, text: &str, max_w: f32) -> String {
+pub(in crate::ui::main_view) fn clip_label(ui: &Ui, text: &str, max_w: f32) -> String {
     if ui.calc_text_size(text)[0] <= max_w {
         return text.to_string();
     }
@@ -413,7 +413,7 @@ fn overwrite_named(state: &mut AddonState, name: &str) {
 ///
 /// With game data the save is measured like every other tab: the engine's
 /// stat sheet and flow run for its validated plate, in `scenario`.
-fn suggestion_from_saved_build(
+pub(in crate::ui::main_view) fn suggestion_from_saved_build(
     saved: &gw2_core::types::SavedBuild,
     game_db: Option<&gw2_optimizer::gamedb::GameDb>,
     game_mode: &gw2_core::types::GameMode,
@@ -565,7 +565,7 @@ fn delete_named(state: &mut AddonState, name: &str) {
     }
 }
 
-fn paint_row_plate(ui: &Ui, height: f32, header: bool) {
+pub(in crate::ui::main_view) fn paint_row_plate(ui: &Ui, height: f32, header: bool) {
     let p = ui.cursor_screen_pos();
     let w = ui.content_region_avail()[0];
     let fill = if header {
@@ -812,7 +812,7 @@ fn suggestion_slot_prefixes(
     })
 }
 
-fn suggestion_to_saved(
+pub(in crate::ui::main_view) fn suggestion_to_saved(
     name: &str,
     character_name: &str,
     profession: &str,
@@ -907,6 +907,7 @@ fn saved_to_suggestion(
     let mut suggestion = crate::ui::comparison::BuildSuggestion {
         // Ours, not published anywhere.
         source_url: String::new(),
+        generation: None,
         label: if saved.label.is_empty() {
             saved.name.clone()
         } else {

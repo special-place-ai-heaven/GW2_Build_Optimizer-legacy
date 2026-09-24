@@ -84,6 +84,8 @@ pub struct LiveView {
     pub caption: String,
     /// The newest lines of the mode's text.
     pub body: Vec<String>,
+    /// The newest lines of the run's step feed.
+    pub steps: Vec<String>,
 }
 
 /// One community build, as much of it as a card beside the reply can show.
@@ -474,6 +476,13 @@ pub fn render_chat_bar(
                         if !v.note.is_empty() {
                             t.push('\n');
                             t.push_str(&v.note);
+                        }
+                        if !v.steps.is_empty() {
+                            t.push('\n');
+                            for line in &v.steps {
+                                t.push('\n');
+                                t.push_str(line);
+                            }
                         }
                         if v.expanded {
                             t.push_str("\n\n");

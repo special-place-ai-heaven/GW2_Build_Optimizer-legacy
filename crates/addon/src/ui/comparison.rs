@@ -69,6 +69,9 @@ pub struct BuildSuggestion {
     /// render time, because by then the build has moved tabs and nothing on
     /// screen remembers which row it came from.
     pub source_url: String,
+    /// The run that produced this build: time, model, tokens, cost, steps.
+    /// Shared by every tab of that run; `None` for loaded and published builds.
+    pub generation: Option<std::sync::Arc<gw2_core::generations::GenerationRecord>>,
 }
 
 /// Which result view is showing.
@@ -598,10 +601,38 @@ impl ComparisonState {
 /// never hides the optimized one behind a twin (specs/006 US2). The Current
 /// tab is the equipped build; it exists whenever there is one. Shared by
 /// the New Build and Improve panes, which used to draw their own strips.
-pub fn render_tab_strip(ui: &Ui, comparison: &mut ComparisonState, has_current: bool) {
+/// `currency` is `state.config.cost_currency`: this runs under the STATE lock.
+pub fn render_tab_strip(
+    ui: &Ui,
+    comparison: &mut ComparisonState,
+    has_current: bool,
+    currency: gw2_core::config::CostCurrency,
+) {
     let tab_count = comparison.suggestions.len();
-    if has_current || tab_count > 1 {
-        let avail = ui.content_region_avail()[0];
+    // The run behind the selected tab, else the newest run on the strip.
+    let record = comparison
+        .suggestions
+        .get(comparison.selected_suggestion)
+        .filter(|_| comparison.show_optimized)
+        .and_then(|s| s.generation.clone())
+        .or_else(|| {
+            comparison
+                .suggestions
+                .iter()
+                .rev()
+                .find_map(|s| s.generation.clone())
+        });
+    let x0 = ui.cursor_pos()[0];
+    let avail = ui.content_region_avail()[0];
+    if !(has_current || tab_count > 1) {
+        if let Some(record) = record {
+            crate::ui::run_feed::render_generation_pill(ui, &record, currency, x0, avail, 0.0);
+            crate::ui::run_feed::render_log(ui, &record.steps, "run_log");
+            ui.separator();
+        }
+        return;
+    }
+    {
         let mut row_x = 0.0;
         let mut tabs: Vec<(String, bool, [f32; 4], Option<usize>)> = Vec::new();
         if has_current {
@@ -640,6 +671,10 @@ pub fn render_tab_strip(ui: &Ui, comparison: &mut ComparisonState, has_current: 
             }
             row_x += pill_w + 6.0;
         }
+        if let Some(record) = record {
+            crate::ui::run_feed::render_generation_pill(ui, &record, currency, x0, avail, row_x);
+            crate::ui::run_feed::render_log(ui, &record.steps, "run_log");
+        }
         ui.separator();
     }
 }
@@ -652,6 +687,7 @@ pub fn render_comparison(
     current_stats: Option<&StatBlock>,
     comparison: &mut ComparisonState,
     db: Option<&GameDb>,
+    currency: gw2_core::config::CostCurrency,
 ) {
     // No character selected: the plate is shown on its own. The "current"
     // side is an empty build of the plate's profession, so every diff column
@@ -697,7 +733,7 @@ pub fn render_comparison(
     }
 
     let tab_count = comparison.suggestions.len();
-    render_tab_strip(ui, comparison, has_current);
+    render_tab_strip(ui, comparison, has_current, currency);
 
     let idx = comparison.selected_suggestion.min(tab_count - 1);
     comparison.selected_suggestion = idx;

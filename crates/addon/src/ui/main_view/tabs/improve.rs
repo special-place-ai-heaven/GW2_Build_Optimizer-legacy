@@ -38,6 +38,14 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
         {
             crate::ui::main_view::optimize_flow::stop_optimization(state);
         }
+        crate::ui::run_feed::render_live(ui, &state.main.run_feed);
+    } else if state.main.comparison.suggestions.is_empty() && !state.main.run_feed.live {
+        // A run that served nothing (failed, cancelled) still shows what it did.
+        crate::ui::run_feed::render_log(
+            ui,
+            &state.main.run_feed.feed.steps,
+            "last_run_log_improve",
+        );
     }
 
     // The lock the displayed run used, not the live one (see run_locked_spec).
@@ -72,7 +80,12 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
 
         if has_suggestion {
             // One tinted tab per build, the equipped one first (specs/006 US2).
-            crate::ui::comparison::render_tab_strip(ui, &mut state.main.comparison, true);
+            crate::ui::comparison::render_tab_strip(
+                ui,
+                &mut state.main.comparison,
+                true,
+                state.config.cost_currency,
+            );
             ui.spacing();
 
             // Gate outcome banner

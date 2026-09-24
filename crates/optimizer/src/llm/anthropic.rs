@@ -128,6 +128,28 @@ struct StreamEvent {
     /// Mid-stream failure: `{"type":"error","error":{"type":…,"message":…}}`.
     #[serde(default)]
     error: Option<Value>,
+    /// `message_start` carries `message.usage` (input tokens).
+    #[serde(default)]
+    message: Option<StartMessage>,
+    /// `message_delta` carries top-level `usage` (cumulative output tokens).
+    #[serde(default)]
+    usage: Option<WireUsage>,
+}
+
+#[derive(Deserialize)]
+struct StartMessage {
+    #[serde(default)]
+    usage: Option<WireUsage>,
+}
+
+/// Anthropic's `usage` object. Cache writes and reads are billed input,
+/// at their own rates, so they count toward the prompt total here.
+#[derive(Deserialize, Default, Clone, Copy)]
+struct WireUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -172,6 +194,8 @@ fn read_anthropic_stream<R: std::io::Read>(
 
     let mut blocks: Vec<Option<StreamBlock>> = Vec::new();
     let mut stop_reason: Option<String> = None;
+    let mut input: Option<WireUsage> = None;
+    let mut output_tokens: Option<u64> = None;
 
     let mut capped = body_capped(reader);
     for line in std::io::BufReader::new(&mut capped).lines() {
@@ -191,6 +215,10 @@ fn read_anthropic_stream<R: std::io::Read>(
             Err(_) => continue,
         };
         match event.r#type.as_str() {
+            "message_start" => {
+                input = event.message.and_then(|m| m.usage);
+                output_tokens = input.and_then(|u| u.output_tokens);
+            }
             "content_block_start" => {
                 // Bound the wire-supplied index before it can size the Vec.
                 if event.index > MAX_TOOL_CALL_INDEX {
@@ -232,6 +260,9 @@ fn read_anthropic_stream<R: std::io::Read>(
                 }
             }
             "message_delta" => {
+                if let Some(n) = event.usage.and_then(|u| u.output_tokens) {
+                    output_tokens = Some(n);
+                }
                 if let Some(delta) = event.delta {
                     if delta.stop_reason.is_some() {
                         stop_reason = delta.stop_reason;
@@ -261,6 +292,19 @@ fn read_anthropic_stream<R: std::io::Read>(
     if hit_body_cap(&capped) {
         return Err(body_cap_exceeded("Anthropic message"));
     }
+    // Billed whether or not the body held anything usable.
+    super::usage::record((input.is_some() || output_tokens.is_some()).then(|| {
+        let u = input.unwrap_or_default();
+        let prompt = u.input_tokens.unwrap_or(0)
+            + u.cache_creation_input_tokens.unwrap_or(0)
+            + u.cache_read_input_tokens.unwrap_or(0);
+        super::usage::ResponseUsage {
+            prompt: Some(prompt),
+            completion: output_tokens,
+            total: None,
+            cost_usd: None,
+        }
+    }));
 
     let content = blocks
         .into_iter()
@@ -349,6 +393,8 @@ impl AnthropicClient {
         max_tokens: u32,
     ) -> Result<MessagesResponse, LlmError> {
         const MAX_RETRIES: u32 = 3;
+        // Retries, 529 backoff and the stream: all of it is the run waiting on the model.
+        let _wait = super::usage::WaitTimer::start();
 
         let is_cancelled = super::cancel::is_cancelled;
 
@@ -387,7 +433,13 @@ impl AnthropicClient {
             if is_cancelled() {
                 return Err(LlmError::Unavailable(CANCELLED.to_string()));
             }
-            if attempt > 0 && !sleep_observing(next_delay, &is_cancelled) {
+            if attempt > 0
+                && !{
+                    let _waiting =
+                        super::usage::Waiting::new(next_delay, super::usage::WaitReason::Retry);
+                    sleep_observing(next_delay, &is_cancelled)
+                }
+            {
                 return Err(LlmError::Unavailable(CANCELLED.to_string()));
             }
             if attempt > 0 {
@@ -1229,6 +1281,24 @@ data: {"type":"message_stop"}
             other => panic!("expected one text block, got {other:?}"),
         }
         assert_eq!(body.stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    /// Input tokens arrive on `message_start`, cumulative output tokens on
+    /// `message_delta` (Anthropic streaming docs).
+    #[test]
+    fn read_anthropic_stream_records_start_and_delta_usage() {
+        let sse = r#"data: {"type":"message_start","message":{"id":"m","usage":{"input_tokens":1200,"cache_read_input_tokens":300,"output_tokens":1}}}
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}
+"#;
+        let scope = crate::llm::usage::UsageScope::new();
+        read_anthropic_stream(sse.as_bytes(), &|| false).expect("stream parses");
+        let run = scope.total();
+        assert_eq!(run.tokens.prompt, 1500);
+        assert_eq!(run.tokens.completion, 42);
+        assert_eq!(run.tokens.total, 1542);
+        assert_eq!(run.tokens.requests, 1);
     }
 
     #[test]
