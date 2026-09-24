@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "お気に入りのみ: 前へ/次へでお気に入りを切り替えます。",
   "radio.mini.open_tab": "Choyaラジオを開く",
   "radio.mini.hide": "ミニラジオを隠します。Choyaラジオかキー割り当てで再びオンにできます。",
+  "radio.mini.anchor": "この位置に固定",
+  "radio.mini.anchor_tip": "固定したストリップは移動もサイズ変更もできず、クリックはゲームに届きます。マウスを重ねると操作ボタンは表示されます。解除はここ（ストリップの歯車、またはChoyaラジオのミニラジオ横の歯車）か、Nexusのキー割り当て（ミニラジオの固定）で行えます。",
   "radio.mini.bg_opacity": "背景の不透明度",
   "radio.mini.bg_opacity_tip": "バーの背景の濃さ: 0.00で透明、1.00で完全に不透明。",
   "radio.mini.content_opacity": "内容の不透明度",

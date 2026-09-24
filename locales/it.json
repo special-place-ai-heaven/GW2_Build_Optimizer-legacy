@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "Solo preferiti: Precedente/Successiva scorrono i tuoi preferiti.",
   "radio.mini.open_tab": "Apri Radio Choya",
   "radio.mini.hide": "Nascondi la mini radio. Riattivala in Radio Choya o con il suo tasto.",
+  "radio.mini.anchor": "Ancora sul posto",
+  "radio.mini.anchor_tip": "Le barre ancorate non si possono spostare né ridimensionare e i clic passano al gioco. I comandi compaiono comunque al passaggio del mouse. Sbloccala qui (l'ingranaggio della barra o quello accanto a Mini radio in Radio Choya) o con il tasto Nexus (Ancora mini radio).",
   "radio.mini.bg_opacity": "Opacità dello sfondo",
   "radio.mini.bg_opacity_tip": "Quanto è coprente lo sfondo della barra: 0.00 è invisibile, 1.00 del tutto opaco.",
   "radio.mini.content_opacity": "Opacità del contenuto",

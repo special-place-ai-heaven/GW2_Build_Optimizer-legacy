@@ -175,7 +175,7 @@ Tick **Mini radio** in the search row of Choya Tunes and close the overlay: a sm
 
 ![The mini radio at the bottom of the screen with its settings popup open](docs/screenshots/mini_radio.png)
 
-Everything about its look is yours to set from the gear popup: background opacity separately from the opacity of bars, text and Choya, which elements are shown, Choya's size independent of the strip, the colours of the bars, bar tops, title and background tint (each defaults to your theme colour), and the number, gap and height of the equalizer bars. **Reset appearance** and **Reset position** return the defaults.
+Everything about its look is yours to set from the gear popup: background opacity separately from the opacity of bars, text and Choya, which elements are shown, Choya's size independent of the strip, the colours of the bars, bar tops, title and background tint (each defaults to your theme colour), and the number, gap and height of the equalizer bars. **Reset appearance** and **Reset position** return the defaults. Once you are happy with where the strip sits, anchor it from the gear popup or from the Choya Tunes settings. An anchored strip cannot be moved or resized and lets clicks through to the game, but the controls still appear on mouse-over so you can change station and volume. Unanchor it from the strip's gear or in Choya Tunes, or with the optional keybind.
 
 ### Settings
 

@@ -399,6 +399,8 @@ struct MiniFrame {
     fade: f32,
     /// Fading out: still drawn, takes no clicks.
     leaving: bool,
+    /// Pinned in place with the mouse passing through.
+    anchored: bool,
 }
 
 /// `None` when the strip is hidden this frame. Showing and hiding fade
@@ -413,14 +415,20 @@ fn mini_radio_frame(s: &mut AddonState, main_open: bool, display: [f32; 2]) -> O
         s.radio.mini_fade.toward(want, now)
     };
     let fade = s.radio.mini_fade;
-    if !fade.drawn(now) {
+    // Not before the display is known: clamping against 1x1 put the strip at
+    // (0, 0). `mini_display` stays stale, so the first real display snaps
+    // the strip to its saved rect.
+    if !fade.drawn(now) || !mini_radio::display_valid(display) {
+        s.radio.mini_press = None;
         return None;
     }
     let reset = std::mem::take(&mut s.radio.mini_snap);
     let snap = mini_radio::needs_replace(reset, s.radio.mini_display, display);
     s.radio.mini_display = display;
     if snap {
+        // A programmatic move is not the player's drag: never saved.
         s.radio.mini_live_w = None;
+        s.radio.mini_press = None;
     }
     let (pos, size) = mini_radio::placement(&s.config.radio.mini_radio, display);
     // The live width wins only while a corner drag is in flight.
@@ -433,6 +441,7 @@ fn mini_radio_frame(s: &mut AddonState, main_open: bool, display: [f32; 2]) -> O
         ui_lang: s.config.ui_language.clone(),
         fade: fade.alpha(now),
         leaving: !fade.showing,
+        anchored: s.config.radio.mini_radio.anchored,
     })
 }
 
@@ -445,6 +454,7 @@ fn render_mini_radio(ui: &Ui, frame: MiniFrame) {
         ui_lang,
         fade,
         leaving,
+        anchored,
     } = frame;
 
     // Same unwind guard as the main window: nothing may cross the FFI edge.
@@ -460,13 +470,7 @@ fn render_mini_radio(ui: &Ui, frame: MiniFrame) {
         } else {
             Condition::Appearing
         };
-        let mut flags = WindowFlags::NO_TITLE_BAR
-            | WindowFlags::NO_SCROLLBAR
-            | WindowFlags::NO_SCROLL_WITH_MOUSE
-            | WindowFlags::NO_COLLAPSE
-            | WindowFlags::NO_SAVED_SETTINGS
-            | WindowFlags::NO_FOCUS_ON_APPEARING
-            | WindowFlags::NO_NAV;
+        let (mut flags, _) = mini_radio::window_flags(anchored);
         if leaving {
             flags |= WindowFlags::NO_INPUTS;
         }
@@ -483,7 +487,7 @@ fn render_mini_radio(ui: &Ui, frame: MiniFrame) {
             .build(ui, || {
                 state::with_state(|s| {
                     gw2_core::i18n::set_language(&s.config.ui_language);
-                    mini_radio::render_window(ui, s, fade);
+                    mini_radio::render_window(ui, s, fade, leaving);
                     if ui.is_window_hovered_with_flags(WindowHoveredFlags::ROOT_AND_CHILD_WINDOWS)
                         || ui.is_any_item_hovered()
                     {
@@ -504,6 +508,60 @@ fn render_mini_radio(ui: &Ui, frame: MiniFrame) {
 #[cfg(test)]
 mod tests {
     use super::{window_needs_default_size, window_needs_snap};
+
+    /// Game start: the first frames report a 0x0 or 1x1 display, then
+    /// the real one. The strip must not show until then, must then sit at
+    /// the saved rect, and nothing may be written back (the old path placed
+    /// it at (0, 0) at minimum width and saved that).
+    #[test]
+    fn mini_radio_startup_uses_the_saved_rect_and_writes_nothing() {
+        use super::mini_radio;
+        use gw2_core::config::AppConfig;
+
+        let _serial = crate::state::state_test_guard();
+        let dir = std::env::temp_dir().join(format!("gw2_ui_mini_start_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = AppConfig::config_path(&dir);
+        let (pos, size) = ([900.0, 1100.0], [700.0, mini_radio::height_for(700.0)]);
+        let mut cfg = AppConfig::default();
+        cfg.radio.mini_radio.enabled = true;
+        cfg.radio.mini_radio.pos = Some(pos);
+        cfg.radio.mini_radio.size = Some(size);
+        cfg.save(&path).unwrap();
+        let on_disk = std::fs::read(&path).unwrap();
+
+        crate::state::clear();
+        crate::state::init(dir.clone());
+        let (frames, prefs, press) = crate::state::with_state(|s| {
+            let frames = [[0.0, 0.0], [1.0, 1.0], [2560.0, 1440.0], [2560.0, 1440.0]]
+                .map(|d| super::mini_radio_frame(s, false, d).map(|f| (f.pos, f.size, f.snap)));
+            // The window now sits at the placed rect, mouse up: what the
+            // drag tracker would save.
+            let (press, save) =
+                mini_radio::drag_step(s.radio.mini_press, false, false, (pos, size));
+            assert_eq!(save, None);
+            (frames, s.config.radio.mini_radio.clone(), press)
+        })
+        .expect("state must be initialised");
+        crate::state::clear();
+
+        assert_eq!(frames[0], None, "no strip against a 0x0 display");
+        assert_eq!(frames[1], None, "nor against 1x1, which clamped to (0, 0)");
+        assert_eq!(
+            frames[2],
+            Some((pos, size, true)),
+            "first real display: saved rect"
+        );
+        assert_eq!(frames[3], Some((pos, size, false)));
+        assert_eq!(press, None);
+        assert_eq!((prefs.pos, prefs.size), (Some(pos), Some(size)));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            on_disk,
+            "config.json untouched"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The window rect, "overlay closed", and the build number a finished data
     /// refresh writes are all saved from inside `with_state`, on the render

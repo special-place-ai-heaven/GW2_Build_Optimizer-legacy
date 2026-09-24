@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "Solo favoritos: Anterior/Siguiente recorren tus favoritos.",
   "radio.mini.open_tab": "Abrir Radio Choya",
   "radio.mini.hide": "Ocultar la minirradio. Vuelve a activarla en Radio Choya o con su atajo.",
+  "radio.mini.anchor": "Anclar en su sitio",
+  "radio.mini.anchor_tip": "Las barras ancladas no se pueden mover ni redimensionar y los clics sobre ellas pasan al juego. Los controles siguen apareciendo al pasar el ratón. Desáncla aquí (el engranaje de la barra o el que está junto a Minirradio en Radio Choya) o con el atajo de Nexus (Anclar minirradio).",
   "radio.mini.bg_opacity": "Opacidad del fondo",
   "radio.mini.bg_opacity_tip": "Cuánto se ve el fondo de la barra: 0.00 es invisible, 1.00 es totalmente opaco.",
   "radio.mini.content_opacity": "Opacidad del contenido",

@@ -416,6 +416,9 @@ impl Default for RadioPreferences {
 #[serde(default)]
 pub struct MiniRadioPrefs {
     pub enabled: bool,
+    /// Pinned in place: not movable or resizable, and the mouse passes
+    /// through it to the game. Unanchored from Choya Tunes or a keybind.
+    pub anchored: bool,
     /// Background plate opacity, 0..=1. Kept low so the strip is see-through.
     pub bg_opacity: f32,
     /// Opacity of the bars, text, buttons and Choya, 0..=1.
@@ -461,35 +464,37 @@ pub const MINI_RADIO_CHOYA_SCALE: std::ops::RangeInclusive<f32> = 0.5..=2.5;
 impl Default for MiniRadioPrefs {
     fn default() -> Self {
         Self {
-            enabled: false,
-            bg_opacity: 0.35,
+            enabled: true,
+            anchored: true,
+            bg_opacity: 0.0,
             content_opacity: 1.0,
             pos: None,
             size: None,
             unmute_volume: 0,
-            cycle_favourites: false,
+            cycle_favourites: true,
             show_eq: true,
             show_title: true,
             show_choya: true,
             show_quips: true,
-            choya_scale: 1.0,
-            eq_color: None,
+            choya_scale: 1.05,
+            eq_color: Some([0.4587416, 0.27629519, 0.1833782]),
             eq_peak_color: None,
-            title_color: None,
+            title_color: Some([0.8010657, 0.77469605, 0.4851925]),
             bg_color: None,
-            bar_count: 24,
-            bar_gap: 2,
+            bar_count: 20,
+            bar_gap: 6,
             bar_height: 1.0,
         }
     }
 }
 
 impl MiniRadioPrefs {
-    /// Back to the shipped look. Position, size, the on/off toggle and the
-    /// cycle choice are not appearance and are kept.
+    /// Back to the shipped look. Position, size, the anchor, the on/off
+    /// toggle and the cycle choice are not appearance and are kept.
     pub fn reset_appearance(&mut self) {
         let keep = (
             self.enabled,
+            self.anchored,
             self.pos,
             self.size,
             self.cycle_favourites,
@@ -498,6 +503,7 @@ impl MiniRadioPrefs {
         *self = Self::default();
         (
             self.enabled,
+            self.anchored,
             self.pos,
             self.size,
             self.cycle_favourites,
@@ -1438,19 +1444,20 @@ mod tests {
         assert!(config.radio.ai_quips);
         assert_eq!(config.radio.mini_radio, MiniRadioPrefs::default());
         let m = &config.radio.mini_radio;
-        assert!(!m.enabled);
-        assert_eq!(m.bg_opacity, 0.35);
+        assert!(m.enabled);
+        assert!(m.anchored, "an old config loads onto the shipped defaults");
+        assert_eq!(m.bg_opacity, 0.0);
         assert_eq!(m.content_opacity, 1.0);
         assert!(m.pos.is_none() && m.size.is_none());
         assert!(m.show_eq && m.show_title && m.show_choya && m.show_quips);
-        assert_eq!(m.choya_scale, 1.0);
-        assert!(m.eq_color.is_none() && m.bg_color.is_none());
+        assert_eq!(m.choya_scale, 1.05);
+        assert!(m.eq_color.is_some() && m.bg_color.is_none());
         // A partial object keeps what it has and defaults the rest.
-        let json = r#"{"radio":{"mini_radio":{"enabled":true,"bar_count":12}}}"#;
+        let json = r#"{"radio":{"mini_radio":{"enabled":false,"bar_count":12}}}"#;
         let config: AppConfig = serde_json::from_str(json).unwrap();
-        assert!(config.radio.mini_radio.enabled);
+        assert!(!config.radio.mini_radio.enabled);
         assert_eq!(config.radio.mini_radio.bar_count, 12);
-        assert_eq!(config.radio.mini_radio.bg_opacity, 0.35);
+        assert_eq!(config.radio.mini_radio.bg_opacity, 0.0);
     }
 
     #[test]
@@ -1473,6 +1480,7 @@ mod tests {
         let mut config = AppConfig::default();
         let m = &mut config.radio.mini_radio;
         m.enabled = true;
+        m.anchored = true;
         m.bg_opacity = 0.1;
         m.pos = Some([12.0, 900.0]);
         m.size = Some([480.0, 88.0]);
@@ -1490,6 +1498,7 @@ mod tests {
     fn mini_radio_reset_appearance_keeps_placement() {
         let mut m = MiniRadioPrefs {
             enabled: true,
+            anchored: true,
             pos: Some([1.0, 2.0]),
             size: Some([400.0, 80.0]),
             cycle_favourites: true,
@@ -1500,13 +1509,13 @@ mod tests {
             ..MiniRadioPrefs::default()
         };
         m.reset_appearance();
-        assert!(m.enabled && m.cycle_favourites);
+        assert!(m.enabled && m.anchored && m.cycle_favourites);
         assert_eq!(m.pos, Some([1.0, 2.0]));
         assert_eq!(m.size, Some([400.0, 80.0]));
-        assert_eq!(m.bg_opacity, 0.35);
+        assert_eq!(m.bg_opacity, 0.0);
         assert!(m.show_eq);
-        assert!(m.eq_color.is_none());
-        assert_eq!(m.bar_count, 24);
+        assert!(m.eq_color.is_some());
+        assert_eq!(m.bar_count, 20);
     }
 
     #[test]

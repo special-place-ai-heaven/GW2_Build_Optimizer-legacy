@@ -1,6 +1,6 @@
 //! Mini radio: a small strip the player can leave on screen while the
-//! overlay is closed. Top row: playback controls, shown only while the mouse
-//! is over the strip or Choya. Bottom row: the equalizer with the station and
+//! overlay is closed. Top row: playback controls in their own window, shown
+//! only while the mouse is over the strip or Choya. Bottom row: the equalizer with the station and
 //! song title scrolling over it. Right end: the dancing Choya standing on the
 //! strip and rising out over its top edge, with her quips.
 //!
@@ -9,7 +9,7 @@
 //! STATE itself (pinned by `run_feed::render_paths_never_take_the_state_lock`).
 //! Every animation runs on the wall clock (`art::tick`, `theme::elapsed_ms`).
 
-use nexus::imgui::{ColorEdit, DrawListMut, Slider, Ui};
+use nexus::imgui::{ColorEdit, DrawListMut, Slider, Ui, WindowFlags};
 
 use gw2_core::config::{MiniRadioPrefs, MINI_RADIO_BARS, MINI_RADIO_CHOYA_SCALE, MINI_RADIO_GAP};
 use gw2_core::i18n::{t, tf};
@@ -22,8 +22,13 @@ use crate::ui::{color_u32, theme};
 /// Narrowest strip that still fits every control.
 pub(crate) const MIN_W: f32 = 420.0;
 pub(crate) const MAX_W: f32 = 1600.0;
-/// Room left under the default spot for the skill bar.
-const SKILL_BAR_CLEARANCE: f32 = 150.0;
+/// Default width as a fraction of the screen width, so the strip stays the
+/// same relative size on a Full HD or a 5120-wide screen.
+const DEFAULT_WIDTH_FRACTION: f32 = 0.186;
+/// Default horizontal centre as a fraction of the screen width.
+const DEFAULT_CENTRE_FRACTION: f32 = 0.70;
+/// Default bottom margin as a fraction of the screen height.
+const DEFAULT_BOTTOM_MARGIN_FRACTION: f32 = 0.0132;
 const GEAR_POPUP: &str = "##mini_radio_gear";
 const TAB_GEAR_POPUP: &str = "##mini_radio_tab_gear";
 
@@ -32,6 +37,89 @@ const TAB_GEAR_POPUP: &str = "##mini_radio_tab_gear";
 /// station's Play button.
 pub(crate) fn visible(enabled: bool, main_open: bool, unloading: bool) -> bool {
     enabled && !main_open && !unloading
+}
+
+/// Window flags: `(strip, controls)`. Two windows in both modes, so they
+/// look the same: the strip (plate, equalizer, title, Choya) and, over its
+/// top band, the controls row as its own window, created only while the
+/// hover fade is above zero.
+///
+/// Anchored, the strip is pinned (no move, no resize) and `NO_INPUTS`, whose
+/// `NoMouseInputs` part makes ImGui 1.80 skip it in `FindHoveredWindow`, so
+/// the game keeps the mouse over it. The controls window never moves or
+/// resizes and always takes input, so the buttons stay usable. The strip
+/// never comes to the front on a click, so the controls stay above it.
+pub(crate) fn window_flags(anchored: bool) -> (WindowFlags, WindowFlags) {
+    let base = WindowFlags::NO_TITLE_BAR
+        | WindowFlags::NO_SCROLLBAR
+        | WindowFlags::NO_SCROLL_WITH_MOUSE
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_FOCUS_ON_APPEARING
+        | WindowFlags::NO_NAV;
+    let mut strip = base | WindowFlags::NO_BRING_TO_FRONT_ON_FOCUS;
+    if anchored {
+        strip |= WindowFlags::NO_MOVE | WindowFlags::NO_RESIZE | WindowFlags::NO_INPUTS;
+    }
+    let controls =
+        base | WindowFlags::NO_MOVE | WindowFlags::NO_RESIZE | WindowFlags::NO_BACKGROUND;
+    (strip, controls)
+}
+
+/// A screen rect as `(min, max)`.
+pub(crate) type Span = ([f32; 2], [f32; 2]);
+
+/// The mouse is over the strip, Choya's sprite (`None` while she is hidden)
+/// or the controls window. Plain rect tests on `io.mouse_pos`, so an
+/// anchored strip that takes no mouse input still knows when to show them.
+pub(crate) fn hovering(mouse: [f32; 2], strip: Span, choya: Option<Span>, controls: Span) -> bool {
+    [Some(strip), choya, Some(controls)]
+        .into_iter()
+        .flatten()
+        .any(|(min, max)| in_rect(mouse, min, max))
+}
+
+/// The controls window's rect for a row from `at` to `right`, `h` tall,
+/// grown by the window padding (ImGui clips half of it) and kept on screen.
+pub(crate) fn controls_span(
+    at: [f32; 2],
+    right: f32,
+    h: f32,
+    pad: [f32; 2],
+    display: [f32; 2],
+) -> Span {
+    let size = [right - at[0] + pad[0] * 2.0, h + pad[1] * 2.0];
+    let mut min = [at[0] - pad[0], at[1] - pad[1]];
+    if display_valid(display) {
+        min[0] = min[0].clamp(0.0, (display[0] - size[0]).max(0.0));
+        min[1] = min[1].clamp(0.0, (display[1] - size[1]).max(0.0));
+    }
+    (min, [min[0] + size[0], min[1] + size[1]])
+}
+
+/// The one anchor setter: the strip's gear popup, the Choya Tunes tab and
+/// the keybind all land here. Starts the padlock flash and saves.
+pub(crate) fn set_anchored(state: &mut AddonState, on: bool) {
+    state.config.radio.mini_radio.anchored = on;
+    state.radio.mini_anchor_flash = Some(theme::elapsed_ms());
+    crate::ui::save_config_detached(state);
+}
+
+const ANCHOR_FLASH_MS: f32 = 1500.0;
+/// The padlock's resting opacity (times content opacity) while anchored.
+const ANCHOR_FAINT: f32 = 0.35;
+
+/// Padlock opacity: a flash from full that fades over 1.5 s after a flip,
+/// settling at [`ANCHOR_FAINT`] while anchored and at 0 once unanchored.
+pub(crate) fn padlock_alpha(anchored: bool, flash_at: Option<u64>, now: u64) -> f32 {
+    let flash = flash_at.map_or(0.0, |t| {
+        (1.0 - now.saturating_sub(t) as f32 / ANCHOR_FLASH_MS).clamp(0.0, 1.0)
+    });
+    if anchored {
+        flash.max(ANCHOR_FAINT)
+    } else {
+        flash
+    }
 }
 
 const FADE_IN_MS: f32 = 350.0;
@@ -170,21 +258,32 @@ pub(crate) fn height_for(w: f32) -> f32 {
     (w / 5.5).clamp(64.0, 180.0)
 }
 
-/// First-run spot: the bottom edge of the screen, centred, above the skill
-/// bar. Width follows the screen.
+/// First-run spot: centred at 70% of the screen width, near the bottom edge.
+/// Width and margin scale with the screen so the strip is the same relative
+/// size on Full HD and on a wide/high-resolution display.
 pub(crate) fn default_rect(display: [f32; 2]) -> ([f32; 2], [f32; 2]) {
-    let w = (display[0] * 0.28).clamp(MIN_W, 760.0);
+    let w = (display[0] * DEFAULT_WIDTH_FRACTION)
+        .round()
+        .clamp(MIN_W, MAX_W);
     let h = height_for(w);
-    let x = ((display[0] - w) * 0.5).max(0.0);
-    let y = (display[1] - h - SKILL_BAR_CLEARANCE).max(0.0);
+    let bottom_margin = (display[1] * DEFAULT_BOTTOM_MARGIN_FRACTION).round();
+    let centre_x = display[0] * DEFAULT_CENTRE_FRACTION;
+    let x = (centre_x - w * 0.5).clamp(0.0, (display[0] - w).max(0.0));
+    let y = (display[1] - bottom_margin - h).max(0.0);
     ([x, y], [w, h])
 }
 
+/// False for the first frames' display (0x0, 1x1, NaN): nothing may be
+/// placed or clamped against it, or the strip lands at (0, 0).
+pub(crate) fn display_valid(display: [f32; 2]) -> bool {
+    display[0] > 1.0 && display[1] > 1.0
+}
+
 /// Keep a saved rect on the current screen: never wider than the display,
-/// and moved (not resized) so the whole strip is visible. A display of zero
-/// (the first frames before ImGui knows it) leaves the rect alone.
+/// and moved (not resized) so the whole strip is visible. An invalid display
+/// leaves the rect alone.
 pub(crate) fn clamp_rect(pos: [f32; 2], size: [f32; 2], display: [f32; 2]) -> ([f32; 2], [f32; 2]) {
-    if display[0] < 1.0 || display[1] < 1.0 {
+    if !display_valid(display) {
         return (pos, size);
     }
     let w = size[0].clamp(
@@ -446,7 +545,7 @@ fn draw_icon(dl: &DrawListMut, p: [f32; 2], s: f32, icon: Icon, c: [f32; 4]) {
 /// The window keeps its height: while the controls are hidden the plate
 /// shrinks to the equalizer row and the top band is see-through, so the
 /// strip never moves under the mouse.
-pub(crate) fn render_window(ui: &Ui, state: &mut AddonState, fade: f32) {
+pub(crate) fn render_window(ui: &Ui, state: &mut AddonState, fade: f32, leaving: bool) {
     theme::font_scale_reset(ui);
     persist_rect(ui, state);
     radio_tab::ensure_station_list(state);
@@ -461,16 +560,6 @@ pub(crate) fn render_window(ui: &Ui, state: &mut AddonState, fade: f32) {
     let end = [pos[0] + size[0], pos[1] + size[1]];
     let look = dj_look(&prefs);
 
-    // Hover: the strip's rect or Choya's, or a control still being dragged.
-    let now = theme::elapsed_ms();
-    let mouse = ui.io().mouse_pos;
-    let (cmin, cmax) = choya_rect(look, pos, size);
-    let inside = in_rect(mouse, pos, end)
-        || (prefs.show_choya && in_rect(mouse, cmin, cmax))
-        || (ui.is_any_item_active() && state.radio.mini_hover.showing());
-    state.radio.mini_hover = state.radio.mini_hover.update(inside, now);
-    let ha = state.radio.mini_hover.alpha(now);
-
     let ctl_h = theme::control_height(ui);
     let left = pos[0] + PAD;
     let right = end[0]
@@ -482,6 +571,23 @@ pub(crate) fn render_window(ui: &Ui, state: &mut AddonState, fade: f32) {
         };
     let row1 = pos[1] + PAD;
     let row2_top = row1 + ctl_h + 4.0;
+    let controls = controls_span(
+        [left, row1],
+        right,
+        ctl_h,
+        ui.clone_style().window_padding,
+        ui.io().display_size,
+    );
+
+    // Hover: the strip, Choya or the controls, or a control still being
+    // dragged. From the mouse position, not ImGui's hover, so it works while
+    // an anchored strip lets the mouse through.
+    let now = theme::elapsed_ms();
+    let choya = prefs.show_choya.then(|| choya_rect(look, pos, size));
+    let inside = hovering(ui.io().mouse_pos, (pos, end), choya, controls)
+        || (ui.is_any_item_active() && state.radio.mini_hover.showing());
+    state.radio.mini_hover = state.radio.mini_hover.update(inside, now);
+    let ha = state.radio.mini_hover.alpha(now);
 
     // The plate list is dropped before the controls row and the popup,
     // which acquire their own (one live window draw list at a time).
@@ -526,30 +632,123 @@ pub(crate) fn render_window(ui: &Ui, state: &mut AddonState, fade: f32) {
             let st: &AddonState = state;
             art::with_alpha(ca, || art::draw_dj_choya(ui, &dl, st, look, bass, pos, end));
         }
+
+        // Padlock just above the plate's left corner, in the controls band:
+        // it fades out under the controls and back once they are gone.
+        let lock_a =
+            ca * (1.0 - ha) * padlock_alpha(prefs.anchored, state.radio.mini_anchor_flash, now);
+        if lock_a > 0.0 {
+            let s = 10.0;
+            draw_padlock(
+                &dl,
+                [left, row2_top - PAD - s - 2.0],
+                s,
+                theme::with_alpha(pal.gold, pal.gold[3] * lock_a),
+            );
+        }
     }
 
-    if ha > 0.0 {
-        controls_row(ui, state, [left, row1], right, ca * ha);
+    if controls_drawn(ha) && controls_window(ui, state, controls, ca * ha, leaving) {
+        // Opened here, in the strip's ID scope, so the popup outlives the
+        // controls window when the mouse moves off the strip into it.
+        ui.open_popup(GEAR_POPUP);
     }
+    // The popup is its own window, so it stays usable while anchored: the
+    // player can unanchor right here, as in the tab's popup.
     ui.popup(GEAR_POPUP, || render_settings_body(ui, state));
 }
 
-/// Save the rect once the mouse is released after a move or resize; follow
-/// the width live only while the mouse is down (a corner drag), so the
-/// clamped saved width is what every other frame uses.
-fn persist_rect(ui: &Ui, state: &mut AddonState) {
-    let p = ui.window_pos();
-    let sz = ui.window_size();
-    if ui.is_mouse_down(nexus::imgui::MouseButton::Left) {
-        state.radio.mini_live_w = Some(sz[0]);
-        return;
+/// The controls window exists only while the hover fade is above zero: a
+/// faded-out row costs nothing.
+pub(crate) fn controls_drawn(hover_alpha: f32) -> bool {
+    hover_alpha > 0.0
+}
+
+/// The controls row in its own window over the strip's top band, begun
+/// inside the strip's (Dear ImGui allows a nested `Begin` of another
+/// top-level window), so it shares the strip's STATE lock and unwind guard.
+/// It takes the mouse only over its own rect. True when the gear was clicked.
+fn controls_window(ui: &Ui, state: &mut AddonState, span: Span, ca: f32, leaving: bool) -> bool {
+    use nexus::imgui::{Condition, MouseCursor, Window};
+    let (_, mut flags) = window_flags(state.config.radio.mini_radio.anchored);
+    if leaving {
+        flags |= WindowFlags::NO_INPUTS;
     }
-    state.radio.mini_live_w = None;
-    let mini = &mut state.config.radio.mini_radio;
-    let moved = |a: Option<[f32; 2]>, b: [f32; 2]| {
-        a.is_none_or(|a| (a[0] - b[0]).abs() > 0.5 || (a[1] - b[1]).abs() > 0.5)
-    };
-    if moved(mini.pos, p) || moved(mini.size, sz) {
+    let pad = ui.clone_style().window_padding;
+    let (min, max) = span;
+    Window::new("##gw2bo_mini_radio_controls")
+        .flags(flags)
+        .position(min, Condition::Always)
+        .size([max[0] - min[0], max[1] - min[1]], Condition::Always)
+        .build(ui, || {
+            let gear = controls_row(
+                ui,
+                state,
+                [min[0] + pad[0], min[1] + pad[1]],
+                max[0] - pad[0],
+                ca,
+            );
+            if ui.is_window_hovered() {
+                ui.set_mouse_cursor(Some(MouseCursor::Arrow));
+            }
+            gear
+        })
+        .unwrap_or(false)
+}
+
+/// A small drawn padlock (no font glyph): shackle outline over a body.
+fn draw_padlock(dl: &DrawListMut, p: [f32; 2], s: f32, c: [f32; 4]) {
+    dl.add_rect(
+        [p[0] + s * 0.22, p[1]],
+        [p[0] + s * 0.78, p[1] + s * 0.7],
+        c,
+    )
+    .rounding(s * 0.28)
+    .thickness(1.5)
+    .build();
+    dl.add_rect([p[0], p[1] + s * 0.42], [p[0] + s, p[1] + s], c)
+        .filled(true)
+        .rounding(1.5)
+        .build();
+}
+
+/// A strip rect: `(pos, size)`.
+pub(crate) type Rect = ([f32; 2], [f32; 2]);
+
+/// One frame of the drag tracker: `(press to keep, rect to save)`.
+///
+/// Only the player's own drag is ever saved: a press that started on the
+/// strip (`pressed_here`) remembers the rect, and the release saves the rect
+/// only if it differs from that. Programmatic placement (first frames,
+/// display changes, clamping, reset) never has a press, so never saves.
+pub(crate) fn drag_step(
+    press: Option<Rect>,
+    down: bool,
+    pressed_here: bool,
+    rect: Rect,
+) -> (Option<Rect>, Option<Rect>) {
+    if down {
+        return (press.or(pressed_here.then_some(rect)), None);
+    }
+    let moved = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() > 0.5 || (a[1] - b[1]).abs() > 0.5;
+    let save = press.filter(|p| moved(p.0, rect.0) || moved(p.1, rect.1));
+    (None, save.map(|_| rect))
+}
+
+/// Save the rect when the player releases a move or resize of the strip;
+/// follow the width live only while the mouse is down (a corner drag), so
+/// the clamped saved width is what every other frame uses.
+fn persist_rect(ui: &Ui, state: &mut AddonState) {
+    use nexus::imgui::{MouseButton, WindowHoveredFlags};
+    let rect = (ui.window_pos(), ui.window_size());
+    let down = ui.is_mouse_down(MouseButton::Left);
+    let pressed_here = ui.is_mouse_clicked(MouseButton::Left)
+        && ui.is_window_hovered_with_flags(WindowHoveredFlags::ALLOW_WHEN_BLOCKED_BY_ACTIVE_ITEM);
+    state.radio.mini_live_w = down.then_some(rect.1[0]);
+    let (press, save) = drag_step(state.radio.mini_press, down, pressed_here, rect);
+    state.radio.mini_press = press;
+    if let Some((p, sz)) = save {
+        let mini = &mut state.config.radio.mini_radio;
         mini.pos = Some(p);
         mini.size = Some(sz);
         crate::ui::save_config_detached(state);
@@ -683,7 +882,8 @@ fn draw_title_row(
     );
 }
 
-fn controls_row(ui: &Ui, state: &mut AddonState, at: [f32; 2], right: f32, ca: f32) {
+/// The row itself; true when the gear was clicked (the caller opens the popup).
+fn controls_row(ui: &Ui, state: &mut AddonState, at: [f32; 2], right: f32, ca: f32) -> bool {
     let s = theme::control_height(ui);
     let gap = 4.0;
     ui.set_cursor_screen_pos(at);
@@ -848,16 +1048,14 @@ fn controls_row(ui: &Ui, state: &mut AddonState, at: [f32; 2], right: f32, ca: f
         crate::ui::save_config_detached(state);
     }
     ui.same_line_with_spacing(0.0, gap);
-    if icon_button(
+    let gear = icon_button(
         ui,
         "##mini_gear",
         Icon::Gear,
         true,
         &t("radio.mini.settings"),
         ca,
-    ) {
-        ui.open_popup(GEAR_POPUP);
-    }
+    );
     ui.same_line_with_spacing(0.0, gap);
     if icon_button(
         ui,
@@ -870,6 +1068,7 @@ fn controls_row(ui: &Ui, state: &mut AddonState, at: [f32; 2], right: f32, ca: f
         state.config.radio.mini_radio.enabled = false;
         crate::ui::save_config_detached(state);
     }
+    gear
 }
 
 fn cycle_tip(state: &AddonState) -> String {
@@ -903,14 +1102,22 @@ pub(crate) fn render_tab_toggle(ui: &Ui, state: &mut AddonState, label: &str) {
     ) {
         ui.open_popup(TAB_GEAR_POPUP);
     }
+    // Never gated on the anchor: this popup is the way back from it.
     ui.popup(TAB_GEAR_POPUP, || render_settings_body(ui, state));
 }
 
+/// Popup width at font size 13; rows may widen it further.
+const SETTINGS_MIN_W: f32 = 460.0;
+
 /// Everything the player can set on the strip: cycle list, opacity, which
-/// parts show, colours, bar style, resets. Shared by both gear popups.
+/// parts show, colours, bar style, then the anchor and the resets. The one
+/// body both gear popups (the strip's and the Choya Tunes tab's) show.
 fn render_settings_body(ui: &Ui, state: &mut AddonState) {
     let mut changed = false;
+    let s = (ui.current_font_size() / 13.0).max(0.75);
+    let slider_w = 240.0 * s;
     theme::header(ui, &t("radio.mini.settings"));
+    ui.dummy([SETTINGS_MIN_W * s, 0.0]);
 
     let m = &mut state.config.radio.mini_radio;
     changed |= checkbox_tip(
@@ -920,7 +1127,7 @@ fn render_settings_body(ui: &Ui, state: &mut AddonState) {
         &mut m.cycle_favourites,
     );
 
-    ui.set_next_item_width(200.0);
+    ui.set_next_item_width(slider_w);
     changed |= Slider::new(
         format!("{}##mini_bg_a", t("radio.mini.bg_opacity")),
         0.0,
@@ -929,7 +1136,7 @@ fn render_settings_body(ui: &Ui, state: &mut AddonState) {
     .display_format("%.2f")
     .build(ui, &mut m.bg_opacity);
     hover_tip(ui, "radio.mini.bg_opacity_tip");
-    ui.set_next_item_width(200.0);
+    ui.set_next_item_width(slider_w);
     changed |= Slider::new(
         format!("{}##mini_content_a", t("radio.mini.content_opacity")),
         0.2,
@@ -946,7 +1153,7 @@ fn render_settings_body(ui: &Ui, state: &mut AddonState) {
     ui.same_line();
     changed |= checkbox_tip(ui, "radio.mini.show_choya", "", &mut m.show_choya);
     changed |= checkbox_tip(ui, "radio.mini.show_quips", "", &mut m.show_quips);
-    ui.set_next_item_width(200.0);
+    ui.set_next_item_width(slider_w);
     changed |= Slider::new(
         format!("{}##mini_choya_scale", t("radio.mini.choya_scale")),
         *MINI_RADIO_CHOYA_SCALE.start(),
@@ -990,7 +1197,7 @@ fn render_settings_body(ui: &Ui, state: &mut AddonState) {
         &mut m.bar_gap,
         MINI_RADIO_GAP,
     );
-    ui.set_next_item_width(200.0);
+    ui.set_next_item_width(slider_w);
     changed |= Slider::new(
         format!("{}##mini_bar_h", t("radio.mini.bar_height")),
         0.2,
@@ -1001,6 +1208,12 @@ fn render_settings_body(ui: &Ui, state: &mut AddonState) {
     hover_tip(ui, "radio.mini.bar_height_tip");
 
     ui.separator();
+    let mut on = m.anchored;
+    if ui.checkbox(format!("{}##mini_anchor", t("radio.mini.anchor")), &mut on) {
+        set_anchored(state, on);
+    }
+    hover_tip(ui, "radio.mini.anchor_tip");
+    let m = &mut state.config.radio.mini_radio;
     if theme::gold_button(
         ui,
         format!("{}##mini_reset_look", t("radio.mini.reset_appearance")),
@@ -1078,7 +1291,10 @@ fn stepper(
     range: std::ops::RangeInclusive<u8>,
 ) -> bool {
     let mut v = i32::from(*value);
-    ui.set_next_item_width(110.0);
+    // Room for three digits plus the -/+ buttons at any font scale.
+    let st = ui.clone_style();
+    let digits = ui.calc_text_size("000")[0] + st.frame_padding[0] * 2.0 + 8.0;
+    ui.set_next_item_width(digits + 2.0 * (ui.frame_height() + st.item_inner_spacing[0]));
     let edited = ui
         .input_int(format!("{}##{label_key}", t(label_key)), &mut v)
         .step(1)
@@ -1093,6 +1309,162 @@ fn stepper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anchor_pins_the_strip_and_passes_the_mouse_through_but_not_the_controls() {
+        let pinned = WindowFlags::NO_MOVE | WindowFlags::NO_RESIZE;
+        let (strip, controls) = window_flags(true);
+        assert!(strip.contains(pinned | WindowFlags::NO_MOUSE_INPUTS | WindowFlags::NO_NAV));
+        let (loose, loose_controls) = window_flags(false);
+        assert!(!loose.intersects(pinned | WindowFlags::NO_MOUSE_INPUTS));
+        // The controls take the mouse, never move or resize, draw no
+        // background of their own, and are the same in both modes.
+        assert_eq!(controls, loose_controls);
+        assert!(controls.contains(pinned | WindowFlags::NO_BACKGROUND));
+        assert!(!controls.intersects(WindowFlags::NO_MOUSE_INPUTS));
+        // The strip never rises over its controls on a click.
+        for s in [strip, loose] {
+            assert!(s.contains(WindowFlags::NO_BRING_TO_FRONT_ON_FOCUS));
+            assert!(s.contains(WindowFlags::NO_FOCUS_ON_APPEARING));
+        }
+    }
+
+    #[test]
+    fn hover_is_the_strip_choya_or_the_controls() {
+        let strip: Span = ([100.0, 500.0], [800.0, 600.0]);
+        let choya: Span = ([700.0, 420.0], [800.0, 520.0]);
+        let controls: Span = ([100.0, 490.0], [650.0, 530.0]);
+        let h = |p: [f32; 2], c: Option<Span>| hovering(p, strip, c, controls);
+        assert!(h([400.0, 550.0], None), "on the plate");
+        assert!(h([750.0, 450.0], Some(choya)), "on Choya above the strip");
+        assert!(!h([750.0, 450.0], None), "Choya hidden: nothing there");
+        assert!(h([300.0, 495.0], None), "controls clamped above the top");
+        assert!(!h([50.0, 450.0], Some(choya)));
+        assert!(!h([800.0, 600.0], Some(choya)), "max edge is outside");
+    }
+
+    #[test]
+    fn controls_sit_on_the_band_and_stay_on_screen() {
+        let pad = [6.0, 4.0];
+        let (min, max) = controls_span([106.0, 506.0], 600.0, 30.0, pad, [2560.0, 1440.0]);
+        assert_eq!((min, max), ([100.0, 502.0], [606.0, 540.0]));
+        // A strip flush with the top-left corner: the padding stays on screen.
+        let (min, max) = controls_span([2.0, 1.0], 500.0, 30.0, pad, [2560.0, 1440.0]);
+        assert_eq!(min, [0.0, 0.0]);
+        assert_eq!(max, [510.0, 38.0], "size kept, moved not shrunk");
+        // Unknown display: left alone.
+        let (min, _) = controls_span([2.0, 1.0], 500.0, 30.0, pad, [1.0, 1.0]);
+        assert_eq!(min, [-4.0, -3.0]);
+    }
+
+    #[test]
+    fn controls_window_exists_only_while_the_hover_fade_shows() {
+        let t0 = 1_000;
+        let h = HoverFade::default();
+        assert!(!controls_drawn(h.alpha(t0)), "never hovered: no window");
+        let h = h.update(true, t0);
+        assert!(!controls_drawn(h.alpha(t0)));
+        assert!(controls_drawn(h.alpha(t0 + 1)));
+        let t1 = t0 + 1_000;
+        let h = h.update(true, t1).update(false, t1 + 1);
+        let h = h.update(false, t1 + HOVER_GRACE_MS);
+        assert!(controls_drawn(h.alpha(t1 + HOVER_GRACE_MS + 249)));
+        assert!(
+            !controls_drawn(h.alpha(t1 + HOVER_GRACE_MS + 250)),
+            "gone after fade-out"
+        );
+    }
+
+    #[test]
+    fn padlock_flashes_then_rests_faint_while_anchored() {
+        assert_eq!(padlock_alpha(false, None, 5_000), 0.0);
+        assert_eq!(padlock_alpha(true, None, 5_000), ANCHOR_FAINT);
+        assert_eq!(padlock_alpha(true, Some(1_000), 1_000), 1.0);
+        let mid = padlock_alpha(true, Some(1_000), 1_600);
+        assert!(mid > ANCHOR_FAINT && mid < 1.0);
+        assert_eq!(padlock_alpha(true, Some(1_000), 2_500), ANCHOR_FAINT);
+        // Unanchoring fades the padlock out to nothing.
+        assert!(padlock_alpha(false, Some(1_000), 1_300) > 0.0);
+        assert_eq!(padlock_alpha(false, Some(1_000), 2_500), 0.0);
+    }
+
+    /// Both gear popups show the one settings body, and the anchor lives
+    /// only there (with the resets), so the tab's popup is always the way
+    /// back from an anchor. The keybind is the other setter, in state.rs.
+    #[test]
+    fn both_popups_show_one_body_with_the_anchor() {
+        let src = include_str!("mini_radio.rs");
+        let src = src.split("#[cfg(test)]").next().unwrap();
+        assert_eq!(
+            src.matches("|| render_settings_body(ui, state))").count(),
+            2
+        );
+        assert!(src.contains("ui.popup(GEAR_POPUP, || render_settings_body"));
+        assert!(src.contains("ui.popup(TAB_GEAR_POPUP, || render_settings_body"));
+        let body = &src[src.find("fn render_settings_body").unwrap()..];
+        let body = &body[..body.find("\nfn ").unwrap()];
+        let anchor = body
+            .find("##mini_anchor\"")
+            .expect("anchor row in the body");
+        assert!(anchor < body.find("##mini_reset_look").unwrap());
+        assert_eq!(src.matches("##mini_anchor").count(), 1, "one anchor row");
+        assert!(
+            !src.contains("close_current_popup"),
+            "anchoring keeps settings open"
+        );
+        assert_eq!(src.matches("set_anchored(state, on)").count(), 1);
+        assert_eq!(
+            src.matches("anchored = ").count(),
+            1,
+            "only the setter writes it"
+        );
+        assert!(include_str!("../state.rs").contains("mini_radio::set_anchored(state, on)"));
+    }
+
+    const SAVED: Rect = ([900.0, 1100.0], [700.0, 127.27273]);
+
+    #[test]
+    fn a_drag_of_the_strip_saves_on_release() {
+        let moved = ([950.0, 1000.0], SAVED.1);
+        let (press, save) = drag_step(None, true, true, SAVED);
+        assert_eq!((press, save), (Some(SAVED), None));
+        let (press, save) = drag_step(press, true, false, moved);
+        assert_eq!((press, save), (Some(SAVED), None), "nothing saved mid-drag");
+        assert_eq!(drag_step(press, false, false, moved), (None, Some(moved)));
+        // A click that did not move it (a button on the strip) saves nothing.
+        assert_eq!(drag_step(Some(SAVED), false, false, SAVED), (None, None));
+    }
+
+    #[test]
+    fn a_clamp_adjustment_is_never_saved() {
+        let mut prefs = MiniRadioPrefs {
+            pos: Some(SAVED.0),
+            size: Some(SAVED.1),
+            ..Default::default()
+        };
+        let before = prefs.clone();
+        let clamped = placement(&prefs, [1280.0, 720.0]);
+        assert_ne!(clamped, SAVED, "the small screen moves it");
+        // Mouse up, or held on the game (a camera drag), never on the strip.
+        for down in [false, true, false] {
+            let (_, save) = drag_step(None, down, false, clamped);
+            if let Some((p, s)) = save {
+                prefs.pos = Some(p);
+                prefs.size = Some(s);
+            }
+        }
+        assert_eq!(prefs, before);
+        // Back on the big screen the untouched saved rect comes back whole.
+        assert_eq!(placement(&prefs, [2560.0, 1440.0]).0, SAVED.0);
+    }
+
+    #[test]
+    fn an_unknown_display_places_nothing() {
+        for d in [[0.0, 0.0], [1.0, 1.0], [f32::NAN, 1440.0], [2560.0, 0.0]] {
+            assert!(!display_valid(d), "{d:?}");
+        }
+        assert!(display_valid([2560.0, 1440.0]));
+    }
 
     fn keys(n: &[&str]) -> Vec<String> {
         n.iter().map(|s| s.to_string()).collect()
@@ -1207,12 +1579,37 @@ mod tests {
     }
 
     #[test]
-    fn default_spot_is_bottom_centre_above_the_skill_bar() {
+    fn default_spot_scales_with_the_screen() {
+        // 5120x1440: the owner's own reference resolution.
+        let (pos, size) = default_rect([5120.0, 1440.0]);
+        assert_eq!(size[0], 952.0);
+        assert_eq!(size[1], height_for(952.0));
+        assert_eq!(pos[0], 3108.0);
+        assert_eq!(pos[1], 1440.0 - 19.0 - size[1]);
+
+        // 2560x1440: half the width, half the reference strip.
+        let (pos, size) = default_rect([2560.0, 1440.0]);
+        assert_eq!(size[0], 476.0);
+        assert_eq!(pos[0], 1554.0);
+        assert_eq!(pos[1], 1440.0 - 19.0 - size[1]);
+
+        // 4096x1440: an in-between wide display.
+        let (pos, size) = default_rect([4096.0, 1440.0]);
+        assert_eq!(size[0], (0.186_f32 * 4096.0).round());
+        assert_eq!(pos[0], 0.70 * 4096.0 - size[0] * 0.5);
+        assert_eq!(pos[1], 1440.0 - 19.0 - size[1]);
+
+        // 1920x1080: Full HD, clamped up to MIN_W.
         let (pos, size) = default_rect([1920.0, 1080.0]);
-        assert!(((pos[0] + size[0] * 0.5) - 960.0).abs() < 0.5);
-        assert!(pos[1] + size[1] <= 1080.0 - SKILL_BAR_CLEARANCE + 0.5);
+        assert_eq!(size[0], MIN_W);
+        assert_eq!(pos[0], 1134.0);
+        assert_eq!(pos[1], 1080.0 - 14.0 - size[1]);
         assert!(pos[1] > 1080.0 * 0.6, "bottom edge, not the top");
-        assert_eq!(size[1], height_for(size[0]));
+
+        // 1280-wide display: still clamped to MIN_W, never narrower.
+        let (_, size) = default_rect([1280.0, 720.0]);
+        assert_eq!(size[0], MIN_W);
+
         let (pos, _) = placement(&MiniRadioPrefs::default(), [1920.0, 1080.0]);
         assert_eq!(pos, default_rect([1920.0, 1080.0]).0);
     }
@@ -1691,6 +2088,15 @@ mod draw_list_scan {
         ] {
             all.extend(violations(file, src));
         }
+        // The controls window's body is a scanned fn of its own, and its
+        // build closure is where the controls row draws.
+        let code = production(include_str!("mini_radio.rs"));
+        let body = fns(&code)
+            .into_iter()
+            .find(|f| f.name == "controls_window")
+            .map(|f| code[f.body.0..=f.body.1].to_string())
+            .expect("controls_window is scanned");
+        assert!(body.contains(".build(ui,") && body.contains("controls_row("));
         assert!(
             all.is_empty(),
             "nested window draw lists:\n{}",

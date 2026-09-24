@@ -113,6 +113,9 @@ pub struct RadioUiState {
     /// Mini radio: width this session, followed live while the corner is
     /// dragged (the saved width only updates on release).
     pub mini_live_w: Option<f32>,
+    /// Mini radio: the rect when the player pressed on the strip, while the
+    /// button is held; the release saves only if the rect moved from it.
+    pub mini_press: Option<crate::ui::mini_radio::Rect>,
     /// Mini radio: display size seen last frame; a change re-applies the
     /// clamped placement.
     pub mini_display: [f32; 2],
@@ -120,4 +123,7 @@ pub struct RadioUiState {
     pub mini_fade: crate::ui::mini_radio::Fade,
     /// Mini radio: the hover-only controls row's fade.
     pub mini_hover: crate::ui::mini_radio::HoverFade,
+    /// Mini radio: when the anchor was last flipped (`theme::elapsed_ms`),
+    /// for the padlock's confirmation flash.
+    pub mini_anchor_flash: Option<u64>,
 }

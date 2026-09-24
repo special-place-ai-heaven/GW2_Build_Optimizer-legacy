@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "Favorites only: Previous/Next cycle through your favorites.",
   "radio.mini.open_tab": "Open Choya Tunes",
   "radio.mini.hide": "Hide the mini radio. Turn it back on in Choya Tunes or with its keybind.",
+  "radio.mini.anchor": "Anchor in place",
+  "radio.mini.anchor_tip": "Anchored strips cannot be moved or resized, and clicks on them pass through to the game. The controls still appear on mouse-over. Unanchor here (the strip's gear or the gear next to Mini radio in Choya Tunes) or with the Nexus keybind (Toggle mini radio anchor).",
   "radio.mini.bg_opacity": "Background opacity",
   "radio.mini.bg_opacity_tip": "How solid the strip's background is: 0.00 is invisible, 1.00 is fully opaque.",
   "radio.mini.content_opacity": "Content opacity",

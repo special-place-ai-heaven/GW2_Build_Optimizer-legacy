@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "즐겨찾기만: 이전/다음으로 즐겨찾기를 넘깁니다.",
   "radio.mini.open_tab": "Choya 라디오 열기",
   "radio.mini.hide": "미니 라디오를 숨깁니다. Choya 라디오나 단축키로 다시 켤 수 있습니다.",
+  "radio.mini.anchor": "제자리에 고정",
+  "radio.mini.anchor_tip": "고정된 스트립은 이동하거나 크기를 바꿀 수 없고 클릭은 게임으로 전달됩니다. 마우스를 올리면 조작 버튼은 계속 나타납니다. 해제는 여기(스트립의 톱니바퀴나 Choya 라디오의 미니 라디오 옆 톱니바퀴)나 Nexus 단축키(미니 라디오 고정)로 할 수 있습니다.",
   "radio.mini.bg_opacity": "배경 불투명도",
   "radio.mini.bg_opacity_tip": "막대 배경의 진하기: 0.00은 투명, 1.00은 완전히 불투명.",
   "radio.mini.content_opacity": "내용 불투명도",

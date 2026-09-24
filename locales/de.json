@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "Nur Favoriten: Zurück/Weiter wechseln durch deine Favoriten.",
   "radio.mini.open_tab": "Choya-Radio öffnen",
   "radio.mini.hide": "Mini-Radio ausblenden. Im Choya-Radio oder mit seiner Taste wieder einschalten.",
+  "radio.mini.anchor": "An Ort und Stelle verankern",
+  "radio.mini.anchor_tip": "Verankerte Leisten lassen sich nicht verschieben oder skalieren, Klicks darauf gehen ins Spiel. Die Steuerung erscheint weiter beim Überfahren mit der Maus. Lösen hier (Zahnrad der Leiste oder Zahnrad neben Mini-Radio im Choya-Radio) oder mit der Nexus-Taste (Mini-Radio verankern).",
   "radio.mini.bg_opacity": "Hintergrund-Deckkraft",
   "radio.mini.bg_opacity_tip": "Wie deckend der Hintergrund der Leiste ist: 0.00 ist unsichtbar, 1.00 voll deckend.",
   "radio.mini.content_opacity": "Inhalts-Deckkraft",

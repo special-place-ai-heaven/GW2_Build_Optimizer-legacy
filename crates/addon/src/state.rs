@@ -1155,6 +1155,17 @@ pub fn toggle_mini_radio() {
     }
 }
 
+/// Keybind: anchor or unanchor the mini radio, through the same setter as
+/// the strip's popup and the Choya Tunes tab (its save is detached).
+pub fn toggle_mini_radio_anchor() {
+    let mut guard = lock_state();
+    let Some(state) = guard.as_mut() else {
+        return;
+    };
+    let on = !state.config.radio.mini_radio.anchored;
+    crate::ui::mini_radio::set_anchored(state, on);
+}
+
 pub fn persist_window() {
     let snapshot = {
         let mut guard = lock_state();
@@ -1605,6 +1616,27 @@ mod tests {
         let dir = config_in_tempdir(&config, "window_hidden");
         init(dir);
         assert_eq!(with_state(|s| s.window_visible), Some(false));
+        reset_state();
+    }
+
+    #[test]
+    fn anchor_keybind_toggles_the_flag() {
+        let _serial = state_test_guard();
+        reset_state();
+        let dir = config_in_tempdir(&AppConfig::default(), "mini_anchor");
+        init(dir);
+        let anchored = || with_state(|s| s.config.radio.mini_radio.anchored);
+        assert_eq!(anchored(), Some(true));
+        toggle_mini_radio_anchor();
+        assert_eq!(anchored(), Some(false));
+        assert!(with_state(|s| s.radio.mini_anchor_flash.is_some()).unwrap());
+        toggle_mini_radio_anchor();
+        assert_eq!(anchored(), Some(true));
+        // The gear popup's "Anchor in place" checkbox (both popups) unanchors
+        // through the same setter.
+        toggle_mini_radio_anchor();
+        with_state(|s| crate::ui::mini_radio::set_anchored(s, false));
+        assert_eq!(anchored(), Some(false));
         reset_state();
     }
 

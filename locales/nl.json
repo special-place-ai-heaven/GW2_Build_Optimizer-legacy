@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "Alleen favorieten: Vorige/Volgende lopen door je favorieten.",
   "radio.mini.open_tab": "Choya-radio openen",
   "radio.mini.hide": "Miniradio verbergen. Zet hem weer aan in Choya-radio of met zijn sneltoets.",
+  "radio.mini.anchor": "Op zijn plek vastzetten",
+  "radio.mini.anchor_tip": "Vastgezette balken kunnen niet verplaatst of vergroot worden en klikken erop gaan naar het spel. De knoppen verschijnen nog steeds bij muisaanwijzing. Maak hem hier los (het tandwiel van de balk of dat naast Miniradio in Choya-radio) of met de Nexus-sneltoets (Miniradio vastzetten).",
   "radio.mini.bg_opacity": "Achtergronddekking",
   "radio.mini.bg_opacity_tip": "Hoe dekkend de achtergrond van de balk is: 0.00 is onzichtbaar, 1.00 volledig dekkend.",
   "radio.mini.content_opacity": "Inhoudsdekking",

@@ -2,6 +2,13 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## 1.14.47
+
+- Mini radio anchor: pin the strip in place so it can no longer be moved or resized and clicks and drags over its plate, equalizer, title and Choya go to the game ("Anchor in place" in the mini radio settings, or the unbound Nexus keybind `GW2_BUILD_OPT_MINI_RADIO_ANCHOR`). The controls still fade in on mouse-over, in their own small window over the strip's top row, so station, play, volume and the gear keep working; only that row takes the mouse. A faint padlock marks an anchored strip (hidden under the controls) and flashes on each flip; Choya, quips, equalizer and title keep animating; unanchor from the strip's gear, the settings gear next to Mini radio in Choya Tunes, or the keybind.
+- Mini radio settings: the strip's gear and the Choya Tunes gear open the same, wider popup (460 px at font scale 1). The Bars and Gap number fields fit three digits at any font scale. "Anchor in place" sits in the last group above Reset appearance and Reset position; anchoring no longer closes the popup, so it can be undone right there. The separate Anchor checkbox next to Mini radio is gone.
+- Mini radio position and size survive a game restart. The strip was clamped against whatever display the first frames reported (a 1x1 display clamps it to the top-left corner at minimum width), and any frame whose rect differed from the saved one, clamping included, wrote that rect back to config.json, so the bad spot became the saved one. Now the strip waits for a real display, then snaps to the saved rect, and only a drag or resize the player started on the strip is saved (on release). Display changes, clamping and reset never write.
+- Mini radio defaults follow the reference setup: on and anchored, centred at 70% of the screen width near the bottom, about a fifth of the screen wide, transparent background, 20 bars, warm bar and title colours, Choya 1.05x, favourites cycling.
+
 ## 1.14.46
 
 Choya reads the message before plating; a mini radio strip for when the overlay is closed. SCHEMA CHANGE = N.

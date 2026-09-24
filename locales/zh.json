@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "仅收藏：上一个/下一个在你的收藏中切换。",
   "radio.mini.open_tab": "打开 Choya电台",
   "radio.mini.hide": "隐藏迷你电台。可在 Choya电台 中或用快捷键重新开启。",
+  "radio.mini.anchor": "固定在原位",
+  "radio.mini.anchor_tip": "固定的电台条无法移动或调整大小，点击会传给游戏。鼠标悬停时仍会显示控制按钮。可在此处（电台条的齿轮或 Choya电台中迷你电台旁的齿轮）或用 Nexus 快捷键（锁定迷你电台）解除锁定。",
   "radio.mini.bg_opacity": "背景不透明度",
   "radio.mini.bg_opacity_tip": "电台栏背景的浓度：0.00 为完全透明，1.00 为完全不透明。",
   "radio.mini.content_opacity": "内容不透明度",

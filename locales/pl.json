@@ -74,6 +74,8 @@
   "radio.mini.fav_mark_tip": "Tylko ulubione: Poprzednia/Następna przechodzą po twoich ulubionych.",
   "radio.mini.open_tab": "Otwórz Radio Choya",
   "radio.mini.hide": "Ukryj miniradio. Włączysz je z powrotem w Radiu Choya albo skrótem.",
+  "radio.mini.anchor": "Przypnij w miejscu",
+  "radio.mini.anchor_tip": "Przypiętego paska nie da się przesunąć ani zmienić rozmiaru, a kliknięcia trafiają do gry. Przyciski nadal pojawiają się po najechaniu myszą. Odepnij go tutaj (zębatka paska lub zębatka obok Miniradio w Radiu Choya) albo skrótem Nexus (Przypnij miniradio).",
   "radio.mini.bg_opacity": "Krycie tła",
   "radio.mini.bg_opacity_tip": "Jak mocno kryje tło paska: 0.00 to niewidoczne, 1.00 w pełni kryjące.",
   "radio.mini.content_opacity": "Krycie zawartości",

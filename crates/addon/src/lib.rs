@@ -215,6 +215,24 @@ fn on_load() {
         )
         .revert_on_unload();
 
+        register_keybind_with_string(
+            "GW2_BUILD_OPT_MINI_RADIO_ANCHOR",
+            keybind_handler!(|_id, is_release| {
+                if !is_release {
+                    // Same ABI-boundary guard as the toggles above.
+                    if std::panic::catch_unwind(state::toggle_mini_radio_anchor).is_err() {
+                        log(
+                            LogLevel::Warning,
+                            "GW2 Build Optimizer",
+                            "Mini radio anchor keybind panicked; its anchor may be stale.",
+                        );
+                    }
+                }
+            }),
+            "", // unbound by default; the user assigns one in Nexus
+        )
+        .revert_on_unload();
+
         // The `Render` hook for `ui::render` is registered on load. Nexus locks
         // its render registry for the entire frame and iterates it on every
         // PreRender/Render/PostRender pass; a `Register` call from inside a
