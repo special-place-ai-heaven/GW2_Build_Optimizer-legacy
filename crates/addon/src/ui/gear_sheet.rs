@@ -639,7 +639,7 @@ fn paint_slot_icon(
 ) {
     icons::paint_at(ui, url, p, size, tint);
     if locked {
-        ui.get_window_draw_list()
+        crate::ui::window_draw_list(ui)
             .add_rect(
                 p,
                 [p[0] + size, p[1] + size],
@@ -728,7 +728,7 @@ fn row(
     // unmarked slot honestly means "same as what you are wearing".
     if tint_changed(tint) {
         theme::paint_changed_rect(
-            &ui.get_window_draw_list(),
+            &crate::ui::window_draw_list(ui),
             p,
             [p[0] + ICON, p[1] + ICON],
             theme::ICON_ROUNDING,
@@ -847,7 +847,7 @@ fn weapon_row(
     // unmarked slot honestly means "same as what you are wearing".
     if tint_changed(tint) {
         theme::paint_changed_rect(
-            &ui.get_window_draw_list(),
+            &crate::ui::window_draw_list(ui),
             p,
             [p[0] + ICON, p[1] + ICON],
             theme::ICON_ROUNDING,

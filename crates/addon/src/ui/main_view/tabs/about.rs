@@ -448,7 +448,7 @@ fn paint_row_plate(ui: &Ui, height: f32, header: bool) {
     } else {
         theme::with_alpha(theme::pal().plate, 0.42)
     };
-    ui.get_window_draw_list()
+    crate::ui::window_draw_list(ui)
         .add_rect(p, [p[0] + w, p[1] + height], fill)
         .filled(true)
         .rounding(5.0)
@@ -712,7 +712,7 @@ fn render_messages(ui: &Ui, state: &mut AddonState) {
 
                 // Message: glyph, title, category path beneath.
                 {
-                    let dl = ui.get_window_draw_list();
+                    let dl = crate::ui::window_draw_list(ui);
                     glyphs::draw_glyph(
                         ui,
                         &dl,

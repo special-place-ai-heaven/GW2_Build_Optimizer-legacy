@@ -75,7 +75,7 @@ pub fn draw(ui: &Ui, url: Option<&str>, size: f32, tint: [f32; 4]) -> bool {
 }
 
 pub fn paint_at(ui: &Ui, url: Option<&str>, p: [f32; 2], size: f32, tint: [f32; 4]) {
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     paint_on(&dl, url, p, [p[0] + size, p[1] + size], tint);
 }
 
@@ -144,7 +144,7 @@ pub fn profession_icon_url<'a>(db: &'a GameDb, profession: &str) -> Option<&'a s
 }
 
 pub fn paint_avatar(ui: &Ui, url: Option<&str>, p: [f32; 2], size: f32, letter: char) {
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     let p_max = [p[0] + size, p[1] + size];
     let r = size * 0.5;
     if let Some(tid) = url.and_then(ensure_texture) {

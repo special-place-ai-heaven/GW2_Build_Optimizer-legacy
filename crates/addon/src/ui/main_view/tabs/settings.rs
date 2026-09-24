@@ -1146,7 +1146,7 @@ fn theme_base_mut(c: &mut CustomTheme, i: usize) -> &mut [f32; 3] {
 fn draw_slot_marker(ui: &Ui, swatch: [f32; 2], sw: f32) {
     let p = theme::pal();
     let (x, y) = (swatch[0], swatch[1]);
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     dl.add_rect([x - 3.0, y - 3.0], [x + sw + 3.0, y + sw + 3.0], p.gold)
         .thickness(2.0)
         .rounding(4.0)
@@ -1848,7 +1848,7 @@ fn progress_fraction(line: &str) -> Option<(usize, usize)> {
 fn sync_bar(ui: &Ui, fraction: f32) {
     let width = (ui.content_region_avail()[0] - 16.0).max(1.0);
     let pos = ui.cursor_screen_pos();
-    let draw = ui.get_window_draw_list();
+    let draw = crate::ui::window_draw_list(ui);
     draw.add_rect(
         [pos[0] + 8.0, pos[1] + 2.0],
         [pos[0] + width + 8.0, pos[1] + 8.0],

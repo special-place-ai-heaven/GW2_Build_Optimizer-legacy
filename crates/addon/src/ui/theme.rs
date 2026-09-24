@@ -546,8 +546,7 @@ pub fn paint_centered_combo_preview(ui: &Ui, preview: &str, origin: [f32; 2], wi
     let sz = ui.calc_text_size(&shown);
     let tx = origin[0] + pad + (inner_w - sz[0]) * 0.5;
     let ty = origin[1] + (h - sz[1]) * 0.5;
-    ui.get_window_draw_list()
-        .add_text([tx, ty], color_u32(pal().cream), &shown);
+    crate::ui::window_draw_list(ui).add_text([tx, ty], color_u32(pal().cream), &shown);
 }
 
 fn push_gold_button_pad<'ui>(ui: &'ui Ui<'_>) -> impl Sized + 'ui {
@@ -609,7 +608,7 @@ pub fn pill_pulse(ui: &Ui, label: &str, selected: bool, id: &str, pulse: f32) ->
         th.cream
     };
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect([p[0], p[1]], [p[0] + w, p[1] + h], fill)
             .filled(true)
             .rounding(h * 0.45)
@@ -730,7 +729,7 @@ pub fn tinted_pill(ui: &Ui, label: &str, selected: bool, id: &str, kind: [f32; 4
         tint.text
     };
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect([p[0], p[1]], [p[0] + w, p[1] + h], fill)
             .filled(true)
             .rounding(h * 0.45)
@@ -814,7 +813,7 @@ pub fn switch(ui: &Ui, label: &str, anim: f32, id: &str) -> bool {
     ];
     let rim = if hovered { th.gold } else { th.chip_idle_rim };
 
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     dl.add_rect([p[0], ty], [p[0] + track_w, ty + h], fill)
         .filled(true)
         .rounding(h * 0.5)
@@ -874,7 +873,7 @@ pub fn select_chip(ui: &Ui, label: &str, selected: bool, id: &str, pip: Option<[
         th.cream
     };
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect([p[0], p[1]], [p[0] + w, p[1] + h], fill)
             .filled(true)
             .rounding(h * 0.45)
@@ -962,7 +961,7 @@ pub fn segment_row(ui: &Ui, labels: &[&str], selected: usize, id_prefix: &str) -
             pl.chip_idle_rim
         };
         let text = if on { pl.gold_button_text } else { pl.cream };
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect([p[0], p[1]], [p[0] + w, p[1] + h], fill)
             .filled(true)
             .rounding(h * 0.45)
@@ -1196,7 +1195,7 @@ pub fn download_scribble(ui: &Ui, fraction: f32, caption: &str) {
     let end_half = ui.calc_text_size(labels[0])[0].max(ui.calc_text_size(labels[3])[0]) * 0.5 + 6.0;
     let theme = pal();
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
 
         dl.add_text([p[0], p[1]], color_u32(theme.gold), "FETCHING TYRIA...");
 
@@ -1604,12 +1603,17 @@ fn draw_choya(ui: &Ui, dl: &DrawListMut, feet: [f32; 2], height: f32, sway: f32,
 pub fn draw_choya_avatar(ui: &Ui, center: [f32; 2], size: f32) {
     let Some(tid) = choya_sheet2() else {
         let i = anim_cell(100, CHOYA_IDLE.len());
-        blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_IDLE[i]);
+        blit_choya_frame(
+            &crate::ui::window_draw_list(ui),
+            center,
+            size,
+            CHOYA_IDLE[i],
+        );
         return;
     };
     let i = anim_cell(800, CHOYA2_FACE.len());
     blit_frame(
-        &ui.get_window_draw_list(),
+        &crate::ui::window_draw_list(ui),
         tid,
         center,
         size,
@@ -1619,7 +1623,7 @@ pub fn draw_choya_avatar(ui: &Ui, center: [f32; 2], size: f32) {
 
 /// Standing pose plus isolated props (sombrero, shades, maracas, notes).
 pub fn draw_choya_hero(ui: &Ui, center: [f32; 2], size: f32) {
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     let Some(tid) = choya_sheet2() else {
         blit_choya_frame(&dl, center, size, CHOYA_HERO);
         return;
@@ -1694,24 +1698,40 @@ pub fn draw_choya_thinking(ui: &Ui, center: [f32; 2], size: f32) {
         return;
     }
     let i = anim_cell(83, CHOYA_IDLE.len());
-    blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_IDLE[i]);
+    blit_choya_frame(
+        &crate::ui::window_draw_list(ui),
+        center,
+        size,
+        CHOYA_IDLE[i],
+    );
 }
 
 /// The chat row's working pose: the nine-frame maraca bob from sheet 1.
 /// Header paces, row bobs, composer blinks — three slots, three motions.
 pub fn draw_choya_thinking_row(ui: &Ui, center: [f32; 2], size: f32) {
     let i = anim_cell(100, CHOYA_IDLE.len());
-    blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_IDLE[i]);
+    blit_choya_frame(
+        &crate::ui::window_draw_list(ui),
+        center,
+        size,
+        CHOYA_IDLE[i],
+    );
 }
 
 /// Peeking-from-the-rock pose, kept for whoever wants a shy Choya.
 #[allow(dead_code)]
 pub fn draw_choya_peek(ui: &Ui, center: [f32; 2], size: f32) {
     let Some(tid) = choya_sheet2() else {
-        blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_THINK);
+        blit_choya_frame(&crate::ui::window_draw_list(ui), center, size, CHOYA_THINK);
         return;
     };
-    blit_frame(&ui.get_window_draw_list(), tid, center, size, CHOYA2_PEEK);
+    blit_frame(
+        &crate::ui::window_draw_list(ui),
+        tid,
+        center,
+        size,
+        CHOYA2_PEEK,
+    );
 }
 
 /// Six-frame bounce from sheet 2 (composer / small slots).
@@ -1726,7 +1746,7 @@ pub fn draw_choya_walk_paced(ui: &Ui, center: [f32; 2], size: f32, cell_ms: u64)
     };
     let i = anim_cell(cell_ms, CHOYA2_WALK.len());
     blit_frame(
-        &ui.get_window_draw_list(),
+        &crate::ui::window_draw_list(ui),
         tid,
         center,
         size,
@@ -1736,10 +1756,16 @@ pub fn draw_choya_walk_paced(ui: &Ui, center: [f32; 2], size: f32, cell_ms: u64)
 
 pub fn draw_choya_party(ui: &Ui, center: [f32; 2], size: f32) {
     let Some(tid) = choya_sheet2() else {
-        blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_DANCE);
+        blit_choya_frame(&crate::ui::window_draw_list(ui), center, size, CHOYA_DANCE);
         return;
     };
-    blit_frame(&ui.get_window_draw_list(), tid, center, size, CHOYA2_PARTY);
+    blit_frame(
+        &crate::ui::window_draw_list(ui),
+        tid,
+        center,
+        size,
+        CHOYA2_PARTY,
+    );
 }
 
 /// Quips the Free Choya says while it is up. One is picked per appearance.
@@ -1939,10 +1965,16 @@ pub fn draw_choya_header(ui: &Ui, center: [f32; 2], size: f32, waiting: bool, po
 
 pub fn draw_choya_sleep(ui: &Ui, center: [f32; 2], size: f32) {
     if let Some(tid) = choya_sheet2() {
-        blit_frame(&ui.get_window_draw_list(), tid, center, size, CHOYA2_SLEEP);
+        blit_frame(
+            &crate::ui::window_draw_list(ui),
+            tid,
+            center,
+            size,
+            CHOYA2_SLEEP,
+        );
         return;
     }
-    blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_SLEEP);
+    blit_choya_frame(&crate::ui::window_draw_list(ui), center, size, CHOYA_SLEEP);
 }
 
 pub fn draw_gem_icon(dl: &DrawListMut, top: [f32; 2], height: f32) {

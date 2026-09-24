@@ -78,7 +78,7 @@ fn masthead(ui: &Ui, state: &AddonState) {
     let width = ui.content_region_avail()[0];
     let h = 26.0;
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect(
             [start[0] - 1.0, start[1]],
             [start[0] + width + 1.0, start[1] + h],
@@ -215,7 +215,7 @@ fn kind_filter_tab(
     let pad_x = 8.0;
     let glyph = (h * 0.55).max(12.0);
     let gap = 6.0;
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     dl.add_rect(p, [p[0] + w, p[1] + h], fill)
         .filled(true)
         .rounding(h * 0.45)

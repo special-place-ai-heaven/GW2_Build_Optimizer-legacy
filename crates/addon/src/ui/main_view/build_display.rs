@@ -21,7 +21,7 @@ pub fn render_card_header(ui: &Ui, title: &str, color: [f32; 4]) {
     let bar_h = 22.0;
     let ty = start[1] + ((bar_h - th) * 0.5).round();
     {
-        let draw_list = ui.get_window_draw_list();
+        let draw_list = crate::ui::window_draw_list(ui);
         draw_list
             .add_rect(
                 [start[0] - 1.0, start[1]],
@@ -210,7 +210,7 @@ fn min_name_col_w(ui: &Ui, name: &str) -> f32 {
 }
 
 fn paint_group_header(ui: &Ui, x: f32, y: f32, w: f32, h: f32, title: &str) {
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     crate::ui::theme::paint_header_accent(&dl, x, y, h);
     let [tw, th] = ui.calc_text_size(title);
     let inner_left = x + crate::ui::theme::HEADER_ACCENT_W + 4.0;
@@ -221,7 +221,7 @@ fn paint_group_header(ui: &Ui, x: f32, y: f32, w: f32, h: f32, title: &str) {
 }
 
 fn paint_vdiv(ui: &Ui, x: f32, y: f32, h: f32) {
-    ui.get_window_draw_list()
+    crate::ui::window_draw_list(ui)
         .add_line(
             [x, y + 1.0],
             [x, y + h - 1.0],
@@ -300,7 +300,7 @@ fn paint_kit_slot(
         crate::ui::comparison::inspect_if_hovered(ui, inspect, db);
     }
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect(p, [p[0] + slot_w, p[1] + slot_h], fill)
             .filled(true)
             .rounding(6.0)
@@ -498,7 +498,7 @@ fn render_skill_bar(
     let hdr_top = start[1];
     let hdr_bottom = hdr_top + bar_h;
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect(
             [start[0] - 1.0, hdr_top],
             [start[0] + avail + 1.0, hdr_bottom],
@@ -674,7 +674,7 @@ fn render_skill_bar(
     ui.dummy([0.0, CARD_PAD]);
     let body_bottom = ui.cursor_screen_pos()[1];
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_line(
             [start[0] - 1.0, body_top],
             [start[0] + avail + 1.0, body_top],

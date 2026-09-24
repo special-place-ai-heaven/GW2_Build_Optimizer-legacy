@@ -77,7 +77,7 @@ pub fn render_radar_chart(
     ui.invisible_button("##radar_area", [size, size]);
     ui.set_cursor_screen_pos([origin[0], origin[1] + size]);
 
-    let draw_list = ui.get_window_draw_list();
+    let draw_list = crate::ui::window_draw_list(ui);
 
     // Background circle
     draw_list

@@ -200,7 +200,7 @@ fn bubble_size(
 }
 
 fn draw_bubble_rect(ui: &Ui, p: [f32; 2], bw: f32, bh: f32, from_user: bool) {
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     let fill = if from_user {
         [0.16, 0.20, 0.28, 0.96]
     } else {
@@ -226,7 +226,7 @@ fn draw_bubble_rect(ui: &Ui, p: [f32; 2], bw: f32, bh: f32, from_user: bool) {
 }
 
 fn draw_copy_glyph(ui: &Ui, p: [f32; 2], size: f32, copied: bool) {
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     let col = if copied {
         theme::pal().gold
     } else {
@@ -253,7 +253,7 @@ fn draw_bubble_text(ui: &Ui, p: [f32; 2], lines: &[Line], msg_i: usize) {
     // allows one live draw list per window.
     let mut links: Vec<([f32; 2], f32, String)> = Vec::new();
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         for (li, line) in lines.iter().enumerate() {
             let ty = p[1] + BUBBLE_PAD + li as f32 * line_h;
             for placed in &line.spans {
@@ -556,7 +556,7 @@ fn render_build_card(ui: &Ui, msg_i: usize) -> bool {
         theme::pal().plate
     };
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect(p, [p[0] + w, p[1] + h], fill)
             .filled(true)
             .rounding(10.0)
@@ -612,7 +612,7 @@ fn render_pick_cards(ui: &Ui, picks: &[PickCard], msg_i: usize, alone: bool) -> 
     };
     let label_sz = ui.calc_text_size(&label);
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_text(
             [x, row_top + (row_h - label_sz[1]) * 0.5],
             color_u32(theme::pal().muted),
@@ -639,7 +639,7 @@ fn render_pick_cards(ui: &Ui, picks: &[PickCard], msg_i: usize, alone: bool) -> 
             theme::pal().plate
         };
         {
-            let dl = ui.get_window_draw_list();
+            let dl = crate::ui::window_draw_list(ui);
             dl.add_rect([x, row_top], [x + w, row_top + h], fill)
                 .filled(true)
                 .rounding(10.0)
@@ -691,7 +691,7 @@ fn draw_send_icon(ui: &Ui, c: [f32; 2], on: bool) {
     } else {
         theme::pal().muted
     };
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     let s = 11.0;
     dl.add_triangle(
         [c[0] - s * 0.7, c[1] - s * 0.55],
@@ -727,7 +727,7 @@ fn render_composer(ui: &Ui, state: &mut ChatBarState) -> Option<String> {
     let bw = (avail - COMPOSER_CHOYA - 8.0).max(80.0);
     let bh = COMPOSER_H;
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect([bx, by], [bx + bw, by + bh], theme::pal().plate)
             .filled(true)
             .rounding(18.0)
@@ -763,7 +763,7 @@ fn render_composer(ui: &Ui, state: &mut ChatBarState) -> Option<String> {
     drop(_pad);
 
     if state.input.is_empty() {
-        ui.get_window_draw_list().add_text(
+        crate::ui::window_draw_list(ui).add_text(
             [bx + 20.0, by + 16.0],
             color_u32(theme::pal().muted),
             t("chat.placeholder"),

@@ -452,7 +452,7 @@ pub(crate) fn render_source_link(ui: &Ui, suggestion: &BuildSuggestion) {
     let clicked = ui.small_button(format!("  {}", tf("fmt.site_link", &[("site", &site)])));
     let h = ui.item_rect_size()[1];
     let mid = [at[0] + 5.0 + mark * 0.5, at[1] + h * 0.5];
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     match crate::ui::theme::site_tex(&site) {
         Some(tid) => {
             let r = mark * 0.5;
@@ -1059,7 +1059,7 @@ pub fn render_chat_code_copy(
     };
 
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect([p[0], p[1]], [p[0] + w, p[1] + h], fill)
             .filled(true)
             .rounding(crate::ui::theme::ICON_ROUNDING)
@@ -1459,7 +1459,7 @@ fn render_benchmark_delta(ui: &Ui, suggestion: &BuildSuggestion, db: Option<&Gam
                 let bar_width = ui.content_region_avail()[0] - 16.0;
                 let filled = (bar_width * (pct / 100.0).min(1.0) as f32).max(0.0);
                 let pos = ui.cursor_screen_pos();
-                let draw = ui.get_window_draw_list();
+                let draw = crate::ui::window_draw_list(ui);
                 // Background
                 draw.add_rect(
                     [pos[0] + 8.0, pos[1] + 2.0],

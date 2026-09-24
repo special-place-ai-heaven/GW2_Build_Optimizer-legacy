@@ -479,7 +479,7 @@ fn layout_mail(ui: &Ui, encoded: &str, wrap_w: f32, origin: Option<[f32; 2]>) ->
         y += 4.0;
     }
     if origin.is_some() {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         for (p, col, bold, chunk) in &glyphs {
             dl.add_text(*p, color_u32(*col), chunk);
             if *bold {
@@ -535,7 +535,7 @@ fn fmt_icon_button(ui: &Ui, id: &str, side: f32, on: bool, icon: FmtIcon) -> boo
     } else {
         theme::pal().cream
     };
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     dl.add_rect(p, [p[0] + side, p[1] + side], fill)
         .filled(true)
         .rounding(theme::ICON_ROUNDING)
@@ -648,7 +648,7 @@ fn draw_fmt_icon(dl: &DrawListMut, icon: FmtIcon, c: [f32; 2], size: f32, color:
 fn color_swatch(ui: &Ui, id: &str, side: f32, on: bool, color: [f32; 4]) -> bool {
     let p = ui.cursor_screen_pos();
     let hit = ui.invisible_button(id, [side, side]);
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     let pad = 3.0;
     dl.add_rect(
         [p[0] + pad, p[1] + pad],
@@ -921,7 +921,7 @@ pub(super) fn render_wizard(ui: &Ui, state: &mut AddonState) {
     let min_h = AVATAR + PAD * 2.0;
     let plate_h = f32::from_bits(PLATE_H.load(Ordering::Relaxed)).max(min_h);
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         let br = [origin[0] + width, origin[1] + plate_h];
         dl.add_rect(origin, br, theme::pal().plate)
             .filled(true)
@@ -1005,7 +1005,7 @@ fn render_pick(ui: &Ui, draft: &Draft, feedback: &FeedbackState, inner_w: f32) -
         let clicked = ui.invisible_button(format!("##wz_tile_{}", cat.id), [tile_w, tile_h]);
         let hovered = ui.is_item_hovered();
         {
-            let dl = ui.get_window_draw_list();
+            let dl = crate::ui::window_draw_list(ui);
             let br = [p[0] + tile_w, p[1] + tile_h];
             let fill = if hovered && live {
                 theme::pal().gold_hover
@@ -1211,7 +1211,7 @@ fn render_summary(
 
     let p = ui.cursor_screen_pos();
     if let Some(cat) = &cat {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         draw_glyph(
             ui,
             &dl,

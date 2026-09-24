@@ -690,8 +690,7 @@ fn open_generation(state: &mut AddonState, record: Arc<GenerationRecord>) {
 // Drawing
 
 fn put(ui: &Ui, pos: [f32; 2], colour: [f32; 4], text: &str) {
-    ui.get_window_draw_list()
-        .add_text(pos, crate::ui::color_u32(colour), text);
+    crate::ui::window_draw_list(ui).add_text(pos, crate::ui::color_u32(colour), text);
 }
 
 /// A small filled triangle: up, down or right.
@@ -703,7 +702,7 @@ fn arrow(ui: &Ui, centre: [f32; 2], size: f32, dir: char, colour: [f32; 4]) {
         'd' => ([x - s, y - s * 0.7], [x + s, y - s * 0.7], [x, y + s]),
         _ => ([x - s * 0.7, y - s], [x - s * 0.7, y + s], [x + s, y]),
     };
-    ui.get_window_draw_list()
+    crate::ui::window_draw_list(ui)
         .add_triangle(a, b, c, crate::ui::color_u32(colour))
         .filled(true)
         .build();
@@ -928,7 +927,7 @@ fn draw_row(
                 let min = [x0, ymid - 2.0];
                 let max = [x0 + pw, ymid - 2.0 + ph];
                 {
-                    let dl = ui.get_window_draw_list();
+                    let dl = crate::ui::window_draw_list(ui);
                     dl.add_rect(min, max, theme::with_alpha(colour, 0.20))
                         .filled(true)
                         .rounding(ph * 0.45)
@@ -1045,7 +1044,7 @@ fn draw_card(
     let hovered = ui.is_item_hovered();
     let max = [min[0] + size[0], min[1] + size[1]];
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         let fill = if hovered && openable {
             p.gold_hover
         } else {

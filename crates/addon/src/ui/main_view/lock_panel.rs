@@ -245,7 +245,7 @@ pub fn render_lock_panel(
     {
         let pos = ui.cursor_screen_pos();
         let width = ui.content_region_avail()[0];
-        let draw_list = ui.get_window_draw_list();
+        let draw_list = crate::ui::window_draw_list(ui);
         draw_list
             .add_rect(
                 [pos[0], pos[1]],
@@ -338,7 +338,7 @@ pub fn render_lock_panel(
         let hex_id = LockElementId::Hex(slot as u8);
         let hex_t = hover_t_for(hover_state, hex_id);
         {
-            let draw_list = ui.get_window_draw_list();
+            let draw_list = crate::ui::window_draw_list(ui);
 
             // Draw hexagon — radius, outline thickness, and brightness lerp in on hover.
             let hex_color_base = if spec_locked {
@@ -516,7 +516,7 @@ pub fn render_lock_panel(
                             let circle_radius_anim = circle_radius + 0.5 * trait_t;
 
                             {
-                                let draw_list = ui.get_window_draw_list();
+                                let draw_list = crate::ui::window_draw_list(ui);
 
                                 // Circle
                                 let (fill_color, outline_color) = if is_locked {
@@ -655,7 +655,7 @@ pub fn render_lock_panel(
                         }
                     }
                     {
-                        let draw_list = ui.get_window_draw_list();
+                        let draw_list = crate::ui::window_draw_list(ui);
                         for col in 0..2 {
                             if let (Some((from, _)), Some((_, to))) =
                                 (selected_link[col], selected_link[col + 1])
@@ -675,7 +675,7 @@ pub fn render_lock_panel(
         // Separator between rows
         {
             let sep_pos = ui.cursor_screen_pos();
-            let draw_list = ui.get_window_draw_list();
+            let draw_list = crate::ui::window_draw_list(ui);
             draw_list
                 .add_line(
                     [sep_pos[0], sep_pos[1] - 2.0],
@@ -803,7 +803,7 @@ pub fn render_optimized_specs_panel(
         let bar_h = 22.0;
         let th = ui.calc_text_size(title)[1];
         let ty = pos[1] + ((bar_h - th) * 0.5).round();
-        let draw_list = ui.get_window_draw_list();
+        let draw_list = crate::ui::window_draw_list(ui);
         draw_list
             .add_rect(
                 [pos[0], pos[1]],
@@ -882,7 +882,7 @@ pub fn render_optimized_specs_panel(
         let optimized_color: [f32; 4] = [0.3, 1.0, 0.5, 1.0]; // Green for optimized
 
         {
-            let draw_list = ui.get_window_draw_list();
+            let draw_list = crate::ui::window_draw_list(ui);
             // Filled hexagon
             draw_hexagon(
                 &draw_list,
@@ -976,7 +976,7 @@ pub fn render_optimized_specs_panel(
                         }
 
                         {
-                            let draw_list = ui.get_window_draw_list();
+                            let draw_list = crate::ui::window_draw_list(ui);
                             let (fill_color, outline_color) = if is_selected {
                                 (optimized_color, optimized_color)
                             } else {
@@ -1048,7 +1048,7 @@ pub fn render_optimized_specs_panel(
                     }
                 }
                 {
-                    let draw_list = ui.get_window_draw_list();
+                    let draw_list = crate::ui::window_draw_list(ui);
                     for col in 0..2 {
                         if let (Some((from, _)), Some((_, to))) =
                             (selected_link[col], selected_link[col + 1])
@@ -1062,7 +1062,7 @@ pub fn render_optimized_specs_panel(
             // No DB data — just show trait names as text
             let grid_x = row_start[0] + hex_area_width + 4.0;
             let grid_y = row_start[1] + 2.0;
-            let draw_list = ui.get_window_draw_list();
+            let draw_list = crate::ui::window_draw_list(ui);
             for (i, tn) in trait_names.iter().enumerate() {
                 draw_list.add_text(
                     [grid_x, grid_y + i as f32 * row_height],
@@ -1078,7 +1078,7 @@ pub fn render_optimized_specs_panel(
         // Separator
         {
             let sep_pos = ui.cursor_screen_pos();
-            let draw_list = ui.get_window_draw_list();
+            let draw_list = crate::ui::window_draw_list(ui);
             draw_list
                 .add_line(
                     [sep_pos[0], sep_pos[1] - 2.0],

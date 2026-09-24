@@ -573,7 +573,7 @@ pub(in crate::ui::main_view) fn paint_row_plate(ui: &Ui, height: f32, header: bo
     } else {
         theme::with_alpha(theme::pal().plate, 0.42)
     };
-    ui.get_window_draw_list()
+    crate::ui::window_draw_list(ui)
         .add_rect(p, [p[0] + w, p[1] + height], fill)
         .filled(true)
         .rounding(5.0)

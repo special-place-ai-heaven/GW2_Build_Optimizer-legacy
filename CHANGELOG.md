@@ -2,6 +2,10 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## 1.14.48
+
+- Internal: every raw `ui.get_window_draw_list()` call site under `crates/addon/src/ui` now goes through the counted `crate::ui::window_draw_list` guard, closing the gap that let the mini radio nesting panic happen in the first place. `mini_radio::draw_list_scan` now scans all 43 files under `crates/addon/src/ui` and `crates/addon/src/radio` (was 4) and gained a second check that fails the build on any raw call outside the guard's own definition. No player-visible change.
+
 ## 1.14.47
 
 - Mini radio anchor: pin the strip in place so it can no longer be moved or resized and clicks and drags over its plate, equalizer, title and Choya go to the game ("Anchor in place" in the mini radio settings, or the unbound Nexus keybind `GW2_BUILD_OPT_MINI_RADIO_ANCHOR`). The controls still fade in on mouse-over, in their own small window over the strip's top row, so station, play, volume and the gear keep working; only that row takes the mouse. A faint padlock marks an anchored strip (hidden under the controls) and flashes on each flip; Choya, quips, equalizer and title keep animating; unanchor from the strip's gear, the settings gear next to Mini radio in Choya Tunes, or the keybind.

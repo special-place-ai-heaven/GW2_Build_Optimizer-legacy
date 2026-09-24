@@ -273,7 +273,7 @@ fn render_choya_identity(ui: &Ui, state: &mut AddonState) {
     };
     let p = ui.cursor_screen_pos();
     let th = ui.calc_text_size(&status)[1];
-    ui.get_window_draw_list()
+    crate::ui::window_draw_list(ui)
         .add_circle([p[0] + 5.0, p[1] + th * 0.5], 4.0, pip)
         .filled(true)
         .build();

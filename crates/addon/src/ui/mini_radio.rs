@@ -1837,8 +1837,15 @@ mod draw_list_scan {
             i = end;
         }
         let code = String::from_utf8(out).expect("ASCII blanks keep UTF-8");
-        match code.find("#[cfg(test)]") {
-            Some(n) => code[..n].to_string(),
+        // Only the column-0 `#[cfg(test)]\nmod ...` marks the test module —
+        // an indented `#[cfg(test)]` on a single statement (e.g.
+        // `log_disk_error`'s stderr fallback) is production code and must
+        // not truncate the rest of the file.
+        match code
+            .match_indices("#[cfg(test)]\nmod ")
+            .find(|&(n, _)| n == 0 || code.as_bytes()[n - 1] == b'\n')
+        {
+            Some((n, _)) => code[..n].to_string(),
             None => code,
         }
     }
@@ -2077,15 +2084,129 @@ mod draw_list_scan {
         );
     }
 
+    /// Every source file under `crates/addon/src/ui` (plus the sibling
+    /// `radio/` module, which the mini radio window shares draw calls with).
+    /// `mod.rs` keeps the one raw acquisition — [`super::window_draw_list`]'s
+    /// own body — so it stays in the nesting scan but is exempted below from
+    /// the "no raw calls elsewhere" rule.
+    const UI_FILES: &[(&str, &str)] = &[
+        ("mod.rs", include_str!("mod.rs")),
+        ("chat_bar.rs", include_str!("chat_bar.rs")),
+        ("chat_markup.rs", include_str!("chat_markup.rs")),
+        ("comparison.rs", include_str!("comparison.rs")),
+        ("cost_format.rs", include_str!("cost_format.rs")),
+        ("fonts.rs", include_str!("fonts.rs")),
+        ("gear_diff.rs", include_str!("gear_diff.rs")),
+        ("gear_sheet.rs", include_str!("gear_sheet.rs")),
+        ("icons.rs", include_str!("icons.rs")),
+        ("mini_radio.rs", include_str!("mini_radio.rs")),
+        ("news_feed.rs", include_str!("news_feed.rs")),
+        ("radar_chart.rs", include_str!("radar_chart.rs")),
+        ("run_feed.rs", include_str!("run_feed.rs")),
+        ("setup.rs", include_str!("setup.rs")),
+        ("theme.rs", include_str!("theme.rs")),
+        (
+            "main_view/build_display.rs",
+            include_str!("main_view/build_display.rs"),
+        ),
+        (
+            "main_view/character.rs",
+            include_str!("main_view/character.rs"),
+        ),
+        (
+            "main_view/chat_flow.rs",
+            include_str!("main_view/chat_flow.rs"),
+        ),
+        (
+            "main_view/generation.rs",
+            include_str!("main_view/generation.rs"),
+        ),
+        (
+            "main_view/lock_panel.rs",
+            include_str!("main_view/lock_panel.rs"),
+        ),
+        ("main_view/mod.rs", include_str!("main_view/mod.rs")),
+        (
+            "main_view/optimization.rs",
+            include_str!("main_view/optimization.rs"),
+        ),
+        (
+            "main_view/optimize_flow.rs",
+            include_str!("main_view/optimize_flow.rs"),
+        ),
+        (
+            "main_view/provider_picks.rs",
+            include_str!("main_view/provider_picks.rs"),
+        ),
+        (
+            "main_view/resolution.rs",
+            include_str!("main_view/resolution.rs"),
+        ),
+        ("main_view/stats.rs", include_str!("main_view/stats.rs")),
+        (
+            "main_view/tabs/about.rs",
+            include_str!("main_view/tabs/about.rs"),
+        ),
+        (
+            "main_view/tabs/about/generations.rs",
+            include_str!("main_view/tabs/about/generations.rs"),
+        ),
+        (
+            "main_view/tabs/about/glyphs.rs",
+            include_str!("main_view/tabs/about/glyphs.rs"),
+        ),
+        (
+            "main_view/tabs/about/wizard.rs",
+            include_str!("main_view/tabs/about/wizard.rs"),
+        ),
+        (
+            "main_view/tabs/improve.rs",
+            include_str!("main_view/tabs/improve.rs"),
+        ),
+        (
+            "main_view/tabs/kitchen.rs",
+            include_str!("main_view/tabs/kitchen.rs"),
+        ),
+        (
+            "main_view/tabs/mod.rs",
+            include_str!("main_view/tabs/mod.rs"),
+        ),
+        (
+            "main_view/tabs/new_build.rs",
+            include_str!("main_view/tabs/new_build.rs"),
+        ),
+        (
+            "main_view/tabs/news.rs",
+            include_str!("main_view/tabs/news.rs"),
+        ),
+        (
+            "main_view/tabs/radio.rs",
+            include_str!("main_view/tabs/radio.rs"),
+        ),
+        (
+            "main_view/tabs/saveload.rs",
+            include_str!("main_view/tabs/saveload.rs"),
+        ),
+        (
+            "main_view/tabs/settings.rs",
+            include_str!("main_view/tabs/settings.rs"),
+        ),
+        ("radio/art.rs", include_str!("../radio/art.rs")),
+        (
+            "radio/decode_tests.rs",
+            include_str!("../radio/decode_tests.rs"),
+        ),
+        ("radio/directory.rs", include_str!("../radio/directory.rs")),
+        ("radio/logos.rs", include_str!("../radio/logos.rs")),
+        ("radio/mod.rs", include_str!("../radio/mod.rs")),
+        ("radio/player.rs", include_str!("../radio/player.rs")),
+        ("radio/quips.rs", include_str!("../radio/quips.rs")),
+    ];
+
     #[test]
     fn no_window_draw_list_is_live_across_a_drawing_call() {
         let mut all = Vec::new();
-        for (file, src) in [
-            ("mini_radio.rs", include_str!("mini_radio.rs")),
-            ("radio/art.rs", include_str!("../radio/art.rs")),
-            ("radio/quips.rs", include_str!("../radio/quips.rs")),
-            ("tabs/radio.rs", include_str!("main_view/tabs/radio.rs")),
-        ] {
+        for (file, src) in UI_FILES {
             all.extend(violations(file, src));
         }
         // The controls window's body is a scanned fn of its own, and its
@@ -2101,6 +2222,27 @@ mod draw_list_scan {
             all.is_empty(),
             "nested window draw lists:\n{}",
             all.join("\n")
+        );
+    }
+
+    /// Every call site must go through [`super::window_draw_list`] (or a
+    /// module-local wrapper built on it), never the raw imgui-rs method
+    /// directly — that raw path is what let the nesting bug back in once
+    /// already. `mod.rs` keeps the sole exemption: the wrapper's own body.
+    #[test]
+    fn no_raw_get_window_draw_list_outside_the_one_wrapper() {
+        let mut offenders = Vec::new();
+        for (file, src) in UI_FILES {
+            if *file == "mod.rs" {
+                continue;
+            }
+            if production(src).contains("get_window_draw_list(") {
+                offenders.push(*file);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "raw ui.get_window_draw_list() outside crate::ui::window_draw_list in: {offenders:?}"
         );
     }
 }

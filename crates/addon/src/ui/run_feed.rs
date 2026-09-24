@@ -192,7 +192,7 @@ fn draw_pill(ui: &Ui, text: &str, id: &str) {
     ui.invisible_button(id, [w, h]);
     let th = theme::pal();
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect([p[0], p[1]], [p[0] + w, p[1] + h], th.chip_idle_fill)
             .filled(true)
             .rounding(h * 0.45)

@@ -378,7 +378,7 @@ pub(in crate::ui::main_view) fn render_provider_picks(
         let clicked = ui.invisible_button(format!("##pick_{i}"), [width, height]);
         let hovered = ui.is_item_hovered();
         {
-            let dl = ui.get_window_draw_list();
+            let dl = crate::ui::window_draw_list(ui);
             let p = theme::pal();
             let fill = if hovered {
                 p.gold_hover

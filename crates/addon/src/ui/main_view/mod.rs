@@ -233,7 +233,7 @@ fn render_top_status_bar(ui: &Ui, state: &mut AddonState) {
     {
         let start = ui.cursor_screen_pos();
         let width = ui.content_region_avail()[0];
-        let draw_list = ui.get_window_draw_list();
+        let draw_list = crate::ui::window_draw_list(ui);
         draw_list
             .add_rect(
                 [start[0] - 1.0, start[1]],
@@ -255,7 +255,7 @@ fn render_top_status_bar(ui: &Ui, state: &mut AddonState) {
     };
     {
         let p = ui.cursor_screen_pos();
-        ui.get_window_draw_list()
+        crate::ui::window_draw_list(ui)
             .add_circle([p[0] + 8.0, p[1] + row_h * 0.5], 4.0, color)
             .filled(true)
             .build();
@@ -350,7 +350,7 @@ fn render_top_status_bar(ui: &Ui, state: &mut AddonState) {
     {
         let pos = ui.cursor_screen_pos();
         let width = ui.content_region_avail()[0];
-        let draw_list = ui.get_window_draw_list();
+        let draw_list = crate::ui::window_draw_list(ui);
         draw_list
             .add_line(
                 [pos[0] - 1.0, pos[1]],
@@ -384,7 +384,7 @@ pub(super) fn render_optimization_progress(ui: &Ui, stage: &str, can_stop: bool)
     let width = ui.content_region_avail()[0];
 
     {
-        let draw_list = ui.get_window_draw_list();
+        let draw_list = crate::ui::window_draw_list(ui);
 
         // Dark card background
         draw_list
@@ -647,7 +647,7 @@ pub(super) fn render_left_section_header(ui: &Ui, title: &str, spacing: f32) {
     let width = ui.content_region_avail()[0];
     let bar_h = theme::control_height(ui).max(ui.frame_height());
     {
-        let draw_list = ui.get_window_draw_list();
+        let draw_list = crate::ui::window_draw_list(ui);
         draw_list
             .add_rect(
                 [pos[0], pos[1]],

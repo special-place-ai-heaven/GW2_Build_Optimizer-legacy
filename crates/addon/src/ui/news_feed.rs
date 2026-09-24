@@ -191,7 +191,7 @@ fn index_row(ui: &Ui, view: &Workspace<'_>, index: usize, on: bool) -> bool {
     let hovered = ui.is_item_hovered();
     plate(ui, p, [w, h], hovered, on);
     if on {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         theme::paint_header_accent(&dl, p[0], p[1], h);
     }
     let text_x = if thumb {
@@ -358,7 +358,7 @@ fn plate(ui: &Ui, p: [f32; 2], size: [f32; 2], hovered: bool, on: bool) {
     } else {
         theme::with_alpha(theme::pal().chip_idle_rim, 0.45)
     };
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     dl.add_rect(p, [p[0] + size[0], p[1] + size[1]], fill)
         .filled(true)
         .rounding(ROUND)
@@ -388,7 +388,7 @@ fn paint_still(ui: &Ui, url: Option<&str>, origin: [f32; 2], max_size: [f32; 2])
     let fitted = fit_box(max_size[0], max_size[1], aspect);
     let ox = origin[0] + (max_size[0] - fitted[0]) * 0.5;
     let oy = origin[1] + (max_size[1] - fitted[1]) * 0.5;
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     let plate = [origin[0] + max_size[0], origin[1] + max_size[1]];
     dl.add_rect(
         origin,
