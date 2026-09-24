@@ -250,63 +250,6 @@ pub fn job_family(role: &str) -> Option<JobFamily> {
     None
 }
 
-/// Power or condition, when the role name says.
-///
-/// Cross-referenced as a disqualifier, not a preference. A condition build
-/// is not a power build with different numbers — different stats, different
-/// runes, different sigils, different traits, and a different way of
-/// killing something. Offered in place of one another they are simply the
-/// wrong build.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flavour {
-    Power,
-    Condi,
-    /// Says it wants both, so neither rules it out.
-    Hybrid,
-}
-
-/// What a stat prefix is FOR, read off the attributes it grants.
-///
-/// The role name is a label somebody typed; the prefix is what the build
-/// wears. GuildJen publishes a Reaper as "Roaming DPS" and says nothing
-/// about power or condition — but it is Marauder, and Marauder grants Power,
-/// Precision, Ferocity and Vitality, so the build is a power build whatever
-/// the label omits. Matching on the label alone offered that build to
-/// someone asking for condition damage.
-///
-/// This answers "power or condition", not "what job is this". Celestial
-/// grants both and therefore reads as Hybrid here — but nobody wears
-/// Celestial to be a damage build; it is a bruiser's prefix, moderate at
-/// everything and excellent at nothing. That judgement belongs to
-/// [`prefix_job`], which is about the job, not the damage type.
-pub fn prefix_flavour(prefix: &str, db: &crate::gamedb::GameDb) -> Option<Flavour> {
-    if prefix.trim().is_empty() {
-        return None;
-    }
-    let wanted = prefix.trim().trim_end_matches("'s").to_lowercase();
-    let stat = db.itemstats.values().find(|stat| {
-        let name = stat.name.trim().trim_end_matches("'s").to_lowercase();
-        name == wanted
-    })?;
-
-    let grants = |attribute: &str| {
-        stat.attributes
-            .iter()
-            .any(|a| a.attribute.eq_ignore_ascii_case(attribute) && a.value + 1 > 0)
-    };
-    let condi = grants("ConditionDamage") || grants("ConditionDuration");
-    let power = grants("Power") || grants("CritDamage");
-    match (power, condi) {
-        // Everything at once is the definition of Celestial, and of Hybrid.
-        (true, true) => Some(Flavour::Hybrid),
-        (true, false) => Some(Flavour::Power),
-        (false, true) => Some(Flavour::Condi),
-        // Minstrel's and Harrier's grant neither: they are not damage
-        // prefixes at all, and have no flavour to disagree about.
-        (false, false) => None,
-    }
-}
-
 /// The job a stat prefix is dressed for, when the role name did not say.
 ///
 /// Gear is a statement of intent. Nobody wears Minstrel's to deal damage or
@@ -351,21 +294,6 @@ pub fn prefix_job(prefix: &str, db: &crate::gamedb::GameDb) -> Option<JobFamily>
         (true, false, false) => Some(JobFamily::Damage),
         _ => None,
     }
-}
-
-/// See [`Flavour`]. `None` where the words do not say.
-pub fn damage_flavour(role: &str) -> Option<Flavour> {
-    let role = role.to_lowercase();
-    if role.contains("hybrid") {
-        return Some(Flavour::Hybrid);
-    }
-    if role.contains("condi") {
-        return Some(Flavour::Condi);
-    }
-    if role.contains("power") {
-        return Some(Flavour::Power);
-    }
-    None
 }
 
 /// How many people are around, as the sites name it.

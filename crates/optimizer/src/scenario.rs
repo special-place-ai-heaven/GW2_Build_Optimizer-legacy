@@ -148,11 +148,6 @@ impl ScenarioSpec {
         self.combat_tier = tier;
         self
     }
-
-    pub fn with_combat_kind(mut self, kind: CombatKind) -> Self {
-        self.combat_kind = kind;
-        self
-    }
 }
 
 // Role Objectives

@@ -78,8 +78,83 @@ const MIX_LEN: u32 = MIX_STEP * RADIO_DJ_MIX.len() as u32;
 /// Heart flash duration after a favorite is added (~1 s).
 const LOVE_FRAMES: u32 = 60;
 
-/// Frame index of the last favorite-add, 0 = never. `frame_count` is already
-/// nonzero by the first rendered frame, so 0 is a safe sentinel.
+/// Multiplier on every sprite blit's alpha: the mini radio's content-opacity
+/// slider. Set for the length of one [`with_alpha`] call
+/// on the render thread and put back to 1.0 after.
+static ALPHA_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000); // 1.0f32
+
+/// The animation clock every radio sprite runs on: wall-clock time counted in
+/// 60 fps frames. All the step constants above were tuned against a 60 fps
+/// `frame_count`; this keeps their real-world speed on any refresh rate.
+/// Same source as `theme::anim_cell` / `theme::anim_phase`.
+pub fn tick() -> u32 {
+    (theme::elapsed_ms() * 60 / 1000) as u32
+}
+
+/// Run `f` with every sprite blit's alpha multiplied by `alpha`.
+pub fn with_alpha<R>(alpha: f32, f: impl FnOnce() -> R) -> R {
+    /// Puts the scale back even if `f` unwinds (the frame's catch_unwind
+    /// would otherwise leave every later blit faded).
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ALPHA_SCALE.store(1.0f32.to_bits(), Ordering::Relaxed);
+        }
+    }
+    ALPHA_SCALE.store(alpha.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    let _reset = Reset;
+    f()
+}
+
+/// How the DJ is drawn: the tab's player bar, or the mini radio strip.
+#[derive(Clone, Copy)]
+pub struct DjLook {
+    /// Gap kept between the sprite and the bar's right edge.
+    pub right_inset: f32,
+    /// Speech-bubble quips on or off.
+    pub quips: bool,
+    /// Sprite size over the bar-derived size (the mini radio's Choya size).
+    pub scale: f32,
+    /// Draw past the window's clip (the mini radio: she stands out of a
+    /// strip that is its whole window). The tab clips to its bar.
+    pub unclipped: bool,
+}
+
+impl DjLook {
+    /// The tab: clear of the station list's heart column, quips on.
+    pub const TAB: DjLook = DjLook {
+        right_inset: HEART_CLEARANCE,
+        quips: true,
+        scale: 1.0,
+        unclipped: false,
+    };
+}
+
+/// Where the DJ stands on a bar: `(centre, size)`. Twice the bar height
+/// (48..=170 px) times `look.scale`, feet 4 px above the bar's bottom edge,
+/// so she pops OUT over its top. The unscaled sprite's centre sits
+/// `right_inset` from the right end; a larger scale grows around it, up
+/// and past the right end, while the bar keeps its own size.
+pub fn dj_placement(look: DjLook, bar_min: [f32; 2], bar_max: [f32; 2]) -> ([f32; 2], f32) {
+    let base = dj_base_size(bar_max[1] - bar_min[1]);
+    let size = base * look.scale;
+    (
+        [
+            bar_max[0] - look.right_inset - base * 0.5,
+            bar_max[1] - 4.0 - size * 0.5,
+        ],
+        size,
+    )
+}
+
+/// The unscaled sprite size for a bar `bar_h` tall: also the width the
+/// bar's text keeps clear of at the right end.
+pub fn dj_base_size(bar_h: f32) -> f32 {
+    ((bar_h - 6.0) * 2.0).clamp(48.0, 170.0)
+}
+
+/// [`tick`] of the last favorite-add, 0 = never (`flash_love` stores at
+/// least 1, so 0 stays a safe sentinel).
 static LOVE_FLASH: AtomicU32 = AtomicU32::new(0);
 
 /// Beat phase, fixed-point x16, advanced once per rendered frame while
@@ -193,7 +268,8 @@ fn quip_gap(seed: u32) -> u32 {
 
 /// Fade envelope over the visible window; always in 0..=1.
 fn quip_alpha(vis: u32) -> f32 {
-    let fade_in = (vis as f32 / 12.0).min(1.0);
+    // ~400 ms fade-in: the bubble comes into existence, it does not pop.
+    let fade_in = (vis as f32 / 24.0).min(1.0);
     // ~2 s fade-out — the old 0.5 s read as vanishing mid-sentence.
     let fade_out = (QUIP_SHOW.saturating_sub(vis) as f32 / 120.0).min(1.0);
     fade_in.min(fade_out).clamp(0.0, 1.0)
@@ -318,7 +394,7 @@ pub fn draw_dj_choya(
     ui: &Ui,
     dl: &DrawListMut,
     state: &AddonState,
-    t: u32,
+    look: DjLook,
     bass: f32,
     bar_min: [f32; 2],
     bar_max: [f32; 2],
@@ -326,22 +402,21 @@ pub fn draw_dj_choya(
     let Some(tid) = radio_sheet() else {
         return 0.0;
     };
-    // Twice the bar height, popping OUT of it: feet stand on the bar's
-    // bottom edge, the top half rises over the stations area (the bar draws
-    // after the list, so the DJ reads as standing in front of it). Inset
-    // from the right edge so the hearts column stays clear and clickable.
-    // The clip rises 1.25x the sprite height so a two-line speech bubble
-    // above the head never gets flat-topped.
-    let bar_h = bar_max[1] - bar_min[1];
-    let size = ((bar_h - 6.0) * 2.0).clamp(48.0, 170.0);
-    let center = [
-        bar_max[0] - HEART_CLEARANCE - size * 0.5,
-        bar_max[1] - 4.0 - size * 0.5,
-    ];
-    dl.with_clip_rect_intersect([bar_min[0], bar_min[1] - size * 1.25], bar_max, || {
-        draw_dj_states(ui, dl, tid, state, center, size, t, bass);
-    });
-    HEART_CLEARANCE + size + BADGE_ZONE
+    let t = tick();
+    // Popping OUT of the bar (`dj_placement`): the top half rises over the
+    // stations area (the bar draws after the list, so the DJ reads as
+    // standing in front of it). Inset from the right edge so the hearts
+    // column stays clear and clickable. The clip rises 1.25x the sprite
+    // height so a two-line speech bubble above the head never gets
+    // flat-topped.
+    let (center, size) = dj_placement(look, bar_min, bar_max);
+    let draw = || draw_dj_states(ui, dl, tid, state, center, size, t, bass, look.quips);
+    if look.unclipped {
+        dl.with_clip_rect([0.0, 0.0], ui.io().display_size, draw);
+    } else {
+        dl.with_clip_rect_intersect([bar_min[0], bar_min[1] - size * 1.25], bar_max, draw);
+    }
+    look.right_inset + dj_base_size(bar_max[1] - bar_min[1]) + BADGE_ZONE
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -354,6 +429,7 @@ fn draw_dj_states(
     size: f32,
     t: u32,
     bass: f32,
+    quips: bool,
 ) {
     let playing = state.radio.status == RadioStatus::Playing;
     let muted = playing && state.config.radio.volume_percent == 0;
@@ -449,7 +525,7 @@ fn draw_dj_states(
                 .as_ref()
                 .map(|s| s.tags.to_lowercase())
                 .unwrap_or_default();
-            if let Some((quip, a, h, vis)) = quip_for(t, bass, &tags) {
+            if let Some((quip, a, h, vis)) = quip_for(t, bass, &tags).filter(|_| quips) {
                 draw_quip_bubble(ui, tid, &quip, a, h, vis, center, c, size, sz, t, bass);
             }
             // A gold note drifts up past the deck now and then.
@@ -517,6 +593,10 @@ fn draw_quip_bubble(
     // list and were painting straight over the quip.
     let dl = ui.get_foreground_draw_list();
     let dl = &dl;
+    // Plate, border and text take the mini radio's content opacity; sprite
+    // blits (`sprite_alpha`) already get it inside `blit`.
+    let sprite_alpha = alpha;
+    let alpha = alpha * f32::from_bits(ALPHA_SCALE.load(Ordering::Relaxed));
     // Anchor roulette — ALWAYS above the head (a low "muffled" slot used to
     // land inside the now-playing ticker): centered, left/right leans, and
     // higher/lower altitude variants.
@@ -568,16 +648,26 @@ fn draw_quip_bubble(
         4 => (-size * 0.25, 0.50), // lower, still above the head
         _ => (0.0, 0.62),
     };
-    let (mut bx, by, anchor_pt) = (
-        center[0] + lean,
-        c[1] - sz * altitude - 10.0 - bh * 0.5 + y_off,
-        [c[0], c[1] - sz * 0.42],
-    );
+    let above_y = c[1] - sz * altitude - 10.0 - bh * 0.5 + y_off;
+    // No room above (the mini radio parked at the top of the screen): hang
+    // the bubble under the sprite instead, tail pointing up.
+    let below = quip_goes_below(above_y, bh);
+    let (mut bx, by, anchor_pt) = if below {
+        (
+            center[0] + lean,
+            center[1] + size * 0.5 + 14.0 + bh * 0.5 + y_off.abs(),
+            [c[0], c[1] + sz * 0.42],
+        )
+    } else {
+        (center[0] + lean, above_y, [c[0], c[1] - sz * 0.42])
+    };
     // Never cover the hearts column: clamp to the sprite's right edge.
     let right_limit = center[0] + size * 0.5;
     if bx + bw * 0.5 > right_limit {
         bx = right_limit - bw * 0.5;
     }
+    // And never leave the screen sideways.
+    bx = clamp_to_screen(bx, bw, ui.io().display_size[0]);
 
     // Scale-in pop: first ~10 visible frames grow 70% -> 100% around the
     // anchor point, eased out.
@@ -628,12 +718,17 @@ fn draw_quip_bubble(
     .thickness(1.0)
     .build();
     // Tail after the border so its base covers the border segment cleanly;
-    // always from the bubble's bottom edge down toward the head.
+    // from the edge that faces the head (bottom, or top when flipped).
     let base_x = c[0].clamp(bmin[0] + 8.0, bmax[0] - 8.0);
+    let (edge, tip) = if below {
+        (bmin[1] + 1.0, bmin[1] - 7.0)
+    } else {
+        (bmax[1] - 1.0, bmax[1] + 7.0)
+    };
     dl.add_triangle(
-        [base_x - 5.0, bmax[1] - 1.0],
-        [base_x + 5.0, bmax[1] - 1.0],
-        [base_x + 1.0, bmax[1] + 7.0],
+        [base_x - 5.0, edge],
+        [base_x + 5.0, edge],
+        [base_x + 1.0, tip],
         fill,
     )
     .filled(true)
@@ -669,7 +764,7 @@ fn draw_quip_bubble(
             [bmax[0] - 4.0, bmin[1] - 4.0],
             34.0 * pulse,
             RADIO_ONAIR,
-            alpha,
+            sprite_alpha,
         );
     }
 
@@ -686,8 +781,23 @@ fn draw_quip_bubble(
         let dk = ((t as usize + i * 37) % 90) as f32 / 90.0;
         let x = c[0] + (dk * std::f32::consts::TAU + i as f32).sin() * 6.0;
         let y = c[1] - sz * 0.30 - dk * (18.0 + bass * 14.0);
-        blit(dl, tid, [x, y], ssize, sprite, (1.0 - dk) * alpha);
+        blit(dl, tid, [x, y], ssize, sprite, (1.0 - dk) * sprite_alpha);
     }
+}
+
+/// Whether the quip bubble must hang below the sprite: its above-the-head
+/// spot (`above_y` is the bubble centre) would poke past the screen top.
+fn quip_goes_below(above_y: f32, bubble_h: f32) -> bool {
+    above_y - bubble_h * 0.5 < 0.0
+}
+
+/// Bubble centre x kept so the whole `w`-wide bubble stays on a screen
+/// `screen_w` wide (unknown width, 0, leaves it alone).
+fn clamp_to_screen(x: f32, w: f32, screen_w: f32) -> f32 {
+    if screen_w <= w {
+        return x;
+    }
+    x.clamp(w * 0.5 + 2.0, screen_w - w * 0.5 - 2.0)
 }
 
 /// ON AIR badge to the DJ's left, inside the bar. The sprite EQ strip is
@@ -767,7 +877,12 @@ fn blit(
     dl.add_image(tid, pmin, pmax)
         .uv_min(uv0)
         .uv_max(uv1)
-        .col([1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0)])
+        .col([
+            1.0,
+            1.0,
+            1.0,
+            alpha.clamp(0.0, 1.0) * f32::from_bits(ALPHA_SCALE.load(Ordering::Relaxed)),
+        ])
         .build();
 }
 
@@ -821,6 +936,31 @@ mod tests {
             assert!(y + h <= SHEET_H, "y+h {} past sheet", y + h);
             assert!(w > 0.0 && h > 0.0);
         }
+    }
+
+    #[test]
+    fn with_alpha_resets_after_a_panic() {
+        let r = std::panic::catch_unwind(|| with_alpha(0.25, || panic!("boom")));
+        assert!(r.is_err());
+        assert_eq!(f32::from_bits(ALPHA_SCALE.load(Ordering::Relaxed)), 1.0);
+    }
+
+    #[test]
+    fn quip_flips_below_when_the_strip_is_at_the_top() {
+        // Strip parked at y 10: the bubble centre above the head is negative.
+        assert!(quip_goes_below(-30.0, 40.0));
+        // Just clipping the top edge still flips.
+        assert!(quip_goes_below(15.0, 40.0));
+        // Bottom-of-screen strip: plenty of room above.
+        assert!(!quip_goes_below(900.0, 40.0));
+    }
+
+    #[test]
+    fn quip_bubble_stays_inside_the_screen() {
+        assert_eq!(clamp_to_screen(10.0, 100.0, 1920.0), 52.0);
+        assert_eq!(clamp_to_screen(1900.0, 100.0, 1920.0), 1868.0);
+        assert_eq!(clamp_to_screen(500.0, 100.0, 1920.0), 500.0);
+        assert_eq!(clamp_to_screen(-5.0, 100.0, 0.0), -5.0);
     }
 
     #[test]
@@ -887,6 +1027,10 @@ mod tests {
             assert!((0.0..=1.0).contains(&a), "alpha {a} at vis {vis}");
         }
         assert!(quip_alpha(0) < 0.2); // fades in
+                                      // Slowly: a quarter at 100 ms, half at 200 ms, full at 400 ms.
+        assert!((quip_alpha(6) - 0.25).abs() < 1e-6);
+        assert!((quip_alpha(12) - 0.5).abs() < 1e-6);
+        assert_eq!(quip_alpha(24), 1.0);
         assert_eq!(quip_alpha(QUIP_SHOW / 2), 1.0); // fully visible mid-window
         assert!(quip_alpha(QUIP_SHOW - 1) < 0.2); // fades out
         assert_eq!(quip_alpha(QUIP_SHOW + 500), 0.0); // clamped past the end

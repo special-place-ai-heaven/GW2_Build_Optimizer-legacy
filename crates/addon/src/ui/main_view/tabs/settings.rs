@@ -128,23 +128,6 @@ pub(in crate::ui::main_view) fn render_settings_tab(ui: &Ui, state: &mut AddonSt
     }
 
     ui.dummy([0.0, 8.0]);
-
-    build_display::render_card_header(ui, &t("settings.legend"), theme::pal().muted);
-    ui.spacing();
-    ui.text_colored(
-        [0.3, 0.9, 0.3, 1.0],
-        format!("* {}", t("settings.verified")),
-    );
-    theme::wrapped(ui, theme::pal().muted, &t("settings.verified_note"));
-    ui.text_colored(
-        [0.95, 0.75, 0.15, 1.0],
-        format!("* {}", t("settings.provisional")),
-    );
-    theme::wrapped(ui, theme::pal().muted, &t("settings.provisional_note"));
-    ui.text_colored([1.0, 0.3, 0.2, 1.0], format!("* {}", t("settings.blocked")));
-    theme::wrapped(ui, theme::pal().muted, &t("settings.blocked_note"));
-
-    ui.dummy([0.0, 8.0]);
     build_display::render_card_header(ui, &t("settings.news"), theme::pal().gold);
     render_news_sources(ui, state, col_w);
 
@@ -1776,6 +1759,9 @@ fn render_cache_section(ui: &Ui, state: &mut AddonState) {
     ) {
         state.config.auto_refresh_cache = auto_refresh;
         crate::ui::save_config_detached(state);
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(t("tip.auto_refresh"));
     }
 
     ui.spacing();

@@ -364,6 +364,13 @@ impl RunTracker {
         }
     }
 
+    /// Close the open stage step with what it found.
+    pub(super) fn end_stage_with(&self, detail: impl Into<String>) {
+        if let Some((id, _)) = self.stage.borrow_mut().take() {
+            self.done_with(id, detail);
+        }
+    }
+
     pub(super) fn tier_begin(&self, tier: GenerationTier) {
         let (phase, key) = tier_phase(tier);
         let id = self.begin(phase, t(key), None);

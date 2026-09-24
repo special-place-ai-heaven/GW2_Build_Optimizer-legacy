@@ -352,11 +352,6 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Errors a probe may surface that the caller might want to show.
-pub fn describe_error(e: &LlmError) -> String {
-    e.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

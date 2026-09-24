@@ -219,7 +219,7 @@ fn lock_current_specs(locks: &mut BuildLocks, db: &GameDb, current_specs: &[(u32
     }
 }
 
-/// Render the spec & trait lock panel in the left menu.
+/// Render the spec & trait lock panel on the Improve tab.
 /// Returns true if any lock state was modified.
 ///
 /// `hover_state` holds the single currently-animating element (if any). It persists

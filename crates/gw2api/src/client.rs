@@ -280,8 +280,6 @@ pub enum ApiError {
     RateLimited { retries: u32, url_path: String },
     #[error("cancelled")]
     Cancelled,
-    #[error("Missing required API scopes: {0:?}")]
-    MissingScopes(Vec<String>),
     #[error("invalid endpoint: {0} — must be a relative API path")]
     InvalidEndpoint(String),
     #[error("Cache error: {0}")]
@@ -289,6 +287,10 @@ pub enum ApiError {
     #[error("Internal error: {0}")]
     Internal(String),
 }
+
+/// API key permissions the addon needs: `account` (account name for
+/// feedback), `characters`, and `builds` (build and equipment tabs).
+pub const REQUIRED_SCOPES: [&str; 3] = ["account", "characters", "builds"];
 
 /// Token info returned by /v2/tokeninfo.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -790,25 +792,6 @@ impl Gw2Client {
         Err(last_error.unwrap_or_else(|| {
             ApiError::Internal(format!("icon unavailable after {} attempts", ICON_ATTEMPTS))
         }))
-    }
-
-    /// Validate the client's API key and return token info.
-    /// Checks that required scopes (account, characters, builds) are present.
-    pub fn validate_api_key(&self) -> Result<TokenInfo, ApiError> {
-        let info: TokenInfo = self.get("tokeninfo")?;
-
-        let required = ["account", "characters", "builds"];
-        let missing: Vec<String> = required
-            .iter()
-            .filter(|s| !info.permissions.contains(&s.to_string()))
-            .map(|s| s.to_string())
-            .collect();
-
-        if !missing.is_empty() {
-            return Err(ApiError::MissingScopes(missing));
-        }
-
-        Ok(info)
     }
 
     /// Requires an authenticated client.

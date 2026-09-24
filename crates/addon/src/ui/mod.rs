@@ -8,6 +8,7 @@ mod gear_diff;
 mod gear_sheet;
 pub(crate) mod icons;
 pub mod main_view;
+pub(crate) mod mini_radio;
 pub(crate) mod news_feed;
 pub mod radar_chart;
 pub(crate) mod run_feed;
@@ -29,6 +30,44 @@ pub(crate) fn color_u32(c: [f32; 4]) -> u32 {
     let b = (c[2] * 255.0).clamp(0.0, 255.0) as u32;
     let a = (c[3] * 255.0).clamp(0.0, 255.0) as u32;
     (a << 24) | (b << 16) | (g << 8) | r
+}
+
+thread_local! {
+    static WINDOW_DRAW_LISTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// The current window's draw list, counted. imgui-rs allows one live
+/// `DrawListMut` per list kind in the whole process and panics on a second
+/// ("already loaded"); this names the nesting first in a debug build. Hold
+/// it in the narrowest block that draws and drop it before calling anything
+/// that may draw; a helper that must draw in the caller's scope takes
+/// `&DrawListMut` instead of acquiring. Pinned for the radio UI by
+/// `mini_radio::draw_list_scan`.
+pub(crate) fn window_draw_list<'ui>(ui: &'ui Ui<'ui>) -> WindowDrawList<'ui> {
+    debug_assert_eq!(
+        WINDOW_DRAW_LISTS.with(|d| d.get()),
+        0,
+        "window draw list acquired while another is live"
+    );
+    let dl = ui.get_window_draw_list();
+    WINDOW_DRAW_LISTS.with(|d| d.set(d.get() + 1));
+    WindowDrawList(dl)
+}
+
+/// A [`window_draw_list`] handle; derefs to the `DrawListMut`.
+pub(crate) struct WindowDrawList<'ui>(nexus::imgui::DrawListMut<'ui>);
+
+impl<'ui> std::ops::Deref for WindowDrawList<'ui> {
+    type Target = nexus::imgui::DrawListMut<'ui>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for WindowDrawList<'_> {
+    fn drop(&mut self) {
+        WINDOW_DRAW_LISTS.with(|d| d.set(d.get().saturating_sub(1)));
+    }
 }
 
 use crate::state::{self, AddonState, Screen};
@@ -208,7 +247,21 @@ pub fn render(ui: &Ui) {
     // the overlay closed. Render-thread-only; locks STATE itself, so it must
     // stay outside `with_state`.
     crate::radio::player::duck_tick();
-    if !state::is_window_visible() {
+    // One STATE lock decides both windows: a closed overlay with a hidden
+    // strip costs this lock and nothing else.
+    let display = ui.io().display_size;
+    let Some((main_open, mini)) = state::with_state(|s| {
+        let main_open = s.window_visible;
+        (main_open, mini_radio_frame(s, main_open, display))
+    }) else {
+        return;
+    };
+    // Outside the main window's early return: the mini radio is the one thing
+    // drawn while the overlay is closed.
+    if let Some(mini) = mini {
+        render_mini_radio(ui, mini);
+    }
+    if !main_open {
         return;
     }
 
@@ -322,6 +375,128 @@ pub fn render(ui: &Ui) {
             nexus::log::LogLevel::Warning,
             "GW2BuildOpt",
             "Render panicked — skipping this frame. See debugger or logs for details.",
+        );
+    }
+}
+
+/// The mini radio window. Same shape as the main window below: this function
+/// takes STATE, and the window body gets `&mut AddonState` handed in, so
+/// nothing in `mini_radio` ever locks it.
+///
+/// Visibility is decided under the lock every frame (toggle on, overlay
+/// closed, not unloading). The strip holds no state of its own beyond
+/// `AddonState`, so it keeps working across the overlay opening and closing
+/// and across a game-data refresh.
+/// Per-frame inputs of the mini radio window, decided under the one lock in
+/// [`render`].
+struct MiniFrame {
+    pos: [f32; 2],
+    size: [f32; 2],
+    snap: bool,
+    ui_font: String,
+    ui_lang: String,
+    /// Show/hide transition alpha, 0..1.
+    fade: f32,
+    /// Fading out: still drawn, takes no clicks.
+    leaving: bool,
+}
+
+/// `None` when the strip is hidden this frame. Showing and hiding fade
+/// (`mini_radio::Fade`); unloading hides at once.
+fn mini_radio_frame(s: &mut AddonState, main_open: bool, display: [f32; 2]) -> Option<MiniFrame> {
+    let unloading = s.cancel_token.is_cancelled();
+    let want = mini_radio::visible(s.config.radio.mini_radio.enabled, main_open, unloading);
+    let now = theme::elapsed_ms();
+    s.radio.mini_fade = if unloading {
+        mini_radio::Fade::default()
+    } else {
+        s.radio.mini_fade.toward(want, now)
+    };
+    let fade = s.radio.mini_fade;
+    if !fade.drawn(now) {
+        return None;
+    }
+    let reset = std::mem::take(&mut s.radio.mini_snap);
+    let snap = mini_radio::needs_replace(reset, s.radio.mini_display, display);
+    s.radio.mini_display = display;
+    if snap {
+        s.radio.mini_live_w = None;
+    }
+    let (pos, size) = mini_radio::placement(&s.config.radio.mini_radio, display);
+    // The live width wins only while a corner drag is in flight.
+    let w = s.radio.mini_live_w.unwrap_or(size[0]);
+    Some(MiniFrame {
+        pos,
+        size: [w, mini_radio::height_for(w)],
+        snap,
+        ui_font: s.config.ui_font.clone(),
+        ui_lang: s.config.ui_language.clone(),
+        fade: fade.alpha(now),
+        leaving: !fade.showing,
+    })
+}
+
+fn render_mini_radio(ui: &Ui, frame: MiniFrame) {
+    let MiniFrame {
+        pos,
+        size,
+        snap,
+        ui_font,
+        ui_lang,
+        fade,
+        leaving,
+    } = frame;
+
+    // Same unwind guard as the main window: nothing may cross the FFI edge.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _theme = theme::push(ui, 1.0);
+        let _pad = ui.push_style_var(nexus::imgui::StyleVar::WindowPadding([6.0, 4.0]));
+        let _border = ui.push_style_var(nexus::imgui::StyleVar::WindowBorderSize(0.0));
+        fonts::init(&ui_font, &ui_lang);
+        fonts::init_ticker();
+        let _font = fonts::push(&ui_font, &ui_lang);
+        let pos_cond = if snap {
+            Condition::Always
+        } else {
+            Condition::Appearing
+        };
+        let mut flags = WindowFlags::NO_TITLE_BAR
+            | WindowFlags::NO_SCROLLBAR
+            | WindowFlags::NO_SCROLL_WITH_MOUSE
+            | WindowFlags::NO_COLLAPSE
+            | WindowFlags::NO_SAVED_SETTINGS
+            | WindowFlags::NO_FOCUS_ON_APPEARING
+            | WindowFlags::NO_NAV;
+        if leaving {
+            flags |= WindowFlags::NO_INPUTS;
+        }
+        Window::new("##gw2bo_mini_radio")
+            .flags(flags)
+            .bg_alpha(0.0)
+            .size_constraints(
+                [mini_radio::MIN_W, mini_radio::height_for(mini_radio::MIN_W)],
+                [mini_radio::MAX_W, mini_radio::height_for(mini_radio::MAX_W)],
+            )
+            .position(pos, pos_cond)
+            // Height follows width every frame; only the width is free.
+            .size(size, Condition::Always)
+            .build(ui, || {
+                state::with_state(|s| {
+                    gw2_core::i18n::set_language(&s.config.ui_language);
+                    mini_radio::render_window(ui, s, fade);
+                    if ui.is_window_hovered_with_flags(WindowHoveredFlags::ROOT_AND_CHILD_WINDOWS)
+                        || ui.is_any_item_hovered()
+                    {
+                        ui.set_mouse_cursor(Some(MouseCursor::Arrow));
+                    }
+                });
+            });
+    }));
+    if outcome.is_err() {
+        nexus::log::log(
+            nexus::log::LogLevel::Warning,
+            "GW2BuildOpt",
+            "Mini radio render panicked - skipping this frame.",
         );
     }
 }

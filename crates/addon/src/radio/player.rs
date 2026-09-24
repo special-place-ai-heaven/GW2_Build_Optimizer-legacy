@@ -444,6 +444,9 @@ pub fn resume() {
 /// flag is flipped BEFORE the sink is touched so the watchdog can never see
 /// a pausing sink with an armed stall check.
 fn flag_paused(paused: bool) -> Option<Arc<Player>> {
+    if is_shut_down() {
+        return None;
+    }
     let guard = lock_or_recover(&SESSION);
     let session = guard.as_ref()?;
     session.paused.store(paused, Ordering::Release);
@@ -535,6 +538,9 @@ pub fn set_volume(percent: u8) {
 /// the duck factor). Sink gain only: the visualizer tap is pre-gain by
 /// design. Never locks STATE.
 fn apply_gain() {
+    if is_shut_down() {
+        return;
+    }
     let sink = lock_or_recover(&SESSION)
         .as_ref()
         .and_then(|s| lock_or_recover(&s.sink).clone());
@@ -615,6 +621,9 @@ pub fn eq_levels() -> [f32; EQ_BANDS] {
 /// shut the tokio runtime down (bounded). Called from `on_unload` BEFORE
 /// worker cancellation; must never block long or panic.
 pub fn shutdown() {
+    // Latch first: a frame that runs between this and the worker cancel in
+    // `on_unload` must not start a session after the teardown below.
+    SHUT_DOWN.store(true, Ordering::Release);
     // Invalidate the generation FIRST: if the bounded join below times out
     // while the audio thread sits between its stop check and the tap install,
     // the detached thread would otherwise repopulate TAP after this clear.
@@ -629,7 +638,24 @@ pub fn shutdown() {
 
 // Session lifecycle
 
+/// Set by [`shutdown`]; every entry that would start or touch a session
+/// becomes a no-op. Cleared by [`arm`] on load: a pinned image keeps its
+/// statics across an unload/reload.
+static SHUT_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Allow playback again. Called from `on_load`.
+pub fn arm() {
+    SHUT_DOWN.store(false, Ordering::Release);
+}
+
+fn is_shut_down() -> bool {
+    SHUT_DOWN.load(Ordering::Acquire)
+}
+
 fn start_session(station: RbStation) {
+    if is_shut_down() {
+        return;
+    }
     let my_gen = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     let mut guard = lock_or_recover(&SESSION);
     // Signal the old session but let the NEW audio thread join it: the caller
@@ -1699,6 +1725,23 @@ pub fn station_from_saved(saved: &SavedStation) -> RbStation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nothing_plays_after_shutdown_until_rearmed() {
+        shutdown();
+        play(&RbStation {
+            name: "late".into(),
+            url: "http://example.invalid/stream".into(),
+            ..RbStation::default()
+        });
+        assert!(
+            lock_or_recover(&SESSION).is_none(),
+            "a play after shutdown must not start a session"
+        );
+        assert!(flag_paused(true).is_none());
+        arm();
+        assert!(!is_shut_down());
+    }
 
     #[test]
     fn stream_guard_rejects_reserved_ipv6_literals() {

@@ -248,6 +248,19 @@ pub(super) fn start_fetch_models(state: &mut AddonState) {
     }
 }
 
+/// Start the one automatic game-data refresh of this session? Only when the
+/// user enabled it, setup is complete, the cache is behind the live build,
+/// no load or refresh is running (`busy`), and it has not already run.
+pub(super) fn should_auto_refresh(
+    enabled: bool,
+    setup_complete: bool,
+    stale: bool,
+    busy: bool,
+    already_ran: bool,
+) -> bool {
+    enabled && setup_complete && stale && !busy && !already_ran
+}
+
 /// Re-download game data from the GW2 API, then reload GameDb.
 pub(super) fn start_game_data_refresh(state: &mut AddonState) {
     state.main.game_db_loading = true;
@@ -634,6 +647,24 @@ pub(super) fn compute_3tier_combat(
 mod tests {
     use super::{locale_attempt_allowed, LOCALE_RETRY_INTERVAL};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn auto_refresh_starts_only_when_every_condition_holds() {
+        use super::should_auto_refresh as go;
+        // enabled, setup complete, stale, not busy, not yet run -> start
+        assert!(go(true, true, true, false, false));
+        assert!(!go(false, true, true, false, false), "setting off");
+        assert!(!go(true, false, true, false, false), "setup incomplete");
+        assert!(!go(true, true, false, false, false), "cache current");
+        assert!(
+            !go(true, true, true, true, false),
+            "refresh or load running"
+        );
+        assert!(
+            !go(true, true, true, false, true),
+            "already ran this session"
+        );
+    }
 
     #[test]
     fn api_status_label_puts_live_build_on_ready_and_slow() {

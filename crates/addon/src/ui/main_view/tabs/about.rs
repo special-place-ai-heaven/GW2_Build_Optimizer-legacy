@@ -663,7 +663,7 @@ fn render_messages(ui: &Ui, state: &mut AddonState) {
         .map(|r| ui.calc_text_size(&r.status)[0])
         .fold(ui.calc_text_size(t("about.col.status"))[0], f32::max);
     // ~3s breathe at 60fps for Sending rows (same formula as the tab pills).
-    let pulse = (ui.frame_count() as f32 * 0.0175).sin().abs();
+    let pulse = theme::anim_pulse();
 
     let mut toggle: Option<(String, bool)> = None;
     let mut resend_id: Option<String> = None;

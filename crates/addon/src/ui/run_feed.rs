@@ -245,7 +245,7 @@ pub fn render_generation_pill(
 }
 
 /// One step as text and colour. `now_ms` is the run clock for running steps.
-fn step_line(step: &RunStep, now_ms: Option<u64>, frame: i32) -> (String, [f32; 4]) {
+fn step_line(step: &RunStep, now_ms: Option<u64>) -> (String, [f32; 4]) {
     let th = theme::pal();
     let at = step.at_ms / 1000;
     let clock = format!("{:>2}:{:02}", at / 60, at % 60);
@@ -264,7 +264,7 @@ fn step_line(step: &RunStep, now_ms: Option<u64>, frame: i32) -> (String, [f32; 
         .unwrap_or_default();
     match &step.state {
         StepState::Running => {
-            let spin = ['|', '/', '-', '\\'][((frame / 8).rem_euclid(4)) as usize];
+            let spin = ['|', '/', '-', '\\'][theme::anim_cell(133, 4)];
             let extra = match (step.wait_ms, now_ms) {
                 (Some(wait), Some(now)) => {
                     let left = (step.at_ms + wait).saturating_sub(now) / 1000;
@@ -308,13 +308,12 @@ fn step_line(step: &RunStep, now_ms: Option<u64>, frame: i32) -> (String, [f32; 
 pub fn render_steps(ui: &Ui, steps: &[RunStep], now_ms: Option<u64>, id: &str, max_h: f32) {
     let line_h = ui.text_line_height_with_spacing();
     let h = (steps.len() as f32 * line_h + 10.0).clamp(line_h * 2.0, max_h.max(line_h * 2.0));
-    let frame = ui.frame_count();
     ChildWindow::new(id).size([0.0, h]).build(ui, || {
         // Nested children start at scale 1.0; match the player's.
         theme::font_scale(ui, 1.0);
         let following = ui.scroll_y() >= ui.scroll_max_y() - line_h;
         for step in steps {
-            let (text, colour) = step_line(step, now_ms, frame);
+            let (text, colour) = step_line(step, now_ms);
             ui.text_colored(colour, text);
             // A step whose numbers need saying what they count carries a
             // quiet "?" and explains itself on hover (line or glyph).
@@ -371,7 +370,7 @@ pub fn bubble_lines(live: &LiveFeed, max: usize) -> Vec<String> {
     steps
         .iter()
         .skip(steps.len().saturating_sub(max))
-        .map(|s| clip(&step_line(s, now_ms, 0).0, 120))
+        .map(|s| clip(&step_line(s, now_ms).0, 120))
         .collect()
 }
 
@@ -422,6 +421,11 @@ mod tests {
         for (file, src) in [
             ("run_feed.rs", include_str!("run_feed.rs")),
             ("cost_format.rs", include_str!("cost_format.rs")),
+            // The mini radio window body: `ui::render_mini_radio` holds STATE.
+            ("mini_radio.rs", include_str!("mini_radio.rs")),
+            // Choya's sprites, quip bubble and quip driver draw from it.
+            ("radio/art.rs", include_str!("../radio/art.rs")),
+            ("radio/quips.rs", include_str!("../radio/quips.rs")),
         ] {
             assert!(
                 !production(src).contains("with_state("),

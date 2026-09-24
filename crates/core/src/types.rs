@@ -88,21 +88,6 @@ impl BuildLocks {
         self.specs[2]
     }
 
-    pub fn has_any_locks(&self) -> bool {
-        self.specs.iter().any(|s| s.is_some())
-            || self
-                .trait_locks
-                .values()
-                .any(|cols| cols.iter().any(|c| c.is_some()))
-            || !self.gear_locks.is_empty()
-            || self.food.is_some()
-            || self.utility.is_some()
-            || self
-                .infusion_locks
-                .values()
-                .any(|seats| seats.iter().any(|s| s.is_some()))
-    }
-
     /// Get locked trait for a specific spec and column (0=Adept, 1=Master, 2=Grandmaster).
     pub fn locked_trait(&self, spec_id: u32, column: usize) -> Option<u32> {
         self.trait_locks

@@ -139,6 +139,9 @@ fn on_load() {
         };
 
         let models_dev_dir = addon_dir.clone();
+        // A pinned image keeps statics across unload/reload; undo the
+        // previous unload's playback latch.
+        radio::player::arm();
         state::init(addon_dir);
         let _ = CHROME_AT.set(Instant::now() + CHROME_SETTLE);
 
@@ -185,6 +188,25 @@ fn on_load() {
                             LogLevel::Warning,
                             "GW2 Build Optimizer",
                             "Radio keybind panicked; playback state may be stale.",
+                        );
+                    }
+                }
+            }),
+            "", // unbound by default; the user assigns one in Nexus
+        )
+        .revert_on_unload();
+
+        register_keybind_with_string(
+            "GW2_BUILD_OPT_MINI_RADIO_TOGGLE",
+            keybind_handler!(|_id, is_release| {
+                if !is_release {
+                    // Same ABI-boundary guard as the toggles above: it writes
+                    // config to disk.
+                    if std::panic::catch_unwind(state::toggle_mini_radio).is_err() {
+                        log(
+                            LogLevel::Warning,
+                            "GW2 Build Optimizer",
+                            "Mini radio keybind panicked; its toggle may be stale.",
                         );
                     }
                 }

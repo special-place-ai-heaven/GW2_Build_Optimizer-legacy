@@ -378,6 +378,9 @@ pub struct RadioPreferences {
     /// first open each session; "world music" greets new listeners.
     #[serde(default = "default_radio_genre")]
     pub last_genre: String,
+    /// The mini radio strip shown in game while the overlay is closed.
+    #[serde(default)]
+    pub mini_radio: MiniRadioPrefs,
 }
 
 fn default_radio_genre() -> String {
@@ -396,8 +399,124 @@ impl Default for RadioPreferences {
             duck_in_combat: false,
             ai_quips: false,
             last_genre: default_radio_genre(),
+            mini_radio: MiniRadioPrefs::default(),
         }
     }
+}
+
+/// Mini radio: a small movable strip (controls, equalizer, scrolling title,
+/// Choya) drawn while the main overlay is closed. Struct-level serde default,
+/// so a config without the object, or with only some of its keys, loads the
+/// defaults for whatever is missing.
+///
+/// Colours are RGB 0..=1; `None` means "use the theme colour" and is resolved
+/// against the live palette at draw time, so a theme switch recolours an
+/// untouched strip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MiniRadioPrefs {
+    pub enabled: bool,
+    /// Background plate opacity, 0..=1. Kept low so the strip is see-through.
+    pub bg_opacity: f32,
+    /// Opacity of the bars, text, buttons and Choya, 0..=1.
+    pub content_opacity: f32,
+    /// Top-left corner; `None` = bottom edge, centred above the skill bar.
+    /// A non-finite or malformed value loads as `None`, never as an error.
+    #[serde(deserialize_with = "finite_pair")]
+    pub pos: Option<[f32; 2]>,
+    /// Window size; `None` = derived from the screen width. Same leniency.
+    #[serde(deserialize_with = "finite_pair")]
+    pub size: Option<[f32; 2]>,
+    /// Volume the Mute button put aside, restored by Unmute (also after a
+    /// reload); 0 = nothing muted from the strip.
+    pub unmute_volume: u8,
+    /// Previous/Next step through the favourites instead of the genre list.
+    pub cycle_favourites: bool,
+    pub show_eq: bool,
+    pub show_title: bool,
+    pub show_choya: bool,
+    pub show_quips: bool,
+    /// Choya's size over the strip-derived one, clamped to
+    /// [`MINI_RADIO_CHOYA_SCALE`] at draw time. The strip keeps its height.
+    pub choya_scale: f32,
+    pub eq_color: Option<[f32; 3]>,
+    pub eq_peak_color: Option<[f32; 3]>,
+    pub title_color: Option<[f32; 3]>,
+    pub bg_color: Option<[f32; 3]>,
+    /// Equalizer bars drawn, clamped to [`MINI_RADIO_BARS`] at draw time.
+    pub bar_count: u8,
+    /// Gap between bars in pixels, clamped to [`MINI_RADIO_GAP`].
+    pub bar_gap: u8,
+    /// How tall the bars may reach, as a fraction of their row (0.2..=1.0).
+    pub bar_height: f32,
+}
+
+/// Safe bar-count range for the mini radio equalizer.
+pub const MINI_RADIO_BARS: std::ops::RangeInclusive<u8> = 8..=48;
+/// Safe bar-gap range (pixels) for the mini radio equalizer.
+pub const MINI_RADIO_GAP: std::ops::RangeInclusive<u8> = 0..=6;
+/// Choya size range on the mini radio.
+pub const MINI_RADIO_CHOYA_SCALE: std::ops::RangeInclusive<f32> = 0.5..=2.5;
+
+impl Default for MiniRadioPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bg_opacity: 0.35,
+            content_opacity: 1.0,
+            pos: None,
+            size: None,
+            unmute_volume: 0,
+            cycle_favourites: false,
+            show_eq: true,
+            show_title: true,
+            show_choya: true,
+            show_quips: true,
+            choya_scale: 1.0,
+            eq_color: None,
+            eq_peak_color: None,
+            title_color: None,
+            bg_color: None,
+            bar_count: 24,
+            bar_gap: 2,
+            bar_height: 1.0,
+        }
+    }
+}
+
+impl MiniRadioPrefs {
+    /// Back to the shipped look. Position, size, the on/off toggle and the
+    /// cycle choice are not appearance and are kept.
+    pub fn reset_appearance(&mut self) {
+        let keep = (
+            self.enabled,
+            self.pos,
+            self.size,
+            self.cycle_favourites,
+            self.unmute_volume,
+        );
+        *self = Self::default();
+        (
+            self.enabled,
+            self.pos,
+            self.size,
+            self.cycle_favourites,
+            self.unmute_volume,
+        ) = keep;
+    }
+}
+
+/// A saved `[x, y]` pair, or `None` when it is missing, malformed, or not
+/// finite (serde_json writes NaN as `null`; a bad rect must not reset the
+/// whole config through a parse error).
+fn finite_pair<'de, D>(d: D) -> Result<Option<[f32; 2]>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value::<[f32; 2]>(v)
+        .ok()
+        .filter(|p| p.iter().all(|x| x.is_finite())))
 }
 
 fn default_theme_preset() -> String {
@@ -1308,6 +1427,86 @@ mod tests {
             config.window_rect(),
             (DEFAULT_WINDOW_POS, DEFAULT_WINDOW_SIZE)
         );
+    }
+
+    #[test]
+    fn old_config_without_mini_radio_loads_defaults() {
+        // A pre-mini-radio config: the radio object has no mini_radio key.
+        let json = r#"{"radio":{"volume_percent":40,"ai_quips":true}}"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.radio.volume_percent, 40);
+        assert!(config.radio.ai_quips);
+        assert_eq!(config.radio.mini_radio, MiniRadioPrefs::default());
+        let m = &config.radio.mini_radio;
+        assert!(!m.enabled);
+        assert_eq!(m.bg_opacity, 0.35);
+        assert_eq!(m.content_opacity, 1.0);
+        assert!(m.pos.is_none() && m.size.is_none());
+        assert!(m.show_eq && m.show_title && m.show_choya && m.show_quips);
+        assert_eq!(m.choya_scale, 1.0);
+        assert!(m.eq_color.is_none() && m.bg_color.is_none());
+        // A partial object keeps what it has and defaults the rest.
+        let json = r#"{"radio":{"mini_radio":{"enabled":true,"bar_count":12}}}"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(config.radio.mini_radio.enabled);
+        assert_eq!(config.radio.mini_radio.bar_count, 12);
+        assert_eq!(config.radio.mini_radio.bg_opacity, 0.35);
+    }
+
+    #[test]
+    fn mini_radio_bad_rect_loads_as_default() {
+        let json = r#"{"radio":{"mini_radio":{"enabled":true,
+            "pos":[null,5.0],"size":"wide"}}}"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(config.radio.mini_radio.enabled);
+        assert!(config.radio.mini_radio.pos.is_none());
+        assert!(config.radio.mini_radio.size.is_none());
+        // A NaN written by serde_json (as null) round-trips to None too.
+        let mut c = AppConfig::default();
+        c.radio.mini_radio.pos = Some([f32::NAN, 1.0]);
+        let back: AppConfig = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert!(back.radio.mini_radio.pos.is_none());
+    }
+
+    #[test]
+    fn mini_radio_round_trips() {
+        let mut config = AppConfig::default();
+        let m = &mut config.radio.mini_radio;
+        m.enabled = true;
+        m.bg_opacity = 0.1;
+        m.pos = Some([12.0, 900.0]);
+        m.size = Some([480.0, 88.0]);
+        m.cycle_favourites = true;
+        m.unmute_volume = 45;
+        m.choya_scale = 2.0;
+        m.eq_color = Some([0.2, 0.4, 0.6]);
+        m.bar_count = 32;
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.radio.mini_radio, config.radio.mini_radio);
+    }
+
+    #[test]
+    fn mini_radio_reset_appearance_keeps_placement() {
+        let mut m = MiniRadioPrefs {
+            enabled: true,
+            pos: Some([1.0, 2.0]),
+            size: Some([400.0, 80.0]),
+            cycle_favourites: true,
+            bg_opacity: 0.9,
+            show_eq: false,
+            eq_color: Some([1.0, 0.0, 0.0]),
+            bar_count: 9,
+            ..MiniRadioPrefs::default()
+        };
+        m.reset_appearance();
+        assert!(m.enabled && m.cycle_favourites);
+        assert_eq!(m.pos, Some([1.0, 2.0]));
+        assert_eq!(m.size, Some([400.0, 80.0]));
+        assert_eq!(m.bg_opacity, 0.35);
+        assert!(m.show_eq);
+        assert!(m.eq_color.is_none());
+        assert_eq!(m.bar_count, 24);
     }
 
     #[test]

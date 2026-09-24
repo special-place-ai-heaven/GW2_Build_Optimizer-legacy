@@ -623,6 +623,8 @@ fn render_ranch_table(ui: &Ui, state: &mut AddonState, rows: &[usize]) {
         .collect();
 
     for (name, created, mode, prefix, character) in &snapshot {
+        let prefix =
+            crate::ui::comparison::loc_prefix(state.main.game_db.as_deref(), prefix).to_string();
         paint_row_plate(ui, ROW_H, false);
         let row = ui.cursor_screen_pos();
         let text_y = row[1] + 8.0;

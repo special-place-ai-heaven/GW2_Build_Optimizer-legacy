@@ -16,7 +16,7 @@ pub(super) mod improve;
 pub(super) mod kitchen;
 pub(super) mod new_build;
 pub(super) mod news;
-pub(super) mod radio;
+pub(crate) mod radio;
 pub(super) mod saveload;
 pub(super) mod settings;
 

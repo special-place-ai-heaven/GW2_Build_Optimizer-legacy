@@ -737,7 +737,7 @@ fn row(
     ui.set_cursor_screen_pos([p[0] + ICON + GAP, p[1]]);
     let (prefix_col, slot_col, name_col) = lock_text_colors(interactive, locked);
     if !prefix.is_empty() {
-        ui.text_colored(prefix_col, comparison::loc_name(db, prefix));
+        ui.text_colored(prefix_col, comparison::loc_prefix(db, prefix));
         ui.same_line();
     }
     ui.text_colored(slot_col, slot);
@@ -755,7 +755,7 @@ fn row(
         icons::draw(ui, nested_url, 18.0, [1.0, 1.0, 1.0, 1.0]);
         ui.same_line();
         ui.set_cursor_screen_pos([np[0] + 18.0 + 10.0, np[1]]);
-        ui.text_colored(theme::pal().muted, comparison::loc_name(db, nested));
+        ui.text_colored(theme::pal().muted, comparison::loc_upgrade(db, nested));
         if !interactive {
             comparison::inspect_if_hovered(ui, nested, db);
         }
@@ -856,7 +856,7 @@ fn weapon_row(
     ui.set_cursor_screen_pos([p[0] + ICON + GAP, p[1]]);
     let (prefix_col, slot_col, _) = lock_text_colors(interactive, locked);
     if !prefix.is_empty() {
-        ui.text_colored(prefix_col, comparison::loc_name(db, prefix));
+        ui.text_colored(prefix_col, comparison::loc_prefix(db, prefix));
         ui.same_line();
     }
     ui.text_colored(slot_col, set_label);
@@ -875,7 +875,7 @@ fn weapon_row(
         icons::draw(ui, surl, 18.0, [1.0, 1.0, 1.0, 1.0]);
         ui.same_line();
         ui.set_cursor_screen_pos([sp[0] + 18.0 + 10.0, sp[1]]);
-        ui.text_colored(theme::pal().muted, comparison::loc_name(db, sig));
+        ui.text_colored(theme::pal().muted, comparison::loc_upgrade(db, sig));
         if !interactive {
             comparison::inspect_if_hovered(ui, sig, db);
         }

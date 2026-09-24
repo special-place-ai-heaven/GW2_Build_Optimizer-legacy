@@ -108,4 +108,16 @@ pub struct RadioUiState {
     pub selected_genre: Option<&'static str>,
     /// Results ordering; applied on publish and on combo change.
     pub sort: RadioSort,
+    /// Mini radio: put the strip back at its default spot on the next frame.
+    pub mini_snap: bool,
+    /// Mini radio: width this session, followed live while the corner is
+    /// dragged (the saved width only updates on release).
+    pub mini_live_w: Option<f32>,
+    /// Mini radio: display size seen last frame; a change re-applies the
+    /// clamped placement.
+    pub mini_display: [f32; 2],
+    /// Mini radio: the show/hide fade in flight (or settled).
+    pub mini_fade: crate::ui::mini_radio::Fade,
+    /// Mini radio: the hover-only controls row's fade.
+    pub mini_hover: crate::ui::mini_radio::HoverFade,
 }

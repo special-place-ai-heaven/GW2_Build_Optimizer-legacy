@@ -213,22 +213,6 @@ impl SlotBudgets {
             .map(|e| e.major)
             .unwrap_or(0)
     }
-
-    /// Get the budget entry for a slot type, using the stat shape inferred
-    /// from the number of itemstat attributes.
-    ///
-    /// - 3 attributes → ThreeStat
-    /// - 4 attributes → FourStat
-    /// - 7+ attributes → CelestialLike
-    /// - Other → ThreeStat (safe fallback)
-    pub fn get_for_attr_count(
-        &self,
-        slot: SlotType,
-        attr_count: usize,
-    ) -> Option<&SlotBudgetEntry> {
-        let shape = stat_shape_from_attr_count(attr_count);
-        self.get(slot, shape)
-    }
 }
 
 /// Determine the stat shape from the number of attributes in an itemstat.

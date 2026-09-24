@@ -34,8 +34,7 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
     // Optimization progress banner
     if state.main.optimizing {
         let stopping = state.main.optimize_stage == t("status.stopping");
-        if render_optimization_progress(ui, &state.main.optimize_stage, ui.frame_count(), !stopping)
-        {
+        if render_optimization_progress(ui, &state.main.optimize_stage, !stopping) {
             crate::ui::main_view::optimize_flow::stop_optimization(state);
         }
         crate::ui::run_feed::render_live(ui, &state.main.run_feed);
@@ -85,6 +84,7 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
                 &mut state.main.comparison,
                 true,
                 state.config.cost_currency,
+                state.main.game_db.as_deref(),
             );
             ui.spacing();
 

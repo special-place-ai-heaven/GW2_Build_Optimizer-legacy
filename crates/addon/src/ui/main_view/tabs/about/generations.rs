@@ -1062,7 +1062,7 @@ fn draw_card(
     let y1 = min[1] + ((size[1] - lh * 2.0 - 2.0) * 0.5).max(1.0);
     let y2 = y1 + lh + 2.0;
     if ctx.opening.as_deref() == Some(rec.id.as_str()) {
-        let spin = ['|', '/', '-', '\\'][((ui.frame_count() / 8).rem_euclid(4)) as usize];
+        let spin = ['|', '/', '-', '\\'][theme::anim_cell(133, 4)];
         put(
             ui,
             [x, y1],
@@ -1083,7 +1083,11 @@ fn draw_card(
             put(ui, [x + hw, y1], p.cream, &dps);
             let line = [
                 card.specs.join(" / "),
-                card.prefix_summary.clone(),
+                // Records keep English; show the prefix in the overlay
+                // language. A multi-prefix summary finds no itemstat and
+                // stays as recorded.
+                crate::ui::comparison::loc_prefix(ctx.db.as_deref(), &card.prefix_summary)
+                    .to_string(),
                 card.meter_text.clone(),
             ]
             .into_iter()

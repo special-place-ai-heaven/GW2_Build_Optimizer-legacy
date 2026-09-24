@@ -686,8 +686,6 @@ pub struct MainState {
     pub benchmark_mode_counts: std::collections::HashMap<String, usize>,
     /// Live heartbeat while a sync is running ("12/45", "listing guardian…").
     pub benchmark_live: std::collections::HashMap<String, String>,
-    /// Per-source error after a sync (shown as "down" on that row).
-    pub benchmark_errors: std::collections::HashMap<String, String>,
     pub benchmark_error: Option<String>,
     // Settings
     pub confirm_reset: bool,
@@ -771,6 +769,9 @@ pub struct MainState {
     pub api_health_checking: bool,
     /// Live `/v2/build` id. Compared to `cache_build_number` to prompt a data refresh.
     pub live_build_number: Option<u32>,
+    /// Set once the "Auto-refresh on startup" refresh has been started, so it
+    /// runs at most once per session (see `stats::should_auto_refresh`).
+    pub auto_refresh_done: bool,
     /// Active-manifest vs live `/v2/build` warning from `check_staleness`.
     pub manifest_staleness: Option<String>,
     /// Result of `gw2_optimizer::data::initialize()` at addon load.
@@ -805,8 +806,6 @@ pub struct MainState {
     // Spec & Trait Locks
     /// Granular lock constraints for optimizer (which specs/traits to preserve).
     pub build_locks: BuildLocks,
-    /// Whether the locks panel is expanded in the left menu.
-    pub locks_panel_expanded: bool,
     /// Currently animating hover element in the lock panel (+ its 0..=1 progress).
     /// Lives on `MainState` so the subtle glow lerps smoothly across frames instead
     /// of snapping when `render_lock_panel` returns.
@@ -816,7 +815,7 @@ pub struct MainState {
     /// is editing — an index into `THEME_SLOTS`, matching `CustomTheme`'s
     /// field order (0 bg, 1 panel, 2 accent, 3 text, 4 muted).
     ///
-    /// Transient UI state, like `locks_panel_expanded`. `MainState` derives
+    /// Transient UI state. `MainState` derives
     /// `Default`, so this opens on Background and the picker is never in a
     /// dead "nothing selected" state. Readers clamp with `.min(4)`.
     pub theme_edit_slot: usize,
@@ -925,7 +924,6 @@ pub enum SetupStep {
     Gw2ApiKey,
     LlmApiKey,
     DataDownload,
-    Complete,
 }
 
 #[derive(Default)]
@@ -1140,6 +1138,23 @@ pub fn toggle_window() {
     }
 }
 
+/// Keybind: flip the mini radio on or off. Same shape as [`toggle_window`]:
+/// flip under the lock, save after releasing it.
+pub fn toggle_mini_radio() {
+    let snapshot = {
+        let mut guard = lock_state();
+        let Some(state) = guard.as_mut() else {
+            return;
+        };
+        let mini = &mut state.config.radio.mini_radio;
+        mini.enabled = !mini.enabled;
+        (state.config.clone(), state.config_path.clone())
+    };
+    if let Err(e) = snapshot.0.save(&snapshot.1) {
+        crate::ui::log_disk_error(format!("config save failed: {e}"));
+    }
+}
+
 pub fn persist_window() {
     let snapshot = {
         let mut guard = lock_state();
@@ -1152,13 +1167,6 @@ pub fn persist_window() {
     if let Err(e) = snapshot.0.save(&snapshot.1) {
         crate::ui::log_disk_error(format!("config save failed: {e}"));
     }
-}
-
-pub fn is_window_visible() -> bool {
-    lock_state()
-        .as_ref()
-        .map(|s| s.window_visible)
-        .unwrap_or(false)
 }
 
 /// Ask every background worker to stop, and return immediately.

@@ -403,6 +403,153 @@ weapon-set-2-main, weapon-set-2-off. A key naming a slot the build does not wear
     )
 }
 
+/// What a Choya message asks for. Read before any optimizer work: only
+/// `Build` enters the plating pipeline, the rest are answered in words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageKind {
+    /// A new build, an improve, a compare, "what should I run for X".
+    Build,
+    /// A question about the plate on the pass or a pasted chat code.
+    AboutPlate,
+    /// A Guild Wars 2 question that needs no new build.
+    Question,
+    /// Greetings, thanks, "what can you do".
+    SmallTalk,
+}
+
+impl MessageKind {
+    /// The wire name the classifier prompt asks for.
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::AboutPlate => "about_plate",
+            Self::Question => "question",
+            Self::SmallTalk => "small_talk",
+        }
+    }
+
+    fn from_wire(s: &str) -> Option<Self> {
+        [
+            Self::Build,
+            Self::AboutPlate,
+            Self::Question,
+            Self::SmallTalk,
+        ]
+        .into_iter()
+        .find(|k| k.wire().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// Completion cap for the classifier call: one short JSON object.
+pub const INTENT_MAX_TOKENS: u32 = 120;
+
+/// Completion cap for a spoken reply: six short lines in a JSON string.
+pub const REPLY_MAX_TOKENS: u32 = 1_024;
+
+/// One small request that reads the player's message before anything is
+/// composed. Kept short on purpose: it runs on every message the
+/// deterministic rules could not settle, and a free model counts requests.
+pub fn choya_intent_prompt(message: &str, has_character: bool, has_plate: bool) -> String {
+    format!(
+        r#"Classify one message sent to a Guild Wars 2 build assistant. Do not answer it.
+Kinds:
+- build: they want a build, loadout, improve, gear change, compare of options to equip, or "what should I run for X".
+- about_plate: a question about the build already shown or a build they pasted, answerable without making a new one.
+- question: a Guild Wars 2 question that needs no new build (how a skill works, what a boon does).
+- small_talk: greetings, thanks, jokes, questions about the assistant itself.
+Character selected: {character}. Build on the pass: {plate}.
+<message>
+{message}
+</message>
+Reply with ONLY this JSON: {{"kind": "build|about_plate|question|small_talk", "confidence": 0.0-1.0, "reason": "<one short line>"}}"#,
+        character = if has_character { "yes" } else { "no" },
+        plate = if has_plate { "yes" } else { "no" },
+        message = sanitize_order(message),
+    )
+}
+
+/// The classifier's answer: kind, confidence clamped to 0..1, reason.
+/// `None` when the reply is not the JSON asked for or names no known kind.
+pub fn parse_choya_intent(response: &str) -> Option<(MessageKind, f32, String)> {
+    let json = parse_build_response(response).ok()?;
+    let kind = MessageKind::from_wire(json.get("kind")?.as_str()?)?;
+    let confidence = json
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5)
+        .clamp(0.0, 1.0) as f32;
+    let reason = json
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .chars()
+        .take(160)
+        .collect();
+    Some((kind, confidence, reason))
+}
+
+/// Choya answering in words: small talk, a question, or a question about
+/// the plate on the pass. No tools, no build JSON, no reference data - the
+/// context is the short kitchen brief the player's own screen already shows.
+pub fn choya_reply_prompt(
+    message: &str,
+    kind: MessageKind,
+    kitchen_brief: &str,
+    reply_language: &str,
+) -> String {
+    let task = match kind {
+        MessageKind::SmallTalk => "They are chatting. Answer briefly and warmly-prickly, and if it fits, say in one clause what you can do (compose, improve or judge a build).",
+        MessageKind::AboutPlate => "They are asking about the build in Context (on the pass or pasted). Answer from what Context holds; do not invent numbers it does not show.",
+        _ => "They asked a Guild Wars 2 question. Answer it plainly from what you know; say so when you are not sure.",
+    };
+    format!(
+        r#"You are Choya: a knee-high, melon-bodied cactus from the Crystal Desert, the cook of your colony, advising this player on Guild Wars 2 builds. Prickly, blunt, funny, faintly smug; one flourish per reply at most; no stage directions or emotes.
+
+{task}
+
+When lookup tools are offered, take every trait, skill, item and stat fact from them, not from memory; batch lookups into as few rounds as you can.
+
+Do not compose a build here. If answering properly needs a new or changed build for them, answer what you can and set "compose_plate" to true; the kitchen will plate it next. Otherwise false.
+
+Write "reply" in {reply_language}; Guild Wars 2 names stay in English. At most six short lines. "- " starts a bullet, **Name** marks a game name, newlines inside the JSON string as \n.
+
+The player's message:
+<message>
+{message}
+</message>
+
+Context:
+{kitchen}
+
+Reply with ONLY this JSON: {{"reply": "<your answer>", "compose_plate": false}}"#,
+        message = sanitize_order(message),
+        kitchen = sanitize_build_summary(kitchen_brief),
+    )
+}
+
+/// The spoken reply and whether it asked for a plate. A reply that is not
+/// the JSON asked for is served as it came, with no plate: prose is still
+/// an answer to a question.
+pub fn parse_choya_reply(response: &str) -> (String, bool) {
+    match parse_build_response(response) {
+        Ok(json) => {
+            let reply = json
+                .get("reply")
+                .or_else(|| json.get("explanation"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let plate = json
+                .get("compose_plate")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            (reply, plate)
+        }
+        Err(_) => (response.trim().replace('`', ""), false),
+    }
+}
+
 /// Longest kitchen the prompt will carry, in characters. The profession
 /// reference alone is ~26 KB (`prompt_prefill_size` example); the old cap of
 /// 2,000 characters cut it to its first few lines while the prompt promised
@@ -787,6 +934,48 @@ fn parse_legends_field(value: Option<&serde_json::Value>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn choya_intent_reads_the_asked_json_and_nothing_else() {
+        assert_eq!(
+            parse_choya_intent(
+                "```json\n{\"kind\": \"small_talk\", \"confidence\": 1.7, \"reason\": \"a greeting\"}\n```"
+            ),
+            Some((MessageKind::SmallTalk, 1.0, "a greeting".to_string())),
+            "fenced, confidence clamped"
+        );
+        assert_eq!(
+            parse_choya_intent("{\"kind\": \"BUILD\"}").map(|(k, c, _)| (k, c)),
+            Some((MessageKind::Build, 0.5))
+        );
+        assert_eq!(parse_choya_intent("{\"kind\": \"recipe\"}"), None);
+        assert_eq!(parse_choya_intent("It is small talk."), None);
+        let prompt = choya_intent_prompt("how are you `doing`", false, true);
+        assert!(prompt.contains("how are you doing") && prompt.contains("Build on the pass: yes"));
+        assert!(
+            prompt.len() < 1_500,
+            "a few hundred tokens: {}",
+            prompt.len()
+        );
+    }
+
+    #[test]
+    fn choya_reply_is_served_even_as_prose() {
+        assert_eq!(
+            parse_choya_reply("{\"reply\": \"Grumble.\", \"compose_plate\": true}"),
+            ("Grumble.".to_string(), true)
+        );
+        assert_eq!(
+            parse_choya_reply("Just prose, `no` JSON."),
+            ("Just prose, no JSON.".to_string(), false)
+        );
+        let prompt = choya_reply_prompt("hi", MessageKind::SmallTalk, "Mode: PvE", "Deutsch");
+        assert!(prompt.contains("in Deutsch") && prompt.contains("Mode: PvE"));
+        assert!(
+            !prompt.contains("PROFESSION REFERENCE"),
+            "no plating kitchen"
+        );
+    }
 
     #[test]
     fn chat_prompt_offers_per_slot_mixing() {

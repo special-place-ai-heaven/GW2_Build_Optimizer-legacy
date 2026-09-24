@@ -11,7 +11,7 @@ Four crates (see `Cargo.toml` `[workspace]`) compile into one `cdylib`:
 | `crates/addon` | `cdylib` | Nexus entry point (`lib.rs`), global `AddonState` (`state.rs`), ImGui UI (`ui/`). Linked via the `nexus` crate from [nexus-rs](https://github.com/Zerthox/nexus-rs). |
 | `crates/core` | lib | Shared types (`types.rs`: `ResolvedBuild`, `StatBlock`, `CombatMetrics`, `SavedBuild`), config (`config.rs`: `AppConfig`, `LlmProvider`, per-provider keys/models), persistence (`storage.rs`). |
 | `crates/gw2api` | lib | GW2 API v2 client: rate limiter (300 burst, 5/sec refill), cache (`cache.rs`), bulk download orchestration (`download.rs`, max 200 IDs/request), serde models (`models/`). |
-| `crates/optimizer` | lib | Combat math (`combat.rs`, `stats.rs`), scoring (`scoring.rs`), engine (`engine.rs`), synergy pipeline (`synergy.rs`, `synergy_pipeline.rs`), validation (`validation.rs`), rotation simulator (`rotation/`), LLM clients (`llm/`), prompts (`prompts.rs`), context builder (`context.rs`). |
+| `crates/optimizer` | lib | Combat math (`combat.rs`, `stats.rs`), scoring (`scoring.rs`), engine (`engine.rs`), synergy pipeline (`synergy.rs`, `synergy_pipeline.rs`), validation (`validation.rs`), rotation simulator (`rotation/`), LLM clients (`llm/`), prompts (`prompts.rs`). |
 
 ## Optimization Pipeline (3-Tier Fallback)
 

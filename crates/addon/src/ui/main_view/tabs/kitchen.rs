@@ -9,7 +9,9 @@ use gw2_core::i18n::t;
 
 const MASCOT: f32 = 132.0;
 
-const STARTERS: &[(&str, &str)] = &[
+/// The quick-prompt chips. Each one is a build request, whatever its words
+/// (`chat_flow::classify`).
+pub(in crate::ui::main_view) const STARTERS: &[(&str, &str)] = &[
     (
         "starter.power",
         "Optimize a power DPS build for my current mode and role.",
@@ -83,7 +85,14 @@ pub(in crate::ui::main_view) fn render_talk_tab(ui: &Ui, state: &mut AddonState)
             detail: if build.gear_prefix.is_empty() {
                 build.role.clone()
             } else {
-                format!("{} \u{00b7} {}", build.role, build.gear_prefix)
+                format!(
+                    "{} \u{00b7} {}",
+                    build.role,
+                    crate::ui::comparison::loc_prefix(
+                        state.main.game_db.as_deref(),
+                        &build.gear_prefix
+                    )
+                )
             },
         })
         .collect();

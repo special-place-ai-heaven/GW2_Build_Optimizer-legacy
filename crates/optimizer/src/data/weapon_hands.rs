@@ -216,15 +216,6 @@ pub fn is_legal(profession: &str, weapon: &str, hand: Hand) -> bool {
     !matches!(access(profession, weapon, hand), WeaponAccess::None)
 }
 
-pub fn choya_label(access: &WeaponAccess) -> String {
-    match access {
-        WeaponAccess::None | WeaponAccess::Core => String::new(),
-        WeaponAccess::Elite(name) => format!(" (requires {name} or Weaponmaster Training)"),
-        WeaponAccess::ExpandedSoto => " (requires SotO Expanded Weapon Proficiency)".to_string(),
-        WeaponAccess::SpearJw => " (requires Janthir Wilds Lowland Spear Training)".to_string(),
-    }
-}
-
 impl WeaponAccess {
     /// Tool JSON: `"core"` | elite name | `"expanded_soto"` | `"spear_jw"`.
     pub fn json_token(&self) -> Option<&str> {

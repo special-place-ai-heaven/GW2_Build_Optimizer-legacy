@@ -2,6 +2,26 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## 1.14.46
+
+Choya reads the message before plating; a mini radio strip for when the overlay is closed. SCHEMA CHANGE = N.
+
+- Choya reasons about the message before any optimizer work: quick-prompt chips, build words, pasted chat codes, and greetings/thanks/questions about Choya without game words are caught by rules; anything else goes to one small model call (~200 input tokens, 120 output tokens) that classifies it as build request, plate question, chat-code question, general GW2 question, or small talk. Only build requests enter the plating pipeline. Small talk gets a one-line reply with no reference build, gear ranking, or plate. Questions are answered via the game-data lookup tools (lookup rounds shown in the run feed), no plate. A question that needs a build says "I will compose a plate for that" and switches to build mode. The run feed shows "Reading your message · kind: …"; reply-only runs are recorded in Generations with no build. 14 new strings in all 12 locales. Fixes "how are you doing" running a full Necromancer build.
+- Mini radio (Choya Tunes): a floating, title-bar-less strip shown only while the main overlay is closed (toggle in Choya Tunes, Nexus keybind `GW2_BUILD_OPT_MINI_RADIO_TOGGLE`); default at the bottom edge centred above the skill bar, draggable, width-resizable with height following. Controls previous / play-pause / stop / next / mute / volume, open Choya Tunes, gear popup, hide. Previous/next cycle the selected genre's station list in displayed order with wrap-around, or favourites only via a persisted toggle with a heart marker (disabled with a reason when empty). Equalizer bars, scrolling station·title, dancing Choya with quips (bubble flips below near the top edge); appearance controls for background opacity (0.35 default) separate from content opacity (1.0), per-element visibility (bars, title, Choya, quips, controls with auto-hide until hover), colours for bars/bar peaks/title/background tint with theme fallback and reset, bar count 8-48, gap 0-6, height scale. Nothing has to be playing (idle strip shows the last station and Play); position and size persist and are clamped to the screen; config under `radio.mini_radio` with defaults for old configs. 41 new strings in all 12 locales.
+- Review fixes rolled in: width re-clamped on resolution change, pre-mute volume persisted, a player shut-down flag so no stream starts during unload, one state lock per frame while hidden, panic-safe alpha scope.
+- The Choya Tunes tab's own Choya, title scroller, and heart animation are wall-clock timed like the rest of the overlay.
+
+## 1.14.45
+
+Legacy cleanup: settings that did nothing now work, text that described removed features is gone. SCHEMA CHANGE = N.
+
+- Settings > Cache & Data "Auto-refresh on startup" now works. It was saved but never read. When it is on, setup is complete, and the live `/v2/build` id is newer than the cached data, the addon starts the same refresh as the stale-cache banner's Refresh button, once per session, with the usual live progress. It never starts while a load or refresh is running. The checkbox has a tooltip that says this.
+- Setup wizard: the GW2 API key step lists only the permissions the addon uses (account, characters, builds). It no longer recommends inventories and unlocks, because no endpoint needs them. The list comes from one constant, `gw2_api::client::REQUIRED_SCOPES`. The unused `Gw2Client::validate_api_key` and `ApiError::MissingScopes` are removed.
+- News: the kind filter tabs (All, Articles, Notes, Video, Guides) show their hover hints. The hint texts already existed but nothing displayed them.
+- Removed 99 locale keys from all 12 languages because no code reads them: an old build-display layout, old per-provider setup help, weight preset names that are never offered in the UI, the left-rail Refresh Data button, the setup Complete screen, and old news layouts.
+- Item and stat prefix names follow the game language in more places. The gear sheet prefix, rune and sigil lines, the option tab label, the benchmark reference, Saves rows, Choya's reference cards and the Generations cards now use `GameDb::loc_prefix` and `GameDb::loc_item`. Before, a prefix written without "'s" or a rune written without "Superior" stayed English. Chat codes, LLM prompts and records keep English names.
+- Removed dead code: `SetupStep::Complete` (never entered), `MainState::benchmark_errors` and `locks_panel_expanded` (never read), `BuildLocks::has_any_locks`, `i18n::current_choya_name`, and the unused Gemini context builder (`optimizer::context`, `context_combo`, `weapon_hands::choya_label`). Also removed eight optimizer helpers with no callers: `traits_granting_buff`, `skills_granting_buff`, `flags_compatible`, `describe_error`, `with_combat_kind`, `get_for_attr_count`, `prefix_flavour` and `damage_flavour`, plus the `Flavour` enum.
+
 ## 1.14.44
 
 Generation records, live run feed, Generations tab. SCHEMA CHANGE = N.

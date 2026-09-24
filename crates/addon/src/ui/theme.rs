@@ -1103,7 +1103,7 @@ pub fn header(ui: &Ui, title: &str) {
     let width = ui.content_region_avail()[0];
     let p = pal();
     {
-        let dl = ui.get_window_draw_list();
+        let dl = super::window_draw_list(ui);
         dl.add_rect(
             [start[0] - 1.0, start[1]],
             [start[0] + width + 1.0, start[1] + 22.0],
@@ -1191,7 +1191,7 @@ pub fn download_scribble(ui: &Ui, fraction: f32, caption: &str) {
     let origin = ui.cursor_screen_pos();
     let p = [origin[0] + SIDE, origin[1]];
     let _ = ui.invisible_button("##dl_scribble", [full, total_h]);
-    let t = ui.frame_count() as f32;
+    let t = elapsed_ms() as f32 / 1000.0;
     let labels = ["Bronze", "Silver", "Gold", "GEM"];
     let end_half = ui.calc_text_size(labels[0])[0].max(ui.calc_text_size(labels[3])[0]) * 0.5 + 6.0;
     let theme = pal();
@@ -1247,7 +1247,7 @@ pub fn download_scribble(ui: &Ui, fraction: f32, caption: &str) {
         let mut prev = [track_x0, line_y];
         let mut x = track_x0 + 4.0;
         while x <= track_x1 {
-            let wobble = ((x * 0.18 + t * 0.04).sin()) * 1.1;
+            let wobble = ((x * 0.18 + t * 2.4).sin()) * 1.1;
             let cur = [x, line_y + wobble];
             dl.add_line(prev, cur, theme.gold_dim)
                 .thickness(1.2)
@@ -1283,7 +1283,7 @@ pub fn download_scribble(ui: &Ui, fraction: f32, caption: &str) {
             labels[3],
         );
 
-        let t_slow = t * 0.032;
+        let t_slow = t * 1.92;
         let sway = t_slow.sin();
         let hop = (t_slow * 0.7).sin().abs() * 6.0;
         let feet_x = (fill_x + sway * 6.0).clamp(track_x0, track_x1);
@@ -1439,6 +1439,54 @@ const CHOYA_SLEEP: [f32; 4] = [1180.0, 700.0, 311.0, 265.0];
 /// Isolated belly-sleep + Zzz on sheet 2. Tight crop — the sheet-1 rect packed several icons.
 const CHOYA2_SLEEP: [f32; 4] = [871.0, 630.0, 206.0, 128.0];
 
+/// Process-start instant. Wall-clock, monotonic — never the system clock, so
+/// animations stay correct across NTP adjustments and DST.
+static ANIM_START: OnceLock<Instant> = OnceLock::new();
+
+/// Milliseconds since the addon started rendering. The single time source for
+/// every animation below, so a sprite advances at the same real-world speed
+/// on a 60 Hz and a 240 Hz monitor alike (`ui.frame_count()` does not).
+pub(crate) fn elapsed_ms() -> u64 {
+    ANIM_START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// Pure core of [`anim_cell`], split out so tests can drive it with
+/// simulated elapsed times instead of real wall-clock time.
+fn anim_cell_at(elapsed_ms: u64, cell_ms: u64, cells: usize) -> usize {
+    if cells == 0 {
+        return 0;
+    }
+    ((elapsed_ms / cell_ms.max(1)) as usize) % cells
+}
+
+/// Cycle through `cells` animation frames, `cell_ms` wall-clock milliseconds
+/// each. Replaces `frame_count() / n` so pacing is framerate-independent.
+pub fn anim_cell(cell_ms: u64, cells: usize) -> usize {
+    anim_cell_at(elapsed_ms(), cell_ms, cells)
+}
+
+/// Pure core of [`anim_pulse`]; see [`anim_cell_at`].
+fn anim_pulse_at(elapsed_ms: u64) -> f32 {
+    (elapsed_ms as f32 / 1000.0 * 1.05).sin().abs()
+}
+
+/// `abs(sin(t))` pulse, `t` in wall-clock seconds. Replaces
+/// `frame_count() as f32 * 0.0175` (0.0175 rad/frame at 60 fps = 1.05 rad/s).
+pub fn anim_pulse() -> f32 {
+    anim_pulse_at(elapsed_ms())
+}
+
+/// Radians accumulated at `rad_per_sec` since start. Replaces
+/// `frame_count() as f32 * k` (`rad_per_sec == k * 60.0`, the 60 fps the old
+/// per-frame constants were tuned against).
+fn anim_phase_at(elapsed_ms: u64, rad_per_sec: f32) -> f32 {
+    elapsed_ms as f32 / 1000.0 * rad_per_sec
+}
+
+pub fn anim_phase(rad_per_sec: f32) -> f32 {
+    anim_phase_at(elapsed_ms(), rad_per_sec)
+}
+
 fn choya_sheet() -> Option<TextureId> {
     embedded_tex(
         "GW2BO_CHOYA_SHEET",
@@ -1555,11 +1603,11 @@ fn draw_choya(ui: &Ui, dl: &DrawListMut, feet: [f32; 2], height: f32, sway: f32,
 /// Face portraits from sheet 2. `center` is the avatar slot center.
 pub fn draw_choya_avatar(ui: &Ui, center: [f32; 2], size: f32) {
     let Some(tid) = choya_sheet2() else {
-        let i = (ui.frame_count() as usize / 6) % CHOYA_IDLE.len();
+        let i = anim_cell(100, CHOYA_IDLE.len());
         blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_IDLE[i]);
         return;
     };
-    let i = (ui.frame_count() as usize / 48) % CHOYA2_FACE.len();
+    let i = anim_cell(800, CHOYA2_FACE.len());
     blit_frame(
         &ui.get_window_draw_list(),
         tid,
@@ -1598,7 +1646,7 @@ pub fn draw_choya_hero(ui: &Ui, center: [f32; 2], size: f32) {
         size * 0.44,
         CHOYA2_SHADES,
     );
-    let t = ui.frame_count() as f32 * 0.035;
+    let t = anim_phase(2.1);
     let bounce = t.sin() * size * 0.05;
     blit_frame(
         &dl,
@@ -1642,17 +1690,17 @@ pub fn draw_choya_hero(ui: &Ui, center: [f32; 2], size: f32) {
 /// "working" and "idle" looked the same. A brisk walk is unmistakably awake.
 pub fn draw_choya_thinking(ui: &Ui, center: [f32; 2], size: f32) {
     if choya_sheet2().is_some() {
-        draw_choya_walk_paced(ui, center, size, 8);
+        draw_choya_walk_paced(ui, center, size, 133);
         return;
     }
-    let i = (ui.frame_count() as usize / 5) % CHOYA_IDLE.len();
+    let i = anim_cell(83, CHOYA_IDLE.len());
     blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_IDLE[i]);
 }
 
 /// The chat row's working pose: the nine-frame maraca bob from sheet 1.
 /// Header paces, row bobs, composer blinks — three slots, three motions.
 pub fn draw_choya_thinking_row(ui: &Ui, center: [f32; 2], size: f32) {
-    let i = (ui.frame_count() as usize / 6) % CHOYA_IDLE.len();
+    let i = anim_cell(100, CHOYA_IDLE.len());
     blit_choya_frame(&ui.get_window_draw_list(), center, size, CHOYA_IDLE[i]);
 }
 
@@ -1668,16 +1716,15 @@ pub fn draw_choya_peek(ui: &Ui, center: [f32; 2], size: f32) {
 
 /// Six-frame bounce from sheet 2 (composer / small slots).
 pub fn draw_choya_walk(ui: &Ui, center: [f32; 2], size: f32) {
-    draw_choya_walk_paced(ui, center, size, 14);
+    draw_choya_walk_paced(ui, center, size, 233);
 }
 
-pub fn draw_choya_walk_paced(ui: &Ui, center: [f32; 2], size: f32, frames_per_cell: usize) {
+pub fn draw_choya_walk_paced(ui: &Ui, center: [f32; 2], size: f32, cell_ms: u64) {
     let Some(tid) = choya_sheet2() else {
         draw_choya_avatar(ui, center, size);
         return;
     };
-    let step = frames_per_cell.max(1);
-    let i = (ui.frame_count() as usize / step) % CHOYA2_WALK.len();
+    let i = anim_cell(cell_ms, CHOYA2_WALK.len());
     blit_frame(
         &ui.get_window_draw_list(),
         tid,
@@ -1720,12 +1767,11 @@ pub fn draw_free_choya(ui: &Ui, anchor: [f32; 2], row_h: f32, rise: f32) {
         return;
     }
     let size = (row_h * 1.9).clamp(28.0, 64.0);
-    let t = ui.frame_count() as f32;
     // Slow, because a fast dance beside a settings control reads as a bug.
     // Two rates that do not divide evenly, so the sway and the bob drift
     // against each other and the loop never looks like a loop.
-    let sway = (t * 0.045).sin() * size * 0.10;
-    let bob = (t * 0.031).sin() * size * 0.05;
+    let sway = anim_phase(2.7).sin() * size * 0.10;
+    let bob = anim_phase(1.86).sin() * size * 0.05;
     // Travels its own height on the way in, so it looks like it climbed out
     // from behind the row.
     let hidden = size * 0.9;
@@ -1770,7 +1816,7 @@ pub fn draw_free_choya(ui: &Ui, anchor: [f32; 2], row_h: f32, rise: f32) {
         CHOYA2_MARACA2,
         rise,
     );
-    let note = (t * 0.02).fract();
+    let note = (elapsed_ms() as f32 / 1000.0 * 1.2).fract();
     blit_alpha(
         &dl,
         tid,
@@ -2354,6 +2400,130 @@ mod tests {
         assert_eq!(super::list_mark("plain"), None);
         assert!(super::plain_section("Open World"));
         assert!(!super::plain_section("See below for details."));
+    }
+}
+
+#[cfg(test)]
+mod anim_timing_tests {
+    use super::{anim_cell_at, anim_phase_at, anim_pulse_at, elapsed_ms};
+
+    /// Every animation cell duration in use, paired with its cycle length.
+    /// Mirrors the actual call sites: idle fallback, thinking row, header
+    /// walk (paced 133ms), composer walk (paced 233ms), and the "opening"
+    /// spinner.
+    const CASES: [(u64, usize); 5] = [(83, 6), (100, 6), (133, 6), (233, 6), (133, 4)];
+
+    /// Simulate rendering at a fixed frame rate up to `total_ms`, returning
+    /// the millisecond timestamp of the frame actually on screen at each
+    /// wall-clock instant in `sample_points_ms`.
+    fn displayed_ms_at_samples(hz: f64, total_ms: u64, sample_points_ms: &[u64]) -> Vec<u64> {
+        let step_ms = 1000.0 / hz;
+        let mut frame_ms = Vec::new();
+        let mut t = 0.0f64;
+        while t <= total_ms as f64 {
+            frame_ms.push(t.floor() as u64);
+            t += step_ms;
+        }
+        let mut out = Vec::with_capacity(sample_points_ms.len());
+        let mut fi = 0usize;
+        for &sample in sample_points_ms {
+            while fi + 1 < frame_ms.len() && frame_ms[fi + 1] <= sample {
+                fi += 1;
+            }
+            out.push(frame_ms[fi]);
+        }
+        out
+    }
+
+    /// Shortest distance between two cell indices around a `modulus`-cycle,
+    /// e.g. `cyclic_diff(5, 0, 6) == 1` (wraps), not 5.
+    fn cyclic_diff(a: usize, b: usize, modulus: usize) -> usize {
+        let raw = a.abs_diff(b);
+        raw.min(modulus - raw)
+    }
+
+    /// The whole point of driving animation off wall-clock time instead of
+    /// `frame_count()`: a 60/144/240 Hz monitor must show the same cell at
+    /// the same wall-clock instant, and advance at the same long-run rate.
+    /// A coarser monitor can lag the finer ones by at most one of *its own*
+    /// frames (it simply hasn't rendered yet) — that is normal display
+    /// latency, not a speed difference, so the tolerance is one cell step,
+    /// not exact equality.
+    #[test]
+    fn anim_cell_is_frame_rate_independent() {
+        let total_ms = 5000u64;
+        let sample_points: Vec<u64> = (0..=total_ms).step_by(50).collect();
+        let rates = [60.0f64, 144.0, 240.0];
+
+        for &(cell_ms, cells) in &CASES {
+            let sequences: Vec<Vec<usize>> = rates
+                .iter()
+                .map(|&hz| {
+                    displayed_ms_at_samples(hz, total_ms, &sample_points)
+                        .into_iter()
+                        .map(|ms| anim_cell_at(ms, cell_ms, cells))
+                        .collect()
+                })
+                .collect();
+            for pair in sequences.windows(2) {
+                for (a, b) in pair[0].iter().zip(&pair[1]) {
+                    assert!(
+                        cyclic_diff(*a, *b, cells) <= 1,
+                        "cell_ms={cell_ms}: {a} vs {b} — more than one frame's display lag"
+                    );
+                }
+            }
+
+            // Advance rate: every rate must cover the same distance in cell
+            // space over 5s, within one cell (the trailing partial cell may
+            // or may not have completed depending on rounding).
+            let expected = total_ms as f64 / cell_ms as f64;
+            for &hz in &rates {
+                let step_ms = 1000.0 / hz;
+                let mut frame_ms = Vec::new();
+                let mut t = 0.0f64;
+                while t <= total_ms as f64 {
+                    frame_ms.push(t.floor() as u64);
+                    t += step_ms;
+                }
+                let advances = frame_ms
+                    .windows(2)
+                    .filter(|w| {
+                        anim_cell_at(w[0], cell_ms, cells) != anim_cell_at(w[1], cell_ms, cells)
+                    })
+                    .count() as f64;
+                assert!(
+                    (advances - expected).abs() <= 1.0,
+                    "cell_ms={cell_ms} @ {hz}Hz: {advances} advances over {total_ms}ms, expected ~{expected}"
+                );
+            }
+        }
+    }
+
+    /// Pulse math at one fixed instant — the sin curve itself doesn't need a
+    /// framerate sweep, just a check it reads from the same time source.
+    #[test]
+    fn anim_pulse_matches_expected_curve_at_one_second() {
+        let got = anim_pulse_at(1000);
+        let want = (1.05f32).sin().abs();
+        assert!((got - want).abs() < 1e-6);
+    }
+
+    /// `draw_choya_hero`'s maraca bounce (`anim_phase(2.1)`) at one instant —
+    /// same reasoning as the pulse check above.
+    #[test]
+    fn anim_phase_matches_hero_bounce_at_one_second() {
+        let got = anim_phase_at(1000, 2.1);
+        let want = 2.1f32;
+        assert!((got - want).abs() < 1e-6);
+    }
+
+    /// The real clock never goes backward between two reads.
+    #[test]
+    fn elapsed_ms_is_monotonic() {
+        let a = elapsed_ms();
+        let b = elapsed_ms();
+        assert!(b >= a);
     }
 }
 

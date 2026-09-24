@@ -130,18 +130,34 @@ fn kind_filters(ui: &Ui, state: &mut AddonState) {
     ui.same_line_with_spacing(0.0, 8.0);
 
     // Order: All -> Articles -> Notes -> Videos -> Guides. All keeps filter=None.
-    let kinds: [(Option<NewsKind>, &str); 5] = [
-        (None, "news.kind.all"),
-        (Some(NewsKind::Articles), "news.kind.articles"),
-        (Some(NewsKind::Notes), "news.kind.notes"),
-        (Some(NewsKind::Video), "news.kind.video"),
-        (Some(NewsKind::Guides), "news.kind.guides"),
+    let kinds: [(Option<NewsKind>, &str, &str); 5] = [
+        (None, "news.kind.all", "news.kind.all.hint"),
+        (
+            Some(NewsKind::Articles),
+            "news.kind.articles",
+            "news.kind.articles.hint",
+        ),
+        (
+            Some(NewsKind::Notes),
+            "news.kind.notes",
+            "news.kind.notes.hint",
+        ),
+        (
+            Some(NewsKind::Video),
+            "news.kind.video",
+            "news.kind.video.hint",
+        ),
+        (
+            Some(NewsKind::Guides),
+            "news.kind.guides",
+            "news.kind.guides.hint",
+        ),
     ];
     let h = theme::control_height(ui);
     let avail = ui.content_region_avail()[0];
     let mut row_x = 0.0_f32;
     let mut pick = None;
-    for (i, (kind, label_key)) in kinds.iter().enumerate() {
+    for (i, (kind, label_key, hint_key)) in kinds.iter().enumerate() {
         let label = t(label_key);
         let w = kind_filter_tab_width(ui, &label, h);
         theme::wrap_chip(ui, avail, &mut row_x, w, 4.0);
@@ -149,6 +165,7 @@ fn kind_filters(ui: &Ui, state: &mut AddonState) {
         if kind_filter_tab(ui, &format!("##news_kind_{i}"), &label, w, h, on, *kind) && !on {
             pick = Some(*kind);
         }
+        hover_hint(ui, hint_key);
     }
     if let Some(kind) = pick {
         state.news.filter = kind;

@@ -209,24 +209,6 @@ pub fn is_stat_infusion(item: &Item) -> bool {
     })
 }
 
-/// Does this upgrade's `infusion_upgrade_flags` match the seat flags?
-pub fn flags_compatible(item: &Item, seat_flags: &[String]) -> bool {
-    let Some(details) = item.details.as_ref() else {
-        return false;
-    };
-    if seat_flags.is_empty() {
-        return true;
-    }
-    // A seat accepts an upgrade when every seat flag appears on the upgrade
-    // (API: Infusion seats take Infusion-flagged upgrades; Enrichment likewise).
-    seat_flags.iter().all(|need| {
-        details
-            .infusion_upgrade_flags
-            .iter()
-            .any(|have| have.eq_ignore_ascii_case(need))
-    })
-}
-
 /// Mode legality for infusion upgrades. Empty `game_types` (fixtures) is legal
 /// everywhere; live rows always carry the list. PvP has no seats, so callers
 /// short-circuit before consulting this.

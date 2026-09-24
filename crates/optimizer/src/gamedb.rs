@@ -259,7 +259,7 @@ impl GameDb {
 
         // Deduplicate (a trait/skill may have multiple Buff facts for same condition).
         // Also sort the profession/spec/type indexes so downstream consumers
-        // (`profession_skills()`, `section_profession_skills()`, LLM tool execs)
+        // (`profession_skills()`, LLM tool execs)
         // get a stable order across runs — these Vecs were previously populated
         // from `HashMap::values()` iteration which has non-deterministic order.
         for ids in traits_by_condition.values_mut() {
@@ -806,20 +806,6 @@ impl GameDb {
     pub fn skills_applying_condition(&self, condition: &str) -> Vec<&Skill> {
         self.skills_by_condition
             .get(condition_index_key(condition))
-            .map(|ids| ids.iter().filter_map(|id| self.skills.get(id)).collect())
-            .unwrap_or_default()
-    }
-
-    pub fn traits_granting_buff(&self, buff: &str) -> Vec<&GW2Trait> {
-        self.traits_by_buff
-            .get(buff)
-            .map(|ids| ids.iter().filter_map(|id| self.traits.get(id)).collect())
-            .unwrap_or_default()
-    }
-
-    pub fn skills_granting_buff(&self, buff: &str) -> Vec<&Skill> {
-        self.skills_by_buff
-            .get(buff)
             .map(|ids| ids.iter().filter_map(|id| self.skills.get(id)).collect())
             .unwrap_or_default()
     }

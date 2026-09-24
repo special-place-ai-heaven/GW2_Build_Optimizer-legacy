@@ -137,6 +137,26 @@ pub fn loc_name<'a>(db: Option<&'a GameDb>, english: &'a str) -> &'a str {
     db.map(|d| d.loc_name(english)).unwrap_or(english)
 }
 
+/// A stat prefix ("Marauder", "Berserker's") in the overlay language. Goes
+/// through the itemstat lookup, which tolerates the missing "'s" that plan
+/// names drop; English when no name pack is attached or the name is unknown.
+pub fn loc_prefix<'a>(db: Option<&'a GameDb>, english: &'a str) -> &'a str {
+    db.map(|d| d.loc_prefix(english)).unwrap_or(english)
+}
+
+/// A rune, sigil or relic in the overlay language. Plan names drop the
+/// "Superior " the item carries, so the by-name overlay misses them: resolve
+/// the item id first, then [`GameDb::loc_item`]. Falls back to [`loc_name`].
+pub fn loc_upgrade<'a>(db: Option<&'a GameDb>, english: &'a str) -> &'a str {
+    let Some(d) = db else {
+        return english;
+    };
+    match find_upgrade_item(d, english) {
+        Some(item) => d.loc_item(item.id, english),
+        None => d.loc_name(english),
+    }
+}
+
 pub(crate) fn compact_stance_name(name: &str) -> String {
     name.trim_start_matches("Legendary ")
         .trim_end_matches(" Stance")
@@ -514,7 +534,7 @@ pub fn tab_kind_colour(kind: &TabKind) -> [f32; 4] {
 }
 
 /// The tab's text: a published build carries its site's name first.
-pub fn tab_label(suggestion: &BuildSuggestion, i: usize) -> String {
+pub fn tab_label(suggestion: &BuildSuggestion, i: usize, db: Option<&GameDb>) -> String {
     let base = if suggestion.label.is_empty() {
         tf("fmt.build_n", &[("n", &(i + 1).to_string())])
     } else if suggestion.label.starts_with("Score:") {
@@ -522,7 +542,7 @@ pub fn tab_label(suggestion: &BuildSuggestion, i: usize) -> String {
             "fmt.option_n",
             &[
                 ("n", &(i + 1).to_string()),
-                ("prefix", &suggestion.stat_prefix),
+                ("prefix", loc_prefix(db, &suggestion.stat_prefix)),
             ],
         )
     } else {
@@ -607,6 +627,7 @@ pub fn render_tab_strip(
     comparison: &mut ComparisonState,
     has_current: bool,
     currency: gw2_core::config::CostCurrency,
+    db: Option<&GameDb>,
 ) {
     let tab_count = comparison.suggestions.len();
     // The run behind the selected tab, else the newest run on the strip.
@@ -645,7 +666,7 @@ pub fn render_tab_strip(
         }
         for (i, suggestion) in comparison.suggestions.iter().enumerate() {
             tabs.push((
-                tab_label(suggestion, i),
+                tab_label(suggestion, i, db),
                 comparison.show_optimized && comparison.selected_suggestion == i,
                 tab_kind_colour(&tab_kind(suggestion)),
                 Some(i),
@@ -733,7 +754,7 @@ pub fn render_comparison(
     }
 
     let tab_count = comparison.suggestions.len();
-    render_tab_strip(ui, comparison, has_current, currency);
+    render_tab_strip(ui, comparison, has_current, currency, db);
 
     let idx = comparison.selected_suggestion.min(tab_count - 1);
     comparison.selected_suggestion = idx;
@@ -917,7 +938,7 @@ pub(crate) fn render_stats_pane(
     if let Some(ref viability) = suggestion.viability {
         render_viability_report(ui, viability);
     }
-    render_benchmark_delta(ui, suggestion);
+    render_benchmark_delta(ui, suggestion, db);
     if !suggestion.changes_made.is_empty() {
         ui.spacing();
         ui.text_colored(crate::ui::theme::pal().gold, t("section.changes"));
@@ -1278,7 +1299,7 @@ fn published_role(build_summary: &str) -> &str {
         .trim()
 }
 
-fn render_benchmark_delta(ui: &Ui, suggestion: &BuildSuggestion) {
+fn render_benchmark_delta(ui: &Ui, suggestion: &BuildSuggestion, db: Option<&GameDb>) {
     // A published reference IS the yardstick. Scoring it against itself
     // printed "no benchmark data" on a tab that is benchmark data.
     if !suggestion.source_url.is_empty() {
@@ -1467,7 +1488,7 @@ fn render_benchmark_delta(ui: &Ui, suggestion: &BuildSuggestion) {
                         &[
                             ("prof", &delta.profession),
                             ("role", &delta.role),
-                            ("gear", &delta.ref_gear_prefix),
+                            ("gear", loc_prefix(db, &delta.ref_gear_prefix)),
                             ("src", &delta.source),
                         ],
                     )
@@ -1674,6 +1695,64 @@ mod tests {
         assert!(tip.contains("+5% Strike Damage"), "{tip}");
     }
 
+    /// German overlay: the rune and the prefix read in German when the `de`
+    /// name pack is in the cache, and in English when it is not. Loads the
+    /// pack the way `stats::ensure_localized_names` does (api_lang ->
+    /// localize::load -> attach_localized).
+    #[test]
+    fn german_pack_localizes_upgrade_and_prefix_names_else_english() {
+        let dir = std::env::temp_dir().join(format!("gw2bo_loc_de_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = gw2_api::cache::DataCache::new(&dir);
+        let lang = gw2_core::i18n::api_lang("de").expect("de has official names");
+
+        let db_with = |pack: Option<gw2_api::localize::LocalizedNames>| {
+            let mut db = inspect_db_with_skill();
+            let stat: gw2_api::models::ItemStat = serde_json::from_value(serde_json::json!({
+                "id": 161, "name": "Berserker's", "attributes": []
+            }))
+            .expect("itemstat fixture");
+            db.itemstats.insert(161, stat);
+            if let Some(names) = pack {
+                db.attach_localized(names);
+            }
+            db
+        };
+
+        // No pack in the cache yet: English.
+        let missing = gw2_api::localize::load(&cache, lang, Some(1)).expect("load");
+        assert!(missing.is_none());
+        let db = db_with(missing);
+        assert_eq!(
+            loc_upgrade(Some(&db), "Rune of the Scholar"),
+            "Rune of the Scholar"
+        );
+        assert_eq!(loc_prefix(Some(&db), "Berserker"), "Berserker");
+
+        // Pack present: German, by item id and by itemstat.
+        let mut names = gw2_api::localize::LocalizedNames {
+            lang: lang.into(),
+            ..Default::default()
+        };
+        names
+            .items
+            .insert(2, "Überlegene Rune des Gelehrten".into());
+        names.itemstats.insert(161, "Berserker".into());
+        cache
+            .save(&gw2_api::localize::cache_key(lang), &names, 1)
+            .expect("save pack");
+        let loaded = gw2_api::localize::load(&cache, lang, Some(1)).expect("load");
+        let db = db_with(loaded);
+        assert_eq!(
+            loc_upgrade(Some(&db), "Rune of the Scholar"),
+            "Überlegene Rune des Gelehrten"
+        );
+        assert_eq!(loc_prefix(Some(&db), "Berserker's"), "Berserker");
+        assert_eq!(loc_prefix(None, "Berserker's"), "Berserker's");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn compact_pet_name_strips_juvenile() {
         assert_eq!(compact_pet_name("Juvenile Smokescale"), "Smokescale");
@@ -1806,10 +1885,10 @@ mod tab_tests {
     #[test]
     fn published_label_is_site_and_build() {
         let s = published("Reaper", "https://www.hardstuck.gg/gw2/builds/x");
-        assert_eq!(tab_label(&s, 0), "Hardstuck \u{00b7} Reaper");
-        assert_eq!(tab_label(&published("Reaper", ""), 0), "Reaper");
+        assert_eq!(tab_label(&s, 0, None), "Hardstuck \u{00b7} Reaper");
+        assert_eq!(tab_label(&published("Reaper", ""), 0, None), "Reaper");
         assert_eq!(
-            tab_label(&published("", ""), 2),
+            tab_label(&published("", ""), 2, None),
             tf("fmt.build_n", &[("n", "3")])
         );
     }

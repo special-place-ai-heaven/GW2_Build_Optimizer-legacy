@@ -49,8 +49,24 @@ const GENRES: [(&str, &str); 16] = [
 ];
 
 pub(in crate::ui::main_view) fn render_radio_tab(ui: &Ui, state: &mut AddonState) {
-    // First open each session: restore the remembered genre (World for new
-    // listeners) so the tab never greets anyone with an empty list.
+    ensure_station_list(state);
+    search_row(ui, state);
+    filter_row(ui, state);
+    ui.dummy([0.0, 4.0]);
+    genre_chips(ui, state);
+    ui.dummy([0.0, 6.0]);
+    favorites(ui, state);
+    stations(ui, state);
+    // One pass per frame: start a logo download worker for whatever the
+    // visible rows enqueued above (dedupe-guarded, single-flight).
+    logos::kick(state);
+    player_bar(ui, state);
+}
+
+/// First use each session (the tab, or the mini radio's Next/Previous):
+/// restore the remembered genre (World for new listeners) so nobody is
+/// greeted by an empty station list.
+pub(crate) fn ensure_station_list(state: &mut AddonState) {
     if !state.radio.auto_kicked
         && !state.radio.searching
         && state.radio.results.is_empty()
@@ -65,17 +81,6 @@ pub(in crate::ui::main_view) fn render_radio_tab(ui: &Ui, state: &mut AddonState
         state.radio.selected_genre = Some(tag);
         kick_search(state, SearchKind::Tag(tag));
     }
-    search_row(ui, state);
-    filter_row(ui, state);
-    ui.dummy([0.0, 4.0]);
-    genre_chips(ui, state);
-    ui.dummy([0.0, 6.0]);
-    favorites(ui, state);
-    stations(ui, state);
-    // One pass per frame: start a logo download worker for whatever the
-    // visible rows enqueued above (dedupe-guarded, single-flight).
-    logos::kick(state);
-    player_bar(ui, state);
 }
 
 // Search + genres
@@ -83,8 +88,13 @@ pub(in crate::ui::main_view) fn render_radio_tab(ui: &Ui, state: &mut AddonState
 fn search_row(ui: &Ui, state: &mut AddonState) {
     let btn = t("radio.search");
     let btn_w = theme::gold_button_width(ui, &btn);
+    let mini_label = t("radio.mini.toggle");
+    let mini_w = ui.calc_text_size(&mini_label)[0]
+        + theme::control_height(ui) * 2.0
+        + ui.clone_style().item_inner_spacing[0]
+        + 20.0;
     let avail = ui.content_region_avail()[0];
-    ui.set_next_item_width((avail - btn_w - 8.0).max(120.0));
+    ui.set_next_item_width((avail - btn_w - mini_w - 8.0).max(120.0));
     let entered = ui
         .input_text("##radio_q", &mut state.radio.search_text)
         .hint(&t("radio.search_hint"))
@@ -92,6 +102,8 @@ fn search_row(ui: &Ui, state: &mut AddonState) {
         .build();
     ui.same_line_with_spacing(0.0, 8.0);
     let clicked = theme::gold_button_sized(ui, &btn, [0.0, 0.0]);
+    ui.same_line_with_spacing(0.0, 12.0);
+    crate::ui::mini_radio::render_tab_toggle(ui, state, &mini_label);
     if state.radio.searching {
         ui.same_line_with_spacing(0.0, 10.0);
         ui.align_text_to_frame_padding();
@@ -619,7 +631,7 @@ fn stations(ui: &Ui, state: &mut AddonState) {
         }
     }
     if let Some(station) = fav_toggle {
-        toggle_favorite(state, &station, ui.frame_count() as u32);
+        toggle_favorite(state, &station, art::tick());
     }
     if let Some(station) = play {
         start_play(state, station);
@@ -895,7 +907,7 @@ fn station_row(
         action = RowAction::Play;
     }
     let hovered = ui.is_item_hovered();
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     row_plate(&dl, origin, avail, ROW_H, hovered, active);
 
     let av_y = origin[1] + (ROW_H - AVATAR) * 0.5;
@@ -966,7 +978,7 @@ fn favorite_row(ui: &Ui, i: usize, f: &SavedStation, active: bool) -> RowAction 
         action = RowAction::Play;
     }
     let hovered = ui.is_item_hovered();
-    let dl = ui.get_window_draw_list();
+    let dl = crate::ui::window_draw_list(ui);
     row_plate(&dl, origin, avail, FAV_ROW_H, hovered, active);
 
     let av_y = origin[1] + (FAV_ROW_H - FAV_AVATAR) * 0.5;
@@ -1104,7 +1116,7 @@ fn heart_button(
 }
 
 /// Two lobes + a point — reads as a heart down to ~12px without an icon font.
-fn heart_glyph(dl: &DrawListMut, c: [f32; 2], r: f32, color: [f32; 4]) {
+pub(crate) fn heart_glyph(dl: &DrawListMut, c: [f32; 2], r: f32, color: [f32; 4]) {
     let lobe = r * 0.52;
     let ly = c[1] - r * 0.30;
     dl.add_circle([c[0] - lobe * 0.92, ly], lobe, color)
@@ -1145,7 +1157,7 @@ fn player_bar(ui: &Ui, state: &mut AddonState) {
     let w = ui.content_region_avail()[0];
     let line_h = ui.text_line_height();
     {
-        let dl = ui.get_window_draw_list();
+        let dl = crate::ui::window_draw_list(ui);
         dl.add_rect(
             [origin[0] - 2.0, origin[1]],
             [origin[0] + w + 2.0, origin[1] + bar_h],
@@ -1180,7 +1192,7 @@ fn player_bar(ui: &Ui, state: &mut AddonState) {
             ui,
             &dl,
             state,
-            ui.frame_count() as u32,
+            art::DjLook::TAB,
             bass,
             [origin[0] - 2.0, origin[1]],
             [origin[0] + w + 2.0, origin[1] + bar_h],
@@ -1252,7 +1264,8 @@ fn player_bar(ui: &Ui, state: &mut AddonState) {
                     &title,
                     [x0 + indent, y2],
                     (right - x0 - indent).max(0.0),
-                    ui.frame_count() as u32,
+                    1.0,
+                    theme::pal().cream,
                 );
             }
         }
@@ -1450,35 +1463,48 @@ fn dim_button(ui: &Ui, label: &str, w: f32) {
 /// back to 0% before the DJ choya. The zone starts indented, not at the
 /// bar's true edge. Per-glyph alpha keeps the equalizer behind the text
 /// untouched.
-fn now_playing_marquee(ui: &Ui, dl: &DrawListMut, text: &str, pos: [f32; 2], avail: f32, t: u32) {
+///
+/// `scale` 1.0 is the tab's 42 px line; the mini radio passes its row height
+/// over 42. Travel is wall-clock (24 px/s at scale 1), not per frame.
+pub(crate) fn now_playing_marquee(
+    ui: &Ui,
+    dl: &DrawListMut,
+    text: &str,
+    pos: [f32; 2],
+    avail: f32,
+    scale: f32,
+    col: [f32; 4],
+) {
     if avail < 60.0 {
         return;
     }
     const MAX_A: f32 = 0.70;
-    const ICON: f32 = 44.0;
-    const SEP_GAP: f32 = 40.0; // breathing room each side of the icon
-                               // Crisp path: the dedicated 42 px ticker face. Fallback (atlas rebuild,
-                               // no TTF, CJK title): bitmap-scale the current font instead.
+    let icon = 44.0 * scale;
+    let sep_gap = 40.0 * scale; // breathing room each side of the icon
+    let t = art::tick();
+    // Crisp path: the dedicated 42 px ticker face. Fallback (atlas rebuild,
+    // no TTF, CJK title): bitmap-scale the current font instead.
     let big = if crate::ui::fonts::ticker_can_render(text) {
         crate::ui::fonts::push_ticker()
     } else {
         None
     };
     if big.is_none() {
-        theme::font_scale(ui, 3.0);
+        theme::font_scale(ui, 3.0 * scale);
+    } else if scale != 1.0 {
+        theme::font_scale(ui, scale);
     }
     let full_w = ui.calc_text_size(text)[0];
     let line_h = ui.text_line_height();
-    let col = theme::pal().cream;
     let fade = (avail * 0.20).clamp(24.0, 180.0);
     let ramp = |mid: f32| -> f32 {
         let a_in = ((mid - pos[0]) / fade).clamp(0.0, 1.0);
         let a_out = ((pos[0] + avail - mid) / fade).clamp(0.0, 1.0);
         a_in.min(a_out)
     };
-    let span = full_w + SEP_GAP * 2.0 + ICON;
-    // ~24 px/s at the overlay's ~60 fps, drifting rightward forever.
-    let travel = (t as f32 * 0.4) % span;
+    let span = full_w + sep_gap * 2.0 + icon;
+    // 24 px/s of wall-clock time, drifting rightward forever.
+    let travel = ((theme::elapsed_ms() as f64 * 0.024 * f64::from(scale)) % f64::from(span)) as f32;
     // Tile copies from left of the zone until past its right edge.
     let mut base = pos[0] + travel;
     while base > pos[0] - span {
@@ -1503,16 +1529,16 @@ fn now_playing_marquee(ui: &Ui, dl: &DrawListMut, text: &str, pos: [f32; 2], ava
             cx += w;
         }
         // The little dancer between repeats.
-        let icon_mid = base + full_w + SEP_GAP + ICON * 0.5;
-        if icon_mid + ICON * 0.5 >= pos[0] && icon_mid - ICON * 0.5 <= pos[0] + avail {
+        let icon_mid = base + full_w + sep_gap + icon * 0.5;
+        if icon_mid + icon * 0.5 >= pos[0] && icon_mid - icon * 0.5 <= pos[0] + avail {
             let a = ramp(icon_mid) * 0.85;
             if a > 0.02 {
-                art::marquee_choya(dl, [icon_mid, pos[1] + line_h * 0.5], ICON, t, a);
+                art::marquee_choya(dl, [icon_mid, pos[1] + line_h * 0.5], icon, t, a);
             }
         }
         base += span;
     }
-    if big.is_none() {
+    if big.is_none() || scale != 1.0 {
         theme::font_scale_reset(ui);
     }
 }
@@ -1526,7 +1552,7 @@ fn av_blocked_port(url: &str) -> Option<u16> {
     matches!(port, 1080 | 4444 | 4445 | 8118 | 9050 | 9051 | 9150).then_some(port)
 }
 
-fn status_line(status: &RadioStatus) -> (String, [f32; 4]) {
+pub(crate) fn status_line(status: &RadioStatus) -> (String, [f32; 4]) {
     match status {
         RadioStatus::Idle => (t("radio.status.idle"), theme::pal().muted),
         RadioStatus::Connecting => (t("radio.status.connecting"), theme::pal().gold),
@@ -1545,7 +1571,7 @@ fn status_line(status: &RadioStatus) -> (String, [f32; 4]) {
 
 /// Tune in and reflect it immediately; the playback thread confirms (or
 /// corrects) the status a moment later through `with_state`.
-fn start_play(state: &mut AddonState, station: RbStation) {
+pub(crate) fn start_play(state: &mut AddonState, station: RbStation) {
     player::play(&station);
     state.radio.status = RadioStatus::Connecting;
     state.radio.current = Some(station);
@@ -1576,7 +1602,7 @@ fn is_favorite(state: &AddonState, station: &RbStation) -> bool {
         .any(|f| fav_key(&f.stationuuid, &f.url) == key)
 }
 
-fn current_station_key(state: &AddonState) -> Option<String> {
+pub(crate) fn current_station_key(state: &AddonState) -> Option<String> {
     state
         .radio
         .current
@@ -1586,7 +1612,7 @@ fn current_station_key(state: &AddonState) -> Option<String> {
 
 /// Favorite identity: stationuuid, falling back to the trimmed stream URL for
 /// hand-entered stations without one (matches the `RadioPreferences` doc).
-fn fav_key(uuid: &str, url: &str) -> String {
+pub(crate) fn fav_key(uuid: &str, url: &str) -> String {
     if uuid.is_empty() {
         url.trim().to_string()
     } else {
@@ -1618,7 +1644,7 @@ fn join_meta(parts: [&str; 3]) -> String {
 
 /// Width-aware end truncation with an ellipsis — UTF-8 safe (chars, never
 /// byte slices), mirroring the private `theme::clip_to_width`.
-fn clip_text(ui: &Ui, text: &str, max_w: f32) -> String {
+pub(crate) fn clip_text(ui: &Ui, text: &str, max_w: f32) -> String {
     if max_w <= 4.0 {
         return String::new();
     }

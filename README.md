@@ -83,7 +83,7 @@ Create a key at <https://account.arena.net/applications>: sign in, choose **New 
 | `account` | Yes | Key check, and your account name if you choose to attach it to a message to the developer |
 | `characters` | Yes | Your character list |
 | `builds` | Yes | Build tabs and equipment tabs of each character |
-| `inventories`, `unlocks` | No | The wizard lists them as recommended, but this version calls no endpoint that needs them |
+| `inventories`, `unlocks` | No | This version calls no endpoint that needs them |
 
 The wizard refuses a key that lacks one of the three required permissions and names the missing ones.
 
@@ -168,6 +168,14 @@ An internet radio player that keeps playing while you fight. It searches the rad
 - A Nexus keybind for pause and resume is available, unbound by default.
 
 HLS streams and OGG, FLAC and Opus stations are not offered.
+
+#### Mini radio
+
+Tick **Mini radio** in the search row of Choya Tunes and close the overlay: a small, semi-transparent strip appears at the bottom of the screen with the equalizer, the scrolling station and title, and Choya dancing on its right end. It shows only while the overlay is closed and fades out the moment you open it. Move the mouse over the strip to reveal the controls: previous and next station, play, pause, stop, mute, volume, a button that opens Choya Tunes, the settings gear and hide. Previous and next walk through the stations of the selected genre, or through your favourites when **Favorites only** is on. Drag the strip anywhere and drag its corner to resize it; position and size are remembered. A Nexus keybind toggles it.
+
+![The mini radio at the bottom of the screen with its settings popup open](docs/screenshots/mini_radio.png)
+
+Everything about its look is yours to set from the gear popup: background opacity separately from the opacity of bars, text and Choya, which elements are shown, Choya's size independent of the strip, the colours of the bars, bar tops, title and background tint (each defaults to your theme colour), and the number, gap and height of the equalizer bars. **Reset appearance** and **Reset position** return the defaults.
 
 ### Settings
 

@@ -78,7 +78,7 @@ pub fn render_setup(ui: &Ui, state: &mut AddonState, step: SetupStep) {
         SetupStep::Language => 0,
         SetupStep::Gw2ApiKey => 1,
         SetupStep::LlmApiKey => 2,
-        SetupStep::DataDownload | SetupStep::Complete => 3,
+        SetupStep::DataDownload => 3,
     };
     for (i, (target, name)) in steps.iter().enumerate() {
         if i > 0 {
@@ -98,10 +98,6 @@ pub fn render_setup(ui: &Ui, state: &mut AddonState, step: SetupStep) {
         SetupStep::Gw2ApiKey => render_gw2_key_step(ui, state),
         SetupStep::LlmApiKey => render_llm_key_step(ui, state),
         SetupStep::DataDownload => render_download_step(ui, state),
-        // Unreachable in normal flow (download Get Started -> Main). Keep as safety net.
-        SetupStep::Complete => {
-            state.screen = Screen::Main;
-        }
     }
 }
 
@@ -177,11 +173,9 @@ fn render_gw2_key_step(ui: &Ui, state: &mut AddonState) {
     ui.spacing();
 
     ui.text_wrapped(t("setup.gw2_create"));
-    ui.bullet_text("account (required)");
-    ui.bullet_text("characters (required)");
-    ui.bullet_text("builds (required)");
-    ui.bullet_text("inventories (recommended)");
-    ui.bullet_text("unlocks (recommended)");
+    for scope in gw2_api::client::REQUIRED_SCOPES {
+        ui.bullet_text(scope);
+    }
     ui.spacing();
 
     // Key input — masked by default. This step (and the LLM key step below)
@@ -246,11 +240,9 @@ fn render_gw2_key_step(ui: &Ui, state: &mut AddonState) {
                         break 'validate SetupOutcome::Cancelled;
                     }
 
-                    let required = ["account", "characters", "builds"];
-                    let recommended = ["inventories", "unlocks"];
+                    let required = gw2_api::client::REQUIRED_SCOPES;
                     let scopes: Vec<(String, bool)> = required
                         .iter()
-                        .chain(recommended.iter())
                         .map(|scope| {
                             (
                                 scope.to_string(),
@@ -782,7 +774,6 @@ fn render_download_step(ui: &Ui, state: &mut AddonState) {
             state.screen = Screen::Setup(SetupStep::LlmApiKey);
         }
         if next {
-            // Skip SetupStep::Complete — Get Started goes straight to Main.
             state.screen = Screen::Main;
         }
     }

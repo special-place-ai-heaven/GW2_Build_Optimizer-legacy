@@ -11,6 +11,7 @@ use crate::state::AddonState;
 use gw2_core::i18n::{t, tf};
 use gw2_optimizer::balance::BalanceContext;
 use gw2_optimizer::gamedb::GameDb;
+use gw2_optimizer::prompts::MessageKind;
 
 /// How long the first attempt may take before a refused plate is served as-is
 /// instead of being composed again.
@@ -146,11 +147,13 @@ fn log_line(step: &str, outcome: &str, secs: f32) -> String {
 }
 
 fn log_step(step: &str, outcome: &str, secs: f32) {
-    nexus::log::log(
-        nexus::log::LogLevel::Info,
-        "GW2BuildOpt",
-        log_line(step, outcome, secs),
-    );
+    let line = log_line(step, outcome, secs);
+    // `nexus::log` panics without the addon API (tests).
+    if cfg!(test) {
+        eprintln!("{line}");
+    } else {
+        nexus::log::log(nexus::log::LogLevel::Info, "GW2BuildOpt", line);
+    }
 }
 
 fn send_chat_message_with(state: &mut AddonState, message: String, continuation: Option<String>) {
@@ -239,15 +242,12 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                     .unwrap_or_else(|| profession.clone());
                 (plate_from_suggestion(s), plate_profession)
             });
-    let kind = classify(
-        &message,
-        plate_for_verdict.is_some(),
-        state
-            .main
-            .game_db
-            .as_deref()
-            .and_then(|db| wished_elite_spec(db, &message)),
-    );
+    // Intent first (owner, 2026-09-24): "how are you doing" once ran the
+    // whole plating pipeline. The words are read here; what they leave open,
+    // one small model call reads in the worker. Only a build request reaches
+    // the reference build, the gear ranking and the plating prompt.
+    let has_plate = plate_for_verdict.is_some();
+    let rule_kind = classify(&message, has_plate, !inbound_chips.is_empty(), named_a_spec);
 
     state.main.chat_epoch = state.main.chat_epoch.wrapping_add(1);
     let epoch = state.main.chat_epoch;
@@ -416,6 +416,9 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                 selected_role,
                 &weights,
             );
+            // What the run turned out to be; the fallback answers by it.
+            let kind = std::cell::Cell::new(rule_kind.unwrap_or(MessageKind::Question));
+            let reply_language = gw2_core::i18n::choya_name_for(&config.ui_language);
             let result = (|| -> Result<gw2_optimizer::prompts::GeminiBuildResponse, String> {
                 let client = gw2_optimizer::llm::create_client(&config, &addon_dir)
                     .map_err(|e| e.to_string())?;
@@ -424,32 +427,122 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                     return Err("Cancelled".into());
                 }
 
-                gw2_optimizer::llm::live::step(gw2_optimizer::llm::live::Step::Handshake);
-                let handshake_step = tracker.begin(RunPhase::Choya, t("run.choya_handshake"), None);
-                tracker.explain(handshake_step, "explain.choya_handshake");
-                let handshake_started = std::time::Instant::now();
-                let (profile, probed) = profiles.borrow_mut().ensure(
+                // The handshake, run once and only when a lookup or a plate
+                // needs it: small talk never shakes hands.
+                let handshake = std::cell::OnceCell::new();
+                let shake = || -> gw2_optimizer::llm::profile::ModelProfile {
+                    handshake
+                        .get_or_init(|| {
+                            gw2_optimizer::llm::live::step(gw2_optimizer::llm::live::Step::Handshake);
+                            let handshake_step = tracker.begin(RunPhase::Choya, t("run.choya_handshake"), None);
+                            tracker.explain(handshake_step, "explain.choya_handshake");
+                            let handshake_started = std::time::Instant::now();
+                            let (profile, probed) = profiles.borrow_mut().ensure(
+                                client.as_ref(),
+                                &model_id,
+                                gw2_optimizer::llm::profile::now_secs(),
+                            );
+                            log_step(
+                                "handshake",
+                                &format!(
+                                    "ok{}: {}",
+                                    if probed { " (probed now)" } else { "" },
+                                    profile.summary()
+                                ),
+                                handshake_started.elapsed().as_secs_f32(),
+                            );
+                            tracker.done_with(handshake_step, profile.summary());
+                            if let Some(e) = profiles.borrow().last_probe_error.as_deref() {
+                                nexus::log::log(
+                                    nexus::log::LogLevel::Warning,
+                                    "GW2BuildOpt",
+                                    format!("Choya handshake got no answer ({e}); running on the assumed profile"),
+                                );
+                            }
+                            profile
+                        })
+                        .clone()
+                };
+
+                // Reason first, then plate. A greeting or a question is
+                // answered here and the run ends; no reference build, no gear
+                // ranking, no plating prompt.
+                // A question keeps the plating loop's game-data lookups, so
+                // "what does Dread do?" is answered from the data.
+                let reply_ctx =
+                    db_clone
+                        .as_deref()
+                        .map(|db| gw2_optimizer::gemini_tools::ToolContext {
+                            db,
+                            profession_name: &profession,
+                            candidates: &[],
+                            current_build_summary: Some(kitchen.as_str()),
+                            weights: weights.clone(),
+                            balance_ctx: &chat_balance_ctx,
+                            scenario: scenario.clone(),
+                        });
+                let mut execute = |name: &str, args: &serde_json::Value| {
+                    let stale = crate::state::with_state(|s| s.main.chat_epoch != epoch)
+                        .unwrap_or(true);
+                    match (&reply_ctx, stale) {
+                        (Some(ctx), false) => {
+                            gw2_optimizer::gemini_tools::execute_tool(name, args, ctx)
+                        }
+                        _ => serde_json::json!({"error": "cancelled"}),
+                    }
+                };
+                let max_turns = || shake().max_turns(client.thrifty());
+                let lookup = reply_ctx.is_some().then_some(Lookup {
+                    max_turns: &max_turns,
+                    execute: &mut execute,
+                    round_secs: &round_secs,
+                });
+                let replied = read_then_reply(
+                    &tracker,
                     client.as_ref(),
-                    &model_id,
-                    gw2_optimizer::llm::profile::now_secs(),
-                );
-                log_step(
-                    "handshake",
-                    &format!(
-                        "ok{}: {}",
-                        if probed { " (probed now)" } else { "" },
-                        profile.summary()
-                    ),
-                    handshake_started.elapsed().as_secs_f32(),
-                );
-                tracker.done_with(handshake_step, profile.summary());
-                if let Some(e) = profiles.borrow().last_probe_error.as_deref() {
-                    nexus::log::log(
-                        nexus::log::LogLevel::Warning,
-                        "GW2BuildOpt",
-                        format!("Choya handshake got no answer ({e}); running on the assumed profile"),
-                    );
+                    &message,
+                    rule_kind,
+                    !no_character,
+                    has_plate,
+                    &|read| {
+                        let mut context = kitchen.clone();
+                        if read == MessageKind::AboutPlate {
+                            if let Some(v) = plate_verdict(
+                                plate_for_verdict.as_ref(),
+                                db_clone.as_deref(),
+                                &weights,
+                                &chat_balance_ctx,
+                                &scenario,
+                            ) {
+                                context.push_str("\nReferee on the build on the pass:\n");
+                                context.push_str(&v);
+                            }
+                        }
+                        context
+                    },
+                    reply_language,
+                    &kind,
+                    lookup,
+                    &mut |said| {
+                        crate::state::with_state(|s| {
+                            if s.main.chat_epoch == epoch {
+                                crate::ui::chat_bar::add_ai_response(&mut s.main.chat, said);
+                            }
+                        });
+                    },
+                )?;
+                drop(reply_ctx);
+                if let Some(reply) = replied {
+                    return Ok(gw2_optimizer::prompts::GeminiBuildResponse {
+                        explanation: reply,
+                        ..Default::default()
+                    });
                 }
+                if token.is_cancelled() {
+                    return Err("Cancelled".into());
+                }
+
+                let profile = shake();
                 if token.is_cancelled() {
                     return Err("Cancelled".into());
                 }
@@ -1343,26 +1436,15 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                             // here, outside the state lock.
                             gw2_optimizer::llm::live::step(gw2_optimizer::llm::live::Step::Fallback);
                             let fallback_started = std::time::Instant::now();
-                            let body = match &kind {
-                                RequestKind::AboutPlate => {
-                                    let verdict = plate_for_verdict.as_ref().zip(db_clone.as_ref()).and_then(
-                                        |((plate, plate_profession), db)| {
-                                            let v = gw2_optimizer::validation::validate_gemini_build(
-                                                plate,
-                                                db,
-                                                plate_profession,
-                                            );
-                                            v.errors.is_empty().then(|| {
-                                                verdict_reply(&gw2_optimizer::referee::evaluate_validated_build(
-                                                    &v,
-                                                    db,
-                                                    plate_profession,
-                                                    &weights,
-                                                    &chat_balance_ctx,
-                                                    &scenario,
-                                                ))
-                                            })
-                                        },
+                            let kind = kind.get();
+                            let body = match kind {
+                                MessageKind::AboutPlate => {
+                                    let verdict = plate_verdict(
+                                        plate_for_verdict.as_ref(),
+                                        db_clone.as_deref(),
+                                        &weights,
+                                        &chat_balance_ctx,
+                                        &scenario,
                                     );
                                     match verdict {
                                         Some(v) => format!("{msg}\n\n{v}"),
@@ -1373,15 +1455,17 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                 // own answer for this request has been in hand
                                 // since before the first round; a model that
                                 // ran out of clock does not take it with it.
-                                RequestKind::Build { .. } => match fallback_reference.borrow().as_deref() {
+                                MessageKind::Build => match fallback_reference.borrow().as_deref() {
                                     Some(build) => {
                                         format!("{msg}\n\n{}\n{build}", t("choya.fallback_reference"))
                                     }
                                     None => msg.clone(),
                                 },
-                                RequestKind::Chat => format!("{msg}\n\n{}", t("choya.fallback_chat")),
+                                MessageKind::Question | MessageKind::SmallTalk => {
+                                    format!("{msg}\n\n{}", t("choya.fallback_chat"))
+                                }
                             };
-                            let is_build = matches!(kind, RequestKind::Build { .. });
+                            let is_build = kind == MessageKind::Build;
                             log_step(
                                 "fallback",
                                 &format!("{kind:?}"),
@@ -1774,18 +1858,25 @@ pub(super) fn wants_a_build(message: &str) -> bool {
     .any(|k| lower.contains(k))
 }
 
-/// What the fallback answers with when the model does not (specs/006 US4).
-/// Drives the fallback only; the model still receives every message unchanged.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum RequestKind {
-    Build { elite: Option<String> },
-    AboutPlate,
-    Chat,
-}
-
-/// `wished` is the elite specialization named in the message, if any.
-/// Ambiguous messages count as questions, so the cards stay.
-pub(super) fn classify(message: &str, has_plate: bool, wished: Option<String>) -> RequestKind {
+/// The cheap first read of a message, before any model or optimizer work.
+/// `None` when the words do not settle it; one small model call then does
+/// (`read_then_reply`). `pasted` is a message carrying chat codes; `named_a_spec`
+/// one naming an elite specialization.
+pub(super) fn classify(
+    message: &str,
+    has_plate: bool,
+    pasted: bool,
+    named_a_spec: bool,
+) -> Option<MessageKind> {
+    // The chips are build requests whatever their words: "How should I
+    // trade survivability vs damage" asks for a plate.
+    let trimmed = message.trim();
+    if super::tabs::kitchen::STARTERS
+        .iter()
+        .any(|(_, prompt)| *prompt == trimmed)
+    {
+        return Some(MessageKind::Build);
+    }
     let lower = message.to_lowercase();
     let about_plate = [
         "score",
@@ -1804,12 +1895,274 @@ pub(super) fn classify(message: &str, has_plate: bool, wished: Option<String>) -
     .iter()
     .any(|k| lower.contains(k));
     if has_plate && about_plate {
-        RequestKind::AboutPlate
-    } else if wants_a_build(message) {
-        RequestKind::Build { elite: wished }
-    } else {
-        RequestKind::Chat
+        return Some(MessageKind::AboutPlate);
     }
+    if wants_a_build(message) {
+        return Some(MessageKind::Build);
+    }
+    // A pasted code with no ask to change it: answer about what was pasted.
+    if pasted {
+        return Some(MessageKind::AboutPlate);
+    }
+    if !named_a_spec && is_small_talk(&lower) {
+        return Some(MessageKind::SmallTalk);
+    }
+    None
+}
+
+/// A greeting, thanks or a question about Choya itself, with no game word
+/// in it. "hey, which sigil is better?" is not small talk.
+fn is_small_talk(lower: &str) -> bool {
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.is_empty() || words.len() > 8 {
+        return false;
+    }
+    const GAME_WORDS: &[&str] = &[
+        "sigil",
+        "rune",
+        "relic",
+        "trait",
+        "skill",
+        "weapon",
+        "boon",
+        "condi",
+        "power",
+        "wvw",
+        "pvp",
+        "pve",
+        "raid",
+        "fractal",
+        "strike",
+        "dps",
+        "heal",
+        "spec",
+        "stat",
+        "armor",
+        "profession",
+        "class",
+        "rotation",
+    ];
+    if words
+        .iter()
+        .any(|w| GAME_WORDS.iter().any(|g| w.starts_with(g)))
+    {
+        return false;
+    }
+    const OPENERS: &[&str] = &[
+        "hi",
+        "hello",
+        "hey",
+        "heya",
+        "hiya",
+        "yo",
+        "sup",
+        "howdy",
+        "greetings",
+        "thanks",
+        "thank",
+        "thx",
+        "ty",
+        "cheers",
+        "bye",
+        "goodbye",
+        "lol",
+        "haha",
+        "ok",
+        "okay",
+        "cool",
+        "nice",
+        "great",
+        "wow",
+    ];
+    const PHRASES: &[&str] = &[
+        "how are you",
+        "how's it going",
+        "hows it going",
+        "what's up",
+        "whats up",
+        "who are you",
+        "what are you",
+        "what can you do",
+        "what do you do",
+        "good morning",
+        "good evening",
+        "good night",
+        "nice to meet",
+    ];
+    OPENERS.contains(&words[0]) || PHRASES.iter().any(|p| lower.contains(p))
+}
+
+/// The feed's name for a kind.
+fn kind_label(kind: MessageKind) -> String {
+    t(match kind {
+        MessageKind::Build => "choya.kind_build",
+        MessageKind::AboutPlate => "choya.kind_about_plate",
+        MessageKind::Question => "choya.kind_question",
+        MessageKind::SmallTalk => "choya.kind_small_talk",
+    })
+}
+
+/// What a question reply may look up: the plating loop's game-data tools.
+struct Lookup<'a> {
+    /// Rounds allowed; runs the handshake on first use.
+    max_turns: &'a dyn Fn() -> usize,
+    execute: &'a mut dyn FnMut(&str, &serde_json::Value) -> serde_json::Value,
+    round_secs: &'a std::cell::RefCell<Vec<f32>>,
+}
+
+/// Read the message, then answer it in words unless it asks for a build.
+///
+/// Runs before the handshake, the reference build and the gear ranking, so a
+/// greeting costs one short request (two when the words did not settle it)
+/// instead of a plating run. `Ok(Some(reply))` is the answer. `Ok(None)`
+/// sends the message on to plating: it asked for a build, or the reply
+/// found it needs one and told the player so first through `say`. `kind`
+/// ends as what the run is, for the fallback.
+#[allow(clippy::too_many_arguments)]
+fn read_then_reply(
+    tracker: &super::generation::RunTracker,
+    client: &dyn gw2_optimizer::llm::LlmClient,
+    message: &str,
+    rule: Option<MessageKind>,
+    has_character: bool,
+    has_plate: bool,
+    context: &dyn Fn(MessageKind) -> String,
+    reply_language: &str,
+    kind: &std::cell::Cell<MessageKind>,
+    lookup: Option<Lookup<'_>>,
+    say: &mut dyn FnMut(String),
+) -> Result<Option<String>, String> {
+    use gw2_core::generations::RunPhase;
+    use gw2_optimizer::prompts as p;
+    tracker.stage(RunPhase::Choya, &t("run.choya_reading"));
+    tracker.explain_stage("explain.choya_reading");
+    let (read, how) = match rule {
+        Some(k) => (k, t("run.choya_kind_rule")),
+        None => {
+            let answer = client
+                .generate_brief(
+                    &p::choya_intent_prompt(message, has_character, has_plate),
+                    p::INTENT_MAX_TOKENS,
+                )
+                .map_err(|e| e.to_string())?;
+            match p::parse_choya_intent(&answer) {
+                Some((k, confidence, reason)) => {
+                    log_step(
+                        "read",
+                        &format!("{} ({confidence:.1}): {reason}", k.wire()),
+                        0.0,
+                    );
+                    (k, format!("{confidence:.1}"))
+                }
+                // Unreadable: answer first. A reply that needs a plate
+                // still gets one below.
+                None => (MessageKind::Question, t("run.choya_kind_unread")),
+            }
+        }
+    };
+    kind.set(read);
+    tracker.end_stage_with(tf(
+        "run.choya_kind",
+        &[("kind", &kind_label(read)), ("how", &how)],
+    ));
+    if read == MessageKind::Build {
+        return Ok(None);
+    }
+
+    gw2_optimizer::llm::live::step(gw2_optimizer::llm::live::Step::Writing);
+    tracker.stage(RunPhase::Choya, &t("run.choya_replying"));
+    tracker.explain_stage("explain.choya_replying");
+    let prompt = p::choya_reply_prompt(message, read, &context(read), reply_language);
+    // Small talk stays tool-less; a question looks its facts up in the game
+    // data, in the same rounds the plating loop shows.
+    let lookup = lookup.filter(|_| read != MessageKind::SmallTalk);
+    let turns = lookup.as_ref().map_or(0, |l| (l.max_turns)());
+    let raw = match lookup {
+        Some(l) if turns > 0 => {
+            let tools = gw2_optimizer::llm::tools::lookup_tool_definitions();
+            let mut round_started = std::time::Instant::now();
+            client.generate_with_tools_progress(
+                &prompt,
+                &tools,
+                l.execute,
+                turns,
+                &mut |turn: usize, max_turns: usize, tool_names: &[String]| {
+                    let round = round_started.elapsed();
+                    round_started = std::time::Instant::now();
+                    if !tool_names.is_empty() {
+                        l.round_secs.borrow_mut().push(round.as_secs_f32());
+                    }
+                    log_step(
+                        &format!("lookup {turn}/{max_turns}"),
+                        &format!("reply tools: {}", tool_names.join(", ")),
+                        round.as_secs_f32(),
+                    );
+                    let max = max_turns.to_string();
+                    let id = tracker.note(
+                        RunPhase::Choya,
+                        tf(
+                            "run.choya_lookup",
+                            &[("turn", &turn.to_string()), ("max", &max)],
+                        ),
+                        (!tool_names.is_empty()).then(|| humanize_tool_names(tool_names)),
+                    );
+                    tracker.explain(
+                        id,
+                        gw2_core::generations::ExplainPart::new(
+                            "explain.choya_lookup",
+                            &[("max", &max)],
+                        ),
+                    );
+                },
+            )
+        }
+        _ => client.generate_brief(&prompt, p::REPLY_MAX_TOKENS),
+    }
+    .map_err(|e| e.to_string())?;
+    tracker.end_stage();
+    let (reply, plate) = p::parse_choya_reply(&raw);
+    if !plate {
+        return if reply.is_empty() {
+            Err("Empty reply".into())
+        } else {
+            Ok(Some(reply))
+        };
+    }
+    let will = t("choya.will_plate");
+    say(if reply.is_empty() {
+        will
+    } else {
+        format!("{reply}\n\n{will}")
+    });
+    let switch = tracker.note(RunPhase::Choya, t("run.choya_escalate"), None);
+    tracker.explain(switch, "explain.choya_escalate");
+    kind.set(MessageKind::Build);
+    Ok(None)
+}
+
+/// The referee's verdict on the plate on the pass, when it validates.
+fn plate_verdict(
+    plate: Option<&(gw2_optimizer::prompts::GeminiBuildResponse, String)>,
+    db: Option<&GameDb>,
+    weights: &gw2_optimizer::scoring::OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &gw2_optimizer::scenario::ScenarioSpec,
+) -> Option<String> {
+    let ((plate, plate_profession), db) = plate.zip(db)?;
+    let v = gw2_optimizer::validation::validate_gemini_build(plate, db, plate_profession);
+    v.errors.is_empty().then(|| {
+        verdict_reply(&gw2_optimizer::referee::evaluate_validated_build(
+            &v,
+            db,
+            plate_profession,
+            weights,
+            ctx,
+            scenario,
+        ))
+    })
 }
 
 /// The plate as the validator reads it, from what the strip holds.
@@ -1965,7 +2318,7 @@ pub(super) fn plate_is_servable(v: &gw2_optimizer::validation::ValidatedBuild) -
 mod tests {
     use super::{
         asks_about_own_build, classify, continuation_brief, gate_vetoes, log_line,
-        plate_is_servable, verdict_lines, wants_a_build, wished_elite_spec, RequestKind,
+        plate_is_servable, verdict_lines, wants_a_build, wished_elite_spec, MessageKind,
     };
 
     #[test]
@@ -1997,43 +2350,83 @@ mod tests {
     #[test]
     fn classify_scoring_question_with_plate() {
         let q = "Score that exact build and tell me the gates and what was not simulated.";
-        assert_eq!(classify(q, true, None), RequestKind::AboutPlate);
         assert_eq!(
-            classify("why is it viable?", true, None),
-            RequestKind::AboutPlate
+            classify(q, true, false, false),
+            Some(MessageKind::AboutPlate)
+        );
+        assert_eq!(
+            classify("why is it viable?", true, false, false),
+            Some(MessageKind::AboutPlate)
         );
     }
 
     #[test]
-    fn classify_same_without_plate_is_a_build_or_chat() {
+    fn classify_same_without_plate_is_a_build_or_unsettled() {
         let q = "Score that exact build and tell me the gates and what was not simulated.";
-        assert!(matches!(
-            classify(q, false, None),
-            RequestKind::Build { .. }
-        ));
-        assert_eq!(classify("why though?", false, None), RequestKind::Chat);
+        assert_eq!(classify(q, false, false, false), Some(MessageKind::Build));
+        assert_eq!(classify("why though?", false, false, false), None);
     }
 
+    /// The owner's table (2026-09-24): the words settle what they can, and
+    /// what they leave open goes to the model, never to the plating run.
     #[test]
-    fn classify_build_with_elite() {
-        assert_eq!(
-            classify("make me a reaper build", false, Some("Reaper".into())),
-            RequestKind::Build {
-                elite: Some("Reaper".into())
-            }
-        );
-        assert_eq!(
-            classify("make me a reaper build", true, Some("Reaper".into())),
-            RequestKind::Build {
-                elite: Some("Reaper".into())
-            }
-        );
-    }
-
-    #[test]
-    fn classify_ambiguous_is_chat() {
-        assert_eq!(classify("hello there", true, None), RequestKind::Chat);
-        assert_eq!(classify("thanks!", false, None), RequestKind::Chat);
+    fn the_words_are_read_before_anything_is_composed() {
+        use MessageKind::*;
+        let table: &[(&str, bool, bool, Option<MessageKind>)] = &[
+            // (message, has_plate, pasted, expected)
+            ("how are you doing", false, false, Some(SmallTalk)),
+            ("How are you doing?", true, false, Some(SmallTalk)),
+            ("hello there", true, false, Some(SmallTalk)),
+            ("hi choya", false, false, Some(SmallTalk)),
+            ("thanks!", false, false, Some(SmallTalk)),
+            ("thank you, that was great", true, false, Some(SmallTalk)),
+            ("what can you do", false, false, Some(SmallTalk)),
+            ("who are you?", false, false, Some(SmallTalk)),
+            (
+                "what do you think of [&DQkAAA]",
+                false,
+                true,
+                Some(AboutPlate),
+            ),
+            (
+                "improve my reaper for wvw roaming",
+                false,
+                false,
+                Some(Build),
+            ),
+            ("improve this build [&DQ...]", false, true, Some(Build)),
+            ("which sigil is better", false, false, None),
+            ("hey, which sigil is better?", false, false, None),
+            (
+                "which weapon is better for my reaper in WvW?",
+                false,
+                false,
+                None,
+            ),
+            ("what does Dread do?", false, false, None),
+        ];
+        for (message, has_plate, pasted, expected) in table {
+            assert_eq!(
+                classify(message, *has_plate, *pasted, false),
+                *expected,
+                "{message}"
+            );
+        }
+        // Every quick-prompt chip is a build request, whatever its words.
+        for (_, prompt) in crate::ui::main_view::tabs::kitchen::STARTERS {
+            assert_eq!(
+                classify(prompt, true, false, false),
+                Some(Build),
+                "{prompt}"
+            );
+            assert_eq!(
+                classify(prompt, false, false, false),
+                Some(Build),
+                "{prompt}"
+            );
+        }
+        // A named elite spec is never small talk.
+        assert_eq!(classify("hey reaper", false, false, true), None);
     }
 
     #[test]
@@ -2295,5 +2688,365 @@ mod arc_gamedb_tests {
         assert!(full_build_budget("score_build", &prefix, &used).is_none());
         assert!(full_build_budget("get_skill_info", &full, &used).is_none());
         assert_eq!(used.get(), FULL_BUILD_EVALUATIONS_PER_REQUEST);
+    }
+}
+
+/// The read-then-reply step on a scripted model: what a message costs, which
+/// steps the feed shows, and what reaches the plating pipeline.
+#[cfg(test)]
+mod intent_flow_tests {
+    use super::super::generation::{RunMeta, RunTracker};
+    use super::{classify, read_then_reply, Lookup, MessageKind};
+    use gw2_core::generations::{GenerationKind, GenerationLog, GenerationStatus};
+    use gw2_optimizer::llm::{LlmClient, LlmError, ModelInfo, ToolDefinition};
+    use std::cell::{Cell, RefCell};
+    use std::sync::Mutex;
+
+    /// Answers from a script, one entry per request, counted like a transport.
+    /// In the tool loop an entry `TOOL:name` is a round that calls `name`.
+    struct Scripted {
+        replies: Mutex<Vec<&'static str>>,
+        prompts: Mutex<Vec<String>>,
+        offered: Mutex<Vec<String>>,
+    }
+
+    impl Scripted {
+        fn new(replies: &[&'static str]) -> Self {
+            Self {
+                replies: Mutex::new(replies.to_vec()),
+                prompts: Mutex::new(Vec::new()),
+                offered: Mutex::new(Vec::new()),
+            }
+        }
+        fn prompts(&self) -> Vec<String> {
+            self.prompts.lock().unwrap().clone()
+        }
+    }
+
+    impl LlmClient for Scripted {
+        fn provider_name(&self) -> &str {
+            "scripted"
+        }
+        fn validate_key(&self) -> Result<(), LlmError> {
+            Ok(())
+        }
+        fn generate(&self, prompt: &str) -> Result<String, LlmError> {
+            self.prompts.lock().unwrap().push(prompt.to_string());
+            gw2_optimizer::llm::usage::simulate_request(Some(
+                gw2_optimizer::llm::usage::ResponseUsage {
+                    prompt: Some(prompt.len() as u64 / 4),
+                    completion: Some(40),
+                    total: None,
+                    cost_usd: None,
+                },
+            ));
+            let mut replies = self.replies.lock().unwrap();
+            if replies.is_empty() {
+                return Err(LlmError::Http("script ran out".into()));
+            }
+            Ok(replies.remove(0).to_string())
+        }
+        fn generate_cached(&self, prompt: &str) -> Result<String, LlmError> {
+            self.generate(prompt)
+        }
+        fn generate_with_tools_progress(
+            &self,
+            prompt: &str,
+            tools: &[ToolDefinition],
+            execute: &mut dyn FnMut(&str, &serde_json::Value) -> serde_json::Value,
+            max_turns: usize,
+            on_progress: &mut dyn FnMut(usize, usize, &[String]),
+        ) -> Result<String, LlmError> {
+            *self.offered.lock().unwrap() = tools.iter().map(|t| t.name.clone()).collect();
+            for turn in 1..=max_turns {
+                let next = self.generate(prompt)?;
+                match next.strip_prefix("TOOL:") {
+                    Some(tool) => {
+                        execute(tool, &serde_json::json!({"name": "Dread"}));
+                        on_progress(turn, max_turns, &[tool.to_string()]);
+                    }
+                    None => {
+                        on_progress(turn, max_turns, &[]);
+                        return Ok(next);
+                    }
+                }
+            }
+            Err(LlmError::Http("out of rounds".into()))
+        }
+        fn list_models(&self) -> Result<Vec<ModelInfo>, LlmError> {
+            Ok(Vec::new())
+        }
+        fn remaining_quota(&self) -> u32 {
+            0
+        }
+        fn clear_cache(&self) {}
+    }
+
+    fn meta(dir: &std::path::Path) -> RunMeta {
+        RunMeta {
+            kind: GenerationKind::Choya,
+            character_name: String::new(),
+            profession: "unknown".into(),
+            mode: gw2_core::types::GameMode::PvE,
+            tier: gw2_optimizer::scenario::CombatTier::Party,
+            role: None,
+            weights: gw2_optimizer::scoring::OptimizationWeights::default(),
+            provider: gw2_core::config::LlmProvider::Gemini,
+            model: "gemini-2.5-flash".into(),
+            addon_dir: dir.to_path_buf(),
+        }
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("gw2bo_intent_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    /// One routed message: the outcome, the kind, what was said ahead of a
+    /// plate, and the feed as "label · detail" lines.
+    fn route(
+        tracker: &RunTracker,
+        client: &Scripted,
+        message: &str,
+    ) -> (
+        Result<Option<String>, String>,
+        MessageKind,
+        Vec<String>,
+        Vec<String>,
+    ) {
+        let kind = Cell::new(MessageKind::Question);
+        let mut said = Vec::new();
+        let rounds = RefCell::new(Vec::new());
+        let mut execute = |name: &str, _: &serde_json::Value| serde_json::json!({"tool": name, "description": "Dread: fear on hit."});
+        let out = read_then_reply(
+            tracker,
+            client,
+            message,
+            classify(message, false, false, false),
+            false,
+            false,
+            &|_| "Mode: PvE. Character: none selected.".into(),
+            "English",
+            &kind,
+            Some(Lookup {
+                max_turns: &|| 3,
+                execute: &mut execute,
+                round_secs: &rounds,
+            }),
+            &mut |s| said.push(s),
+        );
+        let steps = tracker
+            .steps()
+            .into_iter()
+            .map(|s| match s.detail {
+                Some(d) => format!("{} \u{00b7} {d}", s.label),
+                None => s.label,
+            })
+            .collect();
+        (out, kind.get(), said, steps)
+    }
+
+    /// The owner's report: "how are you doing" with no character ran the
+    /// handshake, the reference build, a 29k-character prompt, the gear
+    /// ranking and a plate. It is now one short request and a reply.
+    #[test]
+    fn small_talk_is_answered_without_the_optimizer() {
+        gw2_core::i18n::set_language("en");
+        let dir = temp_dir("smalltalk");
+        let tracker = RunTracker::start(meta(&dir));
+        let feed = tracker.observe();
+        let client = Scripted::new(&[
+            r#"{"reply": "Grumble. Fine. Want a build?", "compose_plate": false}"#,
+        ]);
+        let (out, kind, said, steps) = route(&tracker, &client, "how are you doing");
+
+        assert_eq!(out, Ok(Some("Grumble. Fine. Want a build?".into())));
+        assert_eq!(kind, MessageKind::SmallTalk);
+        assert!(said.is_empty());
+        let prompts = client.prompts();
+        assert_eq!(prompts.len(), 1, "the words settled it: no classifier call");
+        assert!(
+            client.offered.lock().unwrap().is_empty(),
+            "small talk is tool-less"
+        );
+        assert!(
+            prompts[0].len() < 3_000,
+            "a reply prompt, not the plating kitchen: {} chars",
+            prompts[0].len()
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|s| s == "Reading your message \u{00b7} kind: small talk (by its words)"),
+            "{steps:?}"
+        );
+        assert!(steps.iter().any(|s| s.starts_with("Replying")), "{steps:?}");
+        for never in [
+            "handshake",
+            "reference",
+            "Ranking",
+            "Composing",
+            "Prompt built",
+        ] {
+            assert!(
+                !steps
+                    .iter()
+                    .any(|s| s.to_lowercase().contains(&never.to_lowercase())),
+                "{never} in {steps:?}"
+            );
+        }
+
+        drop(feed);
+        tracker.close(&GenerationStatus::Ok);
+        drop(tracker);
+        let all = GenerationLog::new(&dir).load_all();
+        assert_eq!(all.len(), 1, "the reply's tokens are recorded");
+        assert_eq!(all[0].kind, GenerationKind::Choya);
+        assert!(all[0].build.is_none() && all[0].card.is_none());
+        assert_eq!(all[0].tokens.requests, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Words that do not settle it cost one short classifier request; a build
+    /// request goes on to plating with nothing said and no reply request.
+    #[test]
+    fn an_unsettled_build_request_goes_on_to_plating() {
+        gw2_core::i18n::set_language("en");
+        let dir = temp_dir("build");
+        let tracker = RunTracker::start(meta(&dir));
+        let _feed = tracker.observe();
+        let client = Scripted::new(&[
+            r#"{"kind": "build", "confidence": 0.8, "reason": "asks what to equip"}"#,
+        ]);
+        let (out, kind, said, steps) = route(
+            &tracker,
+            &client,
+            "which sigils should my reaper take for roaming?",
+        );
+
+        assert_eq!(out, Ok(None));
+        assert_eq!(kind, MessageKind::Build);
+        assert!(said.is_empty());
+        let prompts = client.prompts();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].starts_with("Classify one message"));
+        assert!(
+            steps
+                .iter()
+                .any(|s| s == "Reading your message \u{00b7} kind: build request (0.8)"),
+            "{steps:?}"
+        );
+        assert!(
+            !steps.iter().any(|s| s.starts_with("Replying")),
+            "{steps:?}"
+        );
+        // A chip never costs the classifier request.
+        let chip = Scripted::new(&[]);
+        let (out, kind, _, _) = route(&tracker, &chip, super::super::tabs::kitchen::STARTERS[0].1);
+        assert_eq!((out, kind), (Ok(None), MessageKind::Build));
+        assert!(chip.prompts().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Reason first, then plate: a question whose answer needs a build says
+    /// so in the chat, and the run switches to plating.
+    #[test]
+    fn a_question_that_needs_a_build_escalates_after_saying_so() {
+        gw2_core::i18n::set_language("en");
+        let dir = temp_dir("escalate");
+        let tracker = RunTracker::start(meta(&dir));
+        let _feed = tracker.observe();
+        let client = Scripted::new(&[
+            r#"{"kind": "question", "confidence": 0.6, "reason": "weapon comparison"}"#,
+            r#"{"reply": "Greatsword, for the cleave.", "compose_plate": true}"#,
+        ]);
+        let (out, kind, said, steps) = route(
+            &tracker,
+            &client,
+            "which weapon is better for my reaper in WvW?",
+        );
+
+        assert_eq!(out, Ok(None), "on to plating");
+        assert_eq!(kind, MessageKind::Build, "the fallback now owes a build");
+        assert_eq!(
+            said,
+            ["Greatsword, for the cleave.\n\nI will compose a plate for that."]
+        );
+        assert_eq!(client.prompts().len(), 2);
+        let read = steps
+            .iter()
+            .position(|s| s.contains("kind: question (0.6)"));
+        let reply = steps.iter().position(|s| s.starts_with("Replying"));
+        let switch = steps.iter().position(|s| s == "Switching to build mode");
+        assert!(
+            read < reply && reply < switch && read.is_some(),
+            "{steps:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A game question is answered from the game data: a lookup round in
+    /// the feed, the plating lookups offered minus the build evaluators, and
+    /// no plate.
+    #[test]
+    fn a_question_looks_up_the_game_data_and_plates_nothing() {
+        gw2_core::i18n::set_language("en");
+        let dir = temp_dir("lookup");
+        let tracker = RunTracker::start(meta(&dir));
+        let _feed = tracker.observe();
+        let client = Scripted::new(&[
+            r#"{"kind": "question", "confidence": 0.9, "reason": "asks what a trait does"}"#,
+            "TOOL:get_trait_details",
+            r#"{"reply": "**Dread** fears on hit.", "compose_plate": false}"#,
+        ]);
+        let (out, kind, said, steps) = route(&tracker, &client, "what does Dread do?");
+
+        assert_eq!(
+            out,
+            Ok(Some("**Dread** fears on hit.".into())),
+            "a reply, no plate"
+        );
+        assert_eq!(kind, MessageKind::Question);
+        assert!(said.is_empty());
+        let offered = client.offered.lock().unwrap().clone();
+        assert!(
+            offered.iter().any(|t| t == "get_trait_details"),
+            "{offered:?}"
+        );
+        for evaluator in ["score_build", "simulate_combat", "simulate_rotation"] {
+            assert!(
+                !offered.iter().any(|t| t == evaluator),
+                "{evaluator} offered"
+            );
+        }
+        assert!(
+            steps
+                .iter()
+                .any(|s| s.starts_with("Lookup round 1/3 \u{00b7} ")),
+            "{steps:?}"
+        );
+        assert!(
+            !steps
+                .iter()
+                .any(|s| s.contains("reference") || s.contains("Composing")),
+            "{steps:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A classifier answer that is not the JSON asked for is not a build
+    /// request: the message is answered first.
+    #[test]
+    fn an_unreadable_classifier_answer_replies_first() {
+        gw2_core::i18n::set_language("en");
+        let dir = temp_dir("unread");
+        let tracker = RunTracker::start(meta(&dir));
+        let client = Scripted::new(&["I think it is a question.", "Dread is a Reaper trait."]);
+        let (out, kind, _, _) = route(&tracker, &client, "what does Dread do?");
+        assert_eq!(out, Ok(Some("Dread is a Reaper trait.".into())));
+        assert_eq!(kind, MessageKind::Question);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -20,6 +20,7 @@ mod stats;
 mod tabs;
 
 pub(crate) use tabs::about::generations::GenerationsTab;
+pub(crate) use tabs::radio as radio_tab;
 
 /// `kitchen.json` (chat history). Saved from the frame loop whenever the chat
 /// is dirty, which can be many frames in a row while a reply streams in.
@@ -83,6 +84,23 @@ pub fn render_main(ui: &Ui, state: &mut AddonState) {
     {
         stats::check_api_health(state);
         state.main.api_status_frames = 0;
+    }
+    // Settings > Cache & Data "Auto-refresh on startup": once the live build
+    // id is known and the cache is behind it, start the same refresh the
+    // stale-cache banner's Refresh button starts — once per session.
+    let stale = matches!(
+        (state.config.cache_build_number, state.main.live_build_number),
+        (Some(cached), Some(live)) if cached != live
+    );
+    if stats::should_auto_refresh(
+        state.config.auto_refresh_cache,
+        state.config.is_setup_complete(),
+        stale,
+        state.main.game_db_loading || state.main.game_db.is_none(),
+        state.main.auto_refresh_done,
+    ) {
+        state.main.auto_refresh_done = true;
+        stats::start_game_data_refresh(state);
     }
     crate::feedback::tasks::maybe_poll(state);
 
@@ -359,13 +377,8 @@ const PILL_PAD_Y: f32 = 3.0;
 /// Returns true when the player clicked Stop on this frame. `can_stop` is
 /// false once a stop is already under way, because a second click cancels a
 /// token nothing is holding.
-pub(super) fn render_optimization_progress(
-    ui: &Ui,
-    stage: &str,
-    frame_count: i32,
-    can_stop: bool,
-) -> bool {
-    let frame_count = frame_count as u32;
+pub(super) fn render_optimization_progress(ui: &Ui, stage: &str, can_stop: bool) -> bool {
+    let elapsed_ms = theme::elapsed_ms();
     ui.spacing();
     let start = ui.cursor_screen_pos();
     let width = ui.content_region_avail()[0];
@@ -385,7 +398,7 @@ pub(super) fn render_optimization_progress(
             .build();
 
         // Animated accent stripe at top (sweeping cyan glow)
-        let cycle = (frame_count % 180) as f32 / 180.0;
+        let cycle = (elapsed_ms % 3000) as f32 / 3000.0;
         let glow_x = start[0] + cycle * width;
         let glow_half = width * 0.15;
         draw_list
@@ -409,7 +422,7 @@ pub(super) fn render_optimization_progress(
         // Spinner dots (3 pulsing dots)
         let dot_y = start[1] + 18.0;
         for i in 0..3u32 {
-            let phase = ((frame_count + i * 20) % 60) as f32 / 60.0;
+            let phase = ((elapsed_ms + i as u64 * 333) % 1000) as f32 / 1000.0;
             let alpha = 0.3 + 0.7 * (phase * std::f32::consts::PI * 2.0).sin().abs();
             let dot_x = start[0] + 16.0 + i as f32 * 12.0;
             draw_list
@@ -458,7 +471,7 @@ pub(super) fn render_optimization_progress(
         // Sweeping fill
         let bar_inner = width - 16.0;
         let sweep_width = bar_inner * 0.35;
-        let sweep_cycle = ((frame_count % 150) as f32) / 150.0;
+        let sweep_cycle = ((elapsed_ms % 2500) as f32) / 2500.0;
         let sweep_x = start[0] + 8.0 + sweep_cycle * (bar_inner + sweep_width) - sweep_width;
         draw_list
             .add_rect(
@@ -533,7 +546,7 @@ fn render_top_tabs(ui: &Ui, state: &mut AddonState) {
         let is_active = state.main.active_tab == *tab;
         let pulse = if state.main.tab_alert.as_ref() == Some(tab) && !is_active {
             // ~3s breathe at 60fps (abs(sin) period π / 0.0175).
-            0.18 + 0.55 * (ui.frame_count() as f32 * 0.0175).sin().abs()
+            0.18 + 0.55 * theme::anim_pulse()
         } else {
             0.0
         };
@@ -578,7 +591,7 @@ fn render_top_tabs(ui: &Ui, state: &mut AddonState) {
     for (tab, label, id) in utility {
         let is_active = state.main.active_tab == tab;
         let pulse = if state.main.tab_alert.as_ref() == Some(&tab) && !is_active {
-            0.18 + 0.55 * (ui.frame_count() as f32 * 0.0175).sin().abs()
+            0.18 + 0.55 * theme::anim_pulse()
         } else {
             0.0
         };

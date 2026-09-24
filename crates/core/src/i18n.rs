@@ -172,11 +172,6 @@ pub fn choya_name_for(code: &str) -> &'static str {
         .unwrap_or("English")
 }
 
-/// English name for the current overlay language (Choya / LLM prose).
-pub fn current_choya_name() -> &'static str {
-    choya_name_for(&current_code())
-}
-
 pub fn t(key: &str) -> String {
     let lang = current_code();
     let cats = catalogs();
