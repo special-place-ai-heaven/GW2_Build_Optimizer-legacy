@@ -1158,6 +1158,7 @@ pub fn calculate_validated_stats(
         &db.items,
         ctx,
     );
+    combat::scope_skill_damage(&mut modifiers, &db.traits, &db.skills);
     crate::consumables::fold_into_validated_stats(&mut full_stats, &mut modifiers, validated, db);
     crate::infusions::fold_into_validated_stats(&mut full_stats, validated, db);
 
@@ -1316,13 +1317,18 @@ pub fn prepare_validated_rotation(
         .iter()
         .flat_map(|s| s.all_trait_ids.iter().chain(s.trait_ids.iter()).copied())
         .collect();
+    let (_, mods) = calculate_validated_stats(validated, db, profession_name, &sim_ctx);
+    // The equipped traits' skill facts, then the trait increases the API
+    // scopes to named skills (never both for one trait: see
+    // `builder::active_skill_facts`).
+    rotation::builder::apply_traited_facts(&mut rotation_skills, db, &sim_ctx, &equipped_traits);
+    rotation::builder::apply_skill_strike(&mut rotation_skills, &mods.skill_strike);
     rotation::builder::enrich_with_cleanse(&mut rotation_skills, ne, db, &equipped_traits);
 
     if rotation_skills.is_empty() {
         return None;
     }
 
-    let (_, mods) = calculate_validated_stats(validated, db, profession_name, &sim_ctx);
     let power = stats.get("Power");
     let condition_damage = stats.get("ConditionDamage");
     let precision = stats.get("Precision");
@@ -1373,6 +1379,7 @@ pub fn prepare_validated_rotation(
         triggered: procs.triggered,
         strike_add: mods.strike_add_pct.iter().sum(),
         condition_add: mods.condition_add_pct.iter().sum(),
+        condition_type_mults: mods.specific_condi_mults(),
         folded: procs.folded,
     };
 
@@ -1639,6 +1646,25 @@ pub fn simulate_flow(
         .unwrap_or_default();
     enemy.hp = None;
     rotation::simulator::simulate_with(&prepared.skills, FLOW_WINDOW_MS, &params, enemy)
+}
+
+/// The flow run the referee scores a validated build on, for display: the
+/// stat sheet from [`calculate_validated_stats`], then
+/// [`prepare_validated_rotation`] -> [`simulate_flow`], exactly as
+/// `referee::evaluate_inner` and `fidelity::compare` run it. Every panel's
+/// Simulated DPS and Skill Usage read this, so no caller builds its own
+/// `SimParams`. `None`: the bar resolved to no skills.
+pub fn simulate_validated_flow(
+    validated: &ValidatedBuild,
+    db: &GameDb,
+    profession_name: &str,
+    weights: &OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &crate::scenario::ScenarioSpec,
+) -> Option<rotation::SimulationResult> {
+    let (stats, _) = calculate_validated_stats(validated, db, profession_name, ctx);
+    let prepared = prepare_validated_rotation(validated, db, &stats, Some(scenario))?;
+    Some(simulate_flow(&prepared, weights, Some(scenario)))
 }
 
 /// Equipment-budget slot name → the GearSlot whose prefix pays for it.
@@ -2365,6 +2391,10 @@ pub(crate) fn wvw_resource_rules(
     let mut gaps =
         resource_model_gap_names(validated, &rules, rotation_skills, db, profession_name);
     gaps.extend(rotation::missing_chain_steps(rotation_skills));
+    gaps.extend(rotation::builder::unresolved_alternative_names(
+        rotation_skills,
+        db,
+    ));
     let form = match form_for_build(validated, rotation_skills, db, &ctx.game_mode, max_health) {
         Err(name) => {
             gaps.push(format!("{name} form"));

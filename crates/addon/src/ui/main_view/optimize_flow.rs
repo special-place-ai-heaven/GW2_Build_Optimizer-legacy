@@ -1,6 +1,6 @@
 use super::optimization::{
     apply_gemini_response, candidate_to_suggestion, humanize_tool_names, keep_loadout_pets,
-    simulate_suggestion_rotation, summarize_resolved_build, synergy_result_to_suggestion,
+    measure_validated, summarize_resolved_build, synergy_result_to_suggestion,
 };
 use crate::state::AddonState;
 use crate::ui::gear_sheet::piece_gear_slot;
@@ -167,6 +167,7 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
         ),
     );
     state.main.comparison.suggestions.clear();
+    state.main.comparison.run_locked_spec = None;
     state.main.comparison.loading = true;
     state.main.comparison.error = None;
 
@@ -496,6 +497,7 @@ fn start_optimization_inner(state: &mut AddonState, profession_name: &str, entry
                     match result {
                         Ok(suggestions) => {
                             s.main.comparison.suggestions = suggestions;
+                            s.main.comparison.run_locked_spec = locked_spec_name;
                             s.main.comparison.selected_suggestion = 0;
                             s.main.comparison.show_optimized = true;
                             s.main.tab_alert = Some(entry.result_tab());
@@ -737,8 +739,17 @@ fn enrich_with_llm(
         apply_gemini_response(first, &gemini_build);
         // Validator-resolved per-slot prefixes are the authoritative gear data.
         first.slot_prefixes = Some(validated.gear_slots.clone());
-        // Run rotation simulation now that LLM has populated skills
-        simulate_suggestion_rotation(first, db, balance_ctx);
+        // Measured like every other tab now that the LLM has populated
+        // skills: the engine's stat sheet and flow run for the validated plate.
+        measure_validated(
+            first,
+            &validated,
+            db,
+            profession_name,
+            weights,
+            balance_ctx,
+            scenario,
+        );
     }
 
     Ok(())

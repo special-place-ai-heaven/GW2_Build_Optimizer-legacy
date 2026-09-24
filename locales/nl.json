@@ -466,7 +466,7 @@
   "fmt.stability_pct": "Stabiliteit: {pct}%",
   "label.condition_stacks": "Condition-stacks:",
   "label.key_skills": "Kernvaardigheden:",
-  "tier.solo": "Solo (Uitrusting + Traits)",
+  "tier.solo": "Solo (uitrusting, traits, eigen boons)",
   "tier.party": "Party (Might x15, Fury)",
   "tier.squad": "Volledige squad (Might x25, Fury, Vuln x25)",
   "stat.effective_power": "Effectieve kracht",

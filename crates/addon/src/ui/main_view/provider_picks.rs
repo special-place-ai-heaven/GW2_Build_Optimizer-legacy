@@ -164,6 +164,9 @@ pub(in crate::ui::main_view) fn refresh_provider_picks(state: &mut AddonState) {
             // not a worse answer to a support request, it is the wrong
             // answer, and a site with nothing close says so instead.
             let (chosen, silent) = ranked.cards();
+            // The scenario `picks::rank` measured in, for the tab's rotation.
+            let scenario =
+                crate::ui::main_view::optimize_flow::scenario_for_run(&ctx, tier, role, &weights);
             let winners: Vec<(gw2_optimizer::benchmark::BenchmarkBuild, PickNote)> = chosen
                 .into_iter()
                 .map(|(build, pick)| {
@@ -174,6 +177,26 @@ pub(in crate::ui::main_view) fn refresh_provider_picks(state: &mut AddonState) {
                             scale: pick.stated_scale.map(|s| s.label()),
                             viable: pick.viable,
                             report: pick.report.clone(),
+                            // The plate the referee ranked, flown on this
+                            // worker so the tab never simulates under the
+                            // state lock.
+                            rotation: gw2_optimizer::benchmark::plate_from(build, &db).and_then(
+                                |plate| {
+                                    let v = gw2_optimizer::validation::validate_gemini_build(
+                                        &plate,
+                                        &db,
+                                        &build.profession,
+                                    );
+                                    crate::ui::main_view::optimization::flow_rotation(
+                                        &v,
+                                        &db,
+                                        &build.profession,
+                                        &weights,
+                                        &ctx,
+                                        &scenario,
+                                    )
+                                },
+                            ),
                         },
                     )
                 })
@@ -206,7 +229,7 @@ pub(in crate::ui::main_view) fn refresh_provider_picks(state: &mut AddonState) {
                     .suggestions
                     .retain(|sg| sg.source_url.is_empty() || keep.contains(&sg.source_url));
                 for (i, (_, note)) in winners.iter().enumerate() {
-                    adopt_pick_tab(s, i, note.report.as_ref());
+                    adopt_pick_tab(s, i, note.report.as_ref(), note.rotation.clone());
                 }
                 // Follow the tab the player was on, wherever it landed.
                 if let Some(url) = selected_url {
@@ -520,7 +543,7 @@ pub(in crate::ui::main_view) fn take_sync_invite(ui: &Ui, state: &AddonState) ->
 /// somebody published this for this job, here it is next to what Choya
 /// cooked, compare them.
 pub(in crate::ui::main_view) fn adopt_provider_pick(state: &mut AddonState, index: usize) {
-    let Some(at) = adopt_pick_tab(state, index, None) else {
+    let Some(at) = adopt_pick_tab(state, index, None, None) else {
         return;
     };
     state.main.comparison.selected_suggestion = at;
@@ -547,6 +570,8 @@ struct PickNote {
     scale: Option<&'static str>,
     viable: bool,
     report: Option<gw2_optimizer::referee::RefereeReport>,
+    /// The build's `optimization::flow_rotation`.
+    rotation: Option<gw2_core::types::RotationBreakdown>,
 }
 
 impl PickNote {
@@ -613,6 +638,7 @@ fn adopt_pick_tab(
     state: &mut AddonState,
     index: usize,
     report: Option<&gw2_optimizer::referee::RefereeReport>,
+    rotation: Option<gw2_core::types::RotationBreakdown>,
 ) -> Option<usize> {
     let build = state.main.provider_picks.get(index).cloned()?;
     let db = state.main.game_db.clone()?;
@@ -736,6 +762,7 @@ fn adopt_pick_tab(
             &mut suggestion,
             report,
             &build.profession,
+            rotation,
         );
     }
 

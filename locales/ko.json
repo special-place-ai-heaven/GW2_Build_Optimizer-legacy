@@ -466,7 +466,7 @@
   "fmt.stability_pct": "안정성: {pct}%",
   "label.condition_stacks": "상태이상 스택:",
   "label.key_skills": "핵심 스킬:",
-  "tier.solo": "솔로 (장비 + 특성)",
+  "tier.solo": "솔로 (장비, 특성, 자체 버프)",
   "tier.party": "파티 (Might x15, Fury)",
   "tier.squad": "풀 스쿼드 (Might x25, Fury, Vuln x25)",
   "stat.effective_power": "유효 파워",

@@ -466,7 +466,7 @@
   "fmt.stability_pct": "Estabilidad: {pct}%",
   "label.condition_stacks": "Acumulaciones:",
   "label.key_skills": "Habilidades clave:",
-  "tier.solo": "Solo (equipo + rasgos)",
+  "tier.solo": "Solo (equipo, rasgos, bendiciones propias)",
   "tier.party": "Grupo (Poder x15, Furia)",
   "tier.squad": "Escuadron (Poder x25, Furia, Vuln x25)",
   "stat.effective_power": "Poder efectivo",

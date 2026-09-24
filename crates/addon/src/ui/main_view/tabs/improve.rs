@@ -1,6 +1,6 @@
 //! Improve tab — current vs optimized side-by-side, lock panel.
 
-use nexus::imgui::{ChildWindow, Ui};
+use nexus::imgui::Ui;
 
 use crate::state::AddonState;
 use crate::ui::comparison::ResultPane;
@@ -9,6 +9,11 @@ use gw2_core::i18n::{t, tf};
 
 use super::super::optimize_flow::ImproveOutcome;
 use super::{build_display, lock_panel, render_optimization_progress};
+
+/// The "Locked: <elite>" pill text for the shown results: the run's snapshot.
+fn result_lock_label(comparison: &crate::ui::comparison::ComparisonState) -> Option<&str> {
+    comparison.run_locked_spec.as_deref()
+}
 
 pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonState) {
     if state.main.build_loading {
@@ -35,20 +40,8 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
         }
     }
 
-    let locked_spec_name = state
-        .main
-        .build_locks
-        .specs
-        .get(2)
-        .and_then(|s| *s)
-        .and_then(|id| {
-            state
-                .main
-                .game_db
-                .as_ref()
-                .and_then(|db| db.spec(id))
-                .map(|s| s.name.clone())
-        });
+    // The lock the displayed run used, not the live one (see run_locked_spec).
+    let locked_spec_name = result_lock_label(&state.main.comparison).map(str::to_owned);
 
     // Two-panel layout: Current Build | Optimized Build
     let has_suggestion = !state.main.comparison.suggestions.is_empty();
@@ -58,12 +51,6 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
         // for a better version of their own build.
         crate::ui::main_view::provider_picks::refresh_provider_picks(state);
     }
-    let footer = if has_suggestion {
-        ui.current_font_size() + 22.0
-    } else {
-        0.0
-    };
-
     if state.main.current_build.is_some() {
         // Clone build data upfront to avoid borrow conflicts with mutable lock_panel state
         let build = state.main.current_build.clone().unwrap();
@@ -134,8 +121,6 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
             );
             ui.spacing();
 
-            let scroll_height = (ui.content_region_avail()[1] - footer).max(64.0);
-
             let idx = state
                 .main
                 .comparison
@@ -149,79 +134,34 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
                 suggestion.combat_solo.as_ref(),
             );
 
-            ChildWindow::new("##improve_scroll")
-                .size([0.0, scroll_height])
-                .build(ui, || match pane {
-                    ResultPane::Build => {
-                        let viewing = state.main.comparison.show_optimized;
-                        if viewing {
-                            build_display::render_suggestion_skills(
-                                ui,
-                                &suggestion,
-                                db_ref,
-                                Some(&build),
-                            );
-                        } else {
-                            build_display::render_build_skills(ui, &build, db_ref);
-                        }
-                        ui.spacing();
-                        if viewing {
-                            lock_panel::render_optimized_specs_panel(
-                                ui,
-                                db_ref.map(|db| db as &gw2_optimizer::gamedb::GameDb),
-                                &suggestion.specializations,
-                                &t("section.optimized_specs"),
-                                Some(&crate::ui::comparison::spec_pairs_from_build(&build)),
-                            );
-                        } else {
-                            let mut specs_open = true;
-                            lock_panel::render_lock_panel(
-                                ui,
-                                &mut state.main.build_locks,
-                                &mut specs_open,
-                                db_ref.map(|db| db as &gw2_optimizer::gamedb::GameDb),
-                                &profession_name,
-                                &current_specs,
-                                &build,
-                                &mut state.main.locks_hover,
-                            );
-                        }
-                        ui.spacing();
-                        crate::ui::gear_sheet::render_current_sheet(
+            // No child window here: `##center_content` (main_view/mod.rs) is
+            // already the single scroll owner for the whole tab, the same
+            // house pattern the Saves/News/Settings tabs use. A second
+            // scrolling child on top of it used to stack a redundant
+            // scrollbar next to the outer one for no benefit.
+            match pane {
+                ResultPane::Build => {
+                    let viewing = state.main.comparison.show_optimized;
+                    if viewing {
+                        build_display::render_suggestion_skills(
                             ui,
-                            &build,
-                            Some(&suggestion),
-                            db_ref,
-                            viewing,
-                            gain,
-                            Some(&mut state.main.build_locks),
-                        );
-                    }
-                    ResultPane::Stats => {
-                        crate::ui::comparison::render_stats_pane(
-                            ui,
-                            stats.as_ref(),
-                            &state.main.comparison,
                             &suggestion,
                             db_ref,
+                            Some(&build),
                         );
+                    } else {
+                        build_display::render_build_skills(ui, &build, db_ref);
                     }
-                });
-        } else {
-            // No suggestion yet — show current build with lock panel (full width)
-            let scroll_height = (ui.content_region_avail()[1] - footer).max(64.0);
-
-            ChildWindow::new("##improve_single")
-                .size([0.0, scroll_height])
-                .build(ui, || {
-                    build_display::render_card_header(
-                        ui,
-                        &t("section.current_build"),
-                        theme::CURRENT,
-                    );
-                    build_display::render_build_skills(ui, &build, state.main.game_db.as_deref());
-                    {
-                        let db_ref = state.main.game_db.as_deref();
+                    ui.spacing();
+                    if viewing {
+                        lock_panel::render_optimized_specs_panel(
+                            ui,
+                            db_ref.map(|db| db as &gw2_optimizer::gamedb::GameDb),
+                            &suggestion.specializations,
+                            &t("section.optimized_specs"),
+                            Some(&crate::ui::comparison::spec_pairs_from_build(&build)),
+                        );
+                    } else {
                         let mut specs_open = true;
                         lock_panel::render_lock_panel(
                             ui,
@@ -234,16 +174,55 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
                             &mut state.main.locks_hover,
                         );
                     }
+                    ui.spacing();
                     crate::ui::gear_sheet::render_current_sheet(
                         ui,
                         &build,
-                        None,
-                        state.main.game_db.as_deref(),
-                        false,
-                        0,
+                        Some(&suggestion),
+                        db_ref,
+                        viewing,
+                        gain,
                         Some(&mut state.main.build_locks),
                     );
-                });
+                }
+                ResultPane::Stats => {
+                    crate::ui::comparison::render_stats_pane(
+                        ui,
+                        stats.as_ref(),
+                        &state.main.comparison,
+                        &suggestion,
+                        db_ref,
+                    );
+                }
+            }
+        } else {
+            // No suggestion yet — show current build with lock panel (full width).
+            // No child window: see the scroll-owner note above.
+            build_display::render_card_header(ui, &t("section.current_build"), theme::CURRENT);
+            build_display::render_build_skills(ui, &build, state.main.game_db.as_deref());
+            {
+                let db_ref = state.main.game_db.as_deref();
+                let mut specs_open = true;
+                lock_panel::render_lock_panel(
+                    ui,
+                    &mut state.main.build_locks,
+                    &mut specs_open,
+                    db_ref.map(|db| db as &gw2_optimizer::gamedb::GameDb),
+                    &profession_name,
+                    &current_specs,
+                    &build,
+                    &mut state.main.locks_hover,
+                );
+            }
+            crate::ui::gear_sheet::render_current_sheet(
+                ui,
+                &build,
+                None,
+                state.main.game_db.as_deref(),
+                false,
+                0,
+                Some(&mut state.main.build_locks),
+            );
         }
     } else if state.main.selected_character.is_some() {
         ui.text_colored(theme::pal().muted, t("improve.loading"));
@@ -252,9 +231,8 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
     }
 
     if has_suggestion {
-        // Below the panes rather than inside `##improve_scroll`: that child's
-        // closure holds a `&GameDb` borrowed out of state for its whole body,
-        // so a `&mut AddonState` call cannot go inside it.
+        // Below the panes: the pane's `&GameDb` borrow is still live in
+        // scope up there, so a `&mut AddonState` call cannot go inside it.
         ui.spacing();
         if let Some(i) = crate::ui::main_view::provider_picks::render_provider_picks(ui, state) {
             crate::ui::main_view::provider_picks::adopt_provider_pick(state, i);
@@ -270,7 +248,26 @@ pub(in crate::ui::main_view) fn render_improve_tab(ui: &Ui, state: &mut AddonSta
         ui.same_line();
         if ui.small_button(format!("{}##improve", t("btn.clear_results"))) {
             state.main.comparison.suggestions.clear();
+            state.main.comparison.run_locked_spec = None;
             state.main.comparison.error = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::result_lock_label;
+
+    #[test]
+    fn unlocked_run_shows_no_pill_even_after_live_lock_is_set() {
+        let mut main = crate::state::MainState::default();
+        // A run that started with no lock: its snapshot is empty.
+        main.comparison.run_locked_spec = None;
+        // After the run, auto_populate_locks refills the live elite lock.
+        main.build_locks.specs[2] = Some(62);
+        assert_eq!(result_lock_label(&main.comparison), None);
+
+        main.comparison.run_locked_spec = Some("Willbender".into());
+        assert_eq!(result_lock_label(&main.comparison), Some("Willbender"));
     }
 }

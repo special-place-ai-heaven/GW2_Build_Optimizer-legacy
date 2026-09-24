@@ -578,8 +578,8 @@ struct TimedDefense {
     applied_at_ms: u32,
 }
 
-/// One hit of a cast in flight, landing at `at_ms` with its share of the
-/// skill's damage. Cancelled with the cast if the cast is interrupted.
+/// One hit of a cast in flight, landing at `at_ms` with the skill's
+/// per-strike coefficient. Cancelled with the cast if the cast is interrupted.
 #[derive(Debug, Clone)]
 struct ScheduledHit {
     at_ms: u32,
@@ -1766,10 +1766,10 @@ impl<'a> Timeline<'a> {
                 _ => None,
             })
             .flat_map(|(hit_count, dmg_multiplier)| {
-                let per_hit = dmg_multiplier / hit_count.max(1) as f64;
+                // Per-strike coefficient (wiki Soul Spiral: 12 x 0.7 = 8.4).
                 crate::data::hit_timing::hit_schedule(&skill.name, cast_ms, hit_count)
                     .into_iter()
-                    .map(move |offset| (offset, per_hit))
+                    .map(move |offset| (offset, dmg_multiplier))
             })
             .map(|(offset, per_hit)| ScheduledHit {
                 at_ms: self.at(offset),
@@ -2426,6 +2426,7 @@ impl<'a> Timeline<'a> {
             + might * crate::data::boon_condition_formulas::boons().might_condi_per_stack();
         let condi_mult = self.params.condition_mult * self.condition_conditional_mult();
         for condition in &mut self.target.conditions {
+            let condi_mult = condi_mult * self.params.condition_type_mult(&condition.name);
             if condition.next_tick_ms <= self.now_ms
                 && condition.next_tick_ms <= condition.expires_at_ms
             {
@@ -8949,6 +8950,42 @@ mod tests {
         assert_eq!(timeline.damage_events.len(), 2);
     }
 
+    /// The API `dmg_multiplier` is the coefficient of ONE strike (wiki Soul
+    /// Spiral "Damage (12x): 2,232 (8.4)" = 12 x 0.7); a cast lands
+    /// `hit_count` of them. Regression: 2090739 divided it by the hit count.
+    #[test]
+    fn a_multi_hit_cast_lands_hit_count_strikes_of_the_full_coefficient() {
+        let skills = vec![skill(
+            1,
+            SkillSlot::Weapon2,
+            900,
+            30_000,
+            vec![SkillEffect::StrikeDamage {
+                hit_count: 3,
+                dmg_multiplier: 0.5,
+            }],
+        )];
+        let params = params();
+        let mut timeline = Timeline::new(
+            &skills,
+            &params,
+            profile(2_000, vec![]),
+            open_enemy(false),
+            &[],
+            &[],
+            true,
+            Vec::new(),
+        );
+        timeline.start_cast(0);
+        let hits: Vec<f64> = timeline
+            .scheduled_hits
+            .iter()
+            .map(|h| h.dmg_multiplier)
+            .collect();
+        assert_eq!(hits, vec![0.5; 3]);
+        assert!((hits.iter().sum::<f64>() - 1.5).abs() < 1e-9);
+    }
+
     #[test]
     fn the_published_opener_is_pressed_in_order_then_the_scorer_takes_over() {
         let strike = |id: u32, slot: SkillSlot, mult: f64| {
@@ -10652,7 +10689,25 @@ mod reaper_experiments {
         let mut bare_build = fx::build();
         bare_build.sigils.retain(|s| s.id != fx::SIGIL_OF_FIRE);
         bare_build.sigil_seats = SigilSlots::new([None, Some(fx::SIGIL_OF_FORCE), None, None]);
-        let bare = traced(&bare_build, Some(3_000.0));
+        // Per-strike coefficients let both fights kill the 13 000 HP target
+        // on the same tick, which saturates total damage; halve the
+        // fixture's strike damage so neither fight kills.
+        let unkilled = |build: &ValidatedBuild| {
+            let db = fx::db();
+            let (ctx, scenario) = fx::scenario();
+            let (stats, _) = engine::calculate_validated_stats(build, &db, "Necromancer", &ctx);
+            let mut prepared =
+                engine::prepare_validated_rotation(build, &db, &stats, Some(&scenario))
+                    .expect("the fixture prepares a rotation");
+            prepared.opener = fx::opener();
+            prepared.params.precision = 3_000.0;
+            prepared.params.strike_mult *= 0.5;
+            engine::simulate_prepared_traced(&prepared, build, &db, Some(&scenario))
+                .wvw
+                .expect("WvW scenario runs the timeline")
+        };
+        let (with_fire, bare) = (unkilled(&fx::build()), unkilled(&bare_build));
+        assert!(!bare.target_reached, "the halved fight must not kill");
         assert!(
             with_fire.total_damage > bare.total_damage,
             "the sigil now adds to the fight: {} vs {}",

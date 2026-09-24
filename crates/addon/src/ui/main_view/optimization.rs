@@ -27,20 +27,19 @@ pub(super) fn coverage_note_from(
 pub(super) fn rotation_breakdown(
     sim: &gw2_optimizer::rotation::SimulationResult,
 ) -> gw2_core::types::RotationBreakdown {
+    // Highest first, then by name: the panels show the first eight, and a
+    // HashMap's order would pick a different eight on every run.
+    let ranked = |m: &std::collections::HashMap<String, f64>| {
+        let mut v: Vec<(String, f64)> = m.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        v.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        v
+    };
     gw2_core::types::RotationBreakdown {
         simulated_dps: sim.total_dps.round() as i32,
         strike_dps: sim.strike_dps.round() as i32,
         condition_dps: sim.condition_dps.round() as i32,
-        condition_uptime: sim
-            .condition_uptime
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect(),
-        buff_uptime: sim
-            .buff_uptime
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect(),
+        condition_uptime: ranked(&sim.condition_uptime),
+        buff_uptime: ranked(&sim.buff_uptime),
         skill_usage: sim
             .skill_usage
             .iter()
@@ -60,16 +59,59 @@ pub(super) fn rotation_breakdown(
     }
 }
 
+/// The rotation block every tab draws: the referee's own 60 s flow run
+/// (`engine::simulate_validated_flow`), the run the score's realized axes
+/// and the fidelity instruments read. New Build, Improve, Choya, the
+/// reference tabs and Saves all come through here, so one validated build
+/// in one scenario shows one Simulated DPS and one Skill Usage list.
+///
+/// The stunbreak, stability and cleanse lines are drawn beside the
+/// viability verdict, which the gate simulation decides, so they come from
+/// that run (`engine::simulate_validated_rotation`, the referee's
+/// `report.rotation`), not from the flow.
+pub(crate) fn flow_rotation(
+    validated: &gw2_optimizer::validation::ValidatedBuild,
+    db: &gw2_optimizer::gamedb::GameDb,
+    profession_name: &str,
+    weights: &gw2_optimizer::scoring::OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &gw2_optimizer::scenario::ScenarioSpec,
+) -> Option<gw2_core::types::RotationBreakdown> {
+    let flow = gw2_optimizer::engine::simulate_validated_flow(
+        validated,
+        db,
+        profession_name,
+        weights,
+        ctx,
+        scenario,
+    )?;
+    let mut shown = rotation_breakdown(&flow);
+    let (stats, _) =
+        gw2_optimizer::engine::calculate_validated_stats(validated, db, profession_name, ctx);
+    if let Some(gate) =
+        gw2_optimizer::engine::simulate_validated_rotation(validated, db, &stats, Some(scenario))
+    {
+        shown.stunbreak_count = gate.stunbreak_count;
+        shown.has_stability = gate.has_stability;
+        shown.stability_uptime = gate.stability_uptime;
+        shown.cleanse_count = gate.cleanse_count;
+        shown.cleanse_rate_per_20s = gate.cleanse_rate_per_20s;
+    }
+    Some(shown)
+}
+
 /// Fill the measured half of a tab straight from a referee report.
 ///
 /// The reference cards are ranked by running the referee over every
 /// candidate, so the winner's report is already in hand. Re-deriving it
 /// through the engine would simulate the same build a second time for
 /// nothing - there is one referee path, and this is where its answer lands.
+/// `rotation` is the build's [`flow_rotation`], run on the worker.
 pub(super) fn apply_referee_report(
     suggestion: &mut crate::ui::comparison::BuildSuggestion,
     report: &gw2_optimizer::referee::RefereeReport,
     profession_name: &str,
+    rotation: Option<gw2_core::types::RotationBreakdown>,
 ) {
     let derived = gw2_optimizer::stats::compute_derived(&report.stats, profession_name);
     suggestion.estimated_stats = Some(gw2_core::types::StatBlock {
@@ -90,7 +132,7 @@ pub(super) fn apply_referee_report(
     suggestion.combat_solo = Some(perf_to_combat_metrics(&report.combat_solo));
     suggestion.combat_party = Some(perf_to_combat_metrics(&report.combat_party));
     suggestion.combat_squad = Some(perf_to_combat_metrics(&report.combat_squad));
-    suggestion.rotation = report.rotation.as_ref().map(rotation_breakdown);
+    suggestion.rotation = rotation;
     suggestion.viability = Some(report.viability.clone());
     suggestion.data_quality = report.quality.clone();
     for reason in report.quality_reasons.iter().map(|r| r.to_string()) {
@@ -221,7 +263,7 @@ pub(super) fn synergy_result_to_suggestion(
     let combat_party = Some(perf_to_combat_metrics(&result.combat_party));
     let combat_squad = Some(perf_to_combat_metrics(&result.combat_squad));
 
-    let rotation = result.rotation.as_ref().map(rotation_breakdown);
+    let rotation = flow_rotation(v, db, profession_name, weights, ctx, scenario);
 
     let changes_made: Vec<String> = v
         .changes
@@ -291,8 +333,7 @@ pub(super) fn synergy_result_to_suggestion(
                 scenario.game_mode.label(),
                 &role_hint,
                 weights,
-                our_report.ranked_direction_score,
-                our_report.viability.is_viable,
+                &our_report,
                 db,
                 ctx,
                 scenario,
@@ -577,197 +618,72 @@ fn leftover_plate_quality(empty_kit: bool) -> gw2_optimizer::data::DataQuality {
     }
 }
 
-/// Run rotation simulation for a suggestion's skills and attach the results.
-///
-/// Resolves ALL build skills: weapon skills from both weapon sets (tagged for
-/// weapon swap scheduling) + heal/utility/elite from the skills list.
-/// The simulator uses DPCT-optimal scheduling with automatic weapon swapping.
+/// Measure a tab known only by its strings (a save): validated the way a
+/// Choya plate is, then the engine's stat sheet ([`attach_chat_stats`]) and
+/// flow run ([`flow_rotation`]) like every other tab, in the scenario the
+/// player has selected now. A plate the validator rejects is left as saved.
 pub(super) fn simulate_suggestion_rotation(
     suggestion: &mut crate::ui::comparison::BuildSuggestion,
     db: &gw2_optimizer::gamedb::GameDb,
-    balance_ctx: &BalanceContext,
+    profession_name: &str,
+    weights: &gw2_optimizer::scoring::OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &gw2_optimizer::scenario::ScenarioSpec,
 ) {
     if suggestion.skills.is_empty() && suggestion.weapons.is_empty() {
         return;
     }
-
-    let mut all_rotation_skills: Vec<gw2_optimizer::rotation::RotationSkill> = Vec::new();
-
-    // 1. Resolve weapon skills from suggestion.weapons (format: "Set 1: Axe / Axe").
-    //
-    // Use the pre-built `skills_by_profession` index instead of scanning all
-    // ~500 skills per (profession × weapon set × weapon type) — that scan was
-    // also nondeterministic across runs because `db.skills.values()` iteration
-    // order is unspecified.
-    if !suggestion.weapons.is_empty() {
-        let profession = infer_profession_from_specs(&suggestion.specializations, db);
-        let weapon_sets = parse_weapon_sets(&suggestion.weapons);
-        let prof_skill_ids = db.skills_by_profession.get(profession.as_str());
-
-        for (set_num, weapon_types) in &weapon_sets {
-            let mut set_skill_ids: Vec<u32> = Vec::new();
-            if let Some(ids) = prof_skill_ids {
-                for &id in ids {
-                    let Some(skill) = db.skills.get(&id) else {
-                        continue;
-                    };
-                    let matches_weapon = weapon_types.iter().any(|wt| {
-                        skill.weapon_type.as_deref().is_some_and(|swt| {
-                            gw2_core::i18n::weapon_type_key(swt)
-                                == gw2_core::i18n::weapon_type_key(wt)
-                        })
-                    });
-                    if !matches_weapon {
-                        continue;
-                    }
-                    let is_weapon_slot = skill
-                        .slot
-                        .as_deref()
-                        .map(|s| s.starts_with("Weapon_"))
-                        .unwrap_or(false);
-                    if !is_weapon_slot {
-                        continue;
-                    }
-                    if !set_skill_ids.contains(&skill.id) {
-                        set_skill_ids.push(skill.id);
-                    }
-                }
-            }
-            if !set_skill_ids.is_empty() {
-                let mut set_skills =
-                    gw2_optimizer::rotation::builder::build_rotation_skills_for_context(
-                        &set_skill_ids,
-                        db,
-                        balance_ctx,
-                    );
-                gw2_optimizer::rotation::builder::tag_weapon_set(&mut set_skills, *set_num);
-                all_rotation_skills.extend(set_skills);
+    let plate = super::chat_flow::plate_from_suggestion(suggestion);
+    let mut validated =
+        gw2_optimizer::validation::validate_gemini_build(&plate, db, profession_name);
+    // A save whose names no longer resolve keeps the numbers it was saved
+    // with, and says what did not resolve, rather than being re-priced as a
+    // partial build.
+    if !validated.errors.is_empty() {
+        for error in &validated.errors {
+            let text = format!("saved build no longer resolves: {}", error.detail);
+            if !suggestion.quality_reasons.contains(&text) {
+                suggestion.quality_reasons.push(text);
             }
         }
-    }
-
-    // 2. Resolve heal/utility/elite from suggestion.skills.
-    //    Format: "Heal: Name", "Utils: Name1, Name2, Name3", "Elite: Name".
-    //
-    // Walk skills_by_profession (sorted, scoped) instead of all db.skills —
-    // deterministic order plus faster than the ~500-entry scan. We still need
-    // exact-name match so the smaller candidate set is iterated linearly.
-    let skill_names = parse_skill_names(&suggestion.skills);
-    if !skill_names.is_empty() {
-        let profession = infer_profession_from_specs(&suggestion.specializations, db);
-        let prof_skill_ids = db.skills_by_profession.get(profession.as_str());
-        // Hoist the sorted skill-id list once so the global fallback below
-        // doesn't re-collect-and-sort `db.skills.keys()` (~500 ids) per skill
-        // name. Only allocated when at least one name will be searched.
-        let mut all_skill_ids_sorted: Option<Vec<u32>> = None;
-        for name in &skill_names {
-            let found_skill = prof_skill_ids.and_then(|ids| {
-                ids.iter()
-                    .filter_map(|id| db.skills.get(id))
-                    .find(|s| s.name.eq_ignore_ascii_case(name))
-            });
-            // Fallback: scan all skills if the profession index missed (e.g.
-            // shared utility-like skills not registered under profession).
-            // Iterate by id so a name with multiple matches (e.g. "Bandage")
-            // resolves to the same skill across runs — `HashMap::values()`
-            // order is unspecified.
-            let skill = found_skill.or_else(|| {
-                let ids = all_skill_ids_sorted.get_or_insert_with(|| {
-                    let mut v: Vec<u32> = db.skills.keys().copied().collect();
-                    v.sort_unstable();
-                    v
-                });
-                ids.iter()
-                    .filter_map(|id| db.skills.get(id))
-                    .find(|s| s.name.eq_ignore_ascii_case(name))
-            });
-            if let Some(skill) = skill {
-                if !all_rotation_skills.iter().any(|rs| rs.skill_id == skill.id) {
-                    let mut rs_vec =
-                        gw2_optimizer::rotation::builder::build_rotation_skills_for_context(
-                            &[skill.id],
-                            db,
-                            balance_ctx,
-                        );
-                    // Non-weapon skills stay at weapon_set=0 (always available)
-                    all_rotation_skills.append(&mut rs_vec);
-                }
-            }
-        }
-    }
-
-    if all_rotation_skills.is_empty() {
         return;
     }
-
-    // Extract stats from estimated_stats for the simulation
-    let stats = suggestion.estimated_stats.as_ref();
-    let power = stats.map(|s| s.power as f64).unwrap_or(1000.0);
-    let condition_damage = stats.map(|s| s.condition_damage as f64).unwrap_or(0.0);
-    let weapon_strength = 1100.0; // reference weapon strength (same as combat.rs)
-
-    let mode = balance_ctx.game_mode.clone();
-    let result = gw2_optimizer::rotation::simulator::simulate_with(
-        &all_rotation_skills,
-        0,
-        &gw2_optimizer::rotation::simulator::SimParams {
-            power,
-            condition_damage,
-            weapon_strength,
-            precision: stats.map(|s| s.precision as f64).unwrap_or(1000.0),
-            ferocity: stats.map(|s| s.ferocity as f64).unwrap_or(0.0),
-            crit_chance_bonus: 0.0,
-            fury_crit_chance_bonus: gw2_optimizer::data::boon_condition_formulas::boons()
-                .fury_crit_bonus(mode.clone())
-                * 100.0,
-            strike_mult: 1.0,
-            condition_mult: 1.0,
-            condition_duration_mult: 1.0
-                + stats.map(|s| s.expertise as f64).unwrap_or(0.0) / 1500.0,
-            boon_duration_mult: 1.0 + stats.map(|s| s.concentration as f64).unwrap_or(0.0) / 1500.0,
-            healing_power: stats.map(|s| s.healing_power as f64).unwrap_or(0.0),
-            healing_mult: 1.0,
-            max_health: stats.map(|s| s.health as f64).unwrap_or(19_212.0),
-            armor: stats.map(|s| s.armor as f64).unwrap_or(2_597.0),
-            mode,
-            intent: None,
-            deferred_target: Vec::new(),
-            weaver: suggestion
-                .specializations
-                .iter()
-                .any(|(label, _)| label.replace(" [E]", "").eq_ignore_ascii_case("Weaver")),
-            form: None,
-            triggered: Vec::new(),
-            strike_add: 0.0,
-            condition_add: 0.0,
-            folded: Default::default(),
-        },
-        gw2_optimizer::rotation::combat_model::EnemyDummy::default(),
+    // The saved per-slot map is the authoritative gear record.
+    if let Some(slots) = &suggestion.slot_prefixes {
+        validated.gear_slots = slots.clone();
+    }
+    measure_validated(
+        suggestion,
+        &validated,
+        db,
+        profession_name,
+        weights,
+        ctx,
+        scenario,
     );
+}
 
-    suggestion.rotation = Some(gw2_core::types::RotationBreakdown {
-        simulated_dps: result.total_dps.round() as i32,
-        strike_dps: result.strike_dps.round() as i32,
-        condition_dps: result.condition_dps.round() as i32,
-        condition_uptime: result.condition_uptime.into_iter().collect(),
-        buff_uptime: result.buff_uptime.into_iter().collect(),
-        skill_usage: result
-            .skill_usage
-            .iter()
-            .map(|su| {
-                (
-                    su.name.clone(),
-                    su.cast_count,
-                    su.dps_contribution.round() as i32,
-                )
-            })
-            .collect(),
-        stunbreak_count: result.stunbreak_count,
-        has_stability: result.has_stability,
-        stability_uptime: result.stability_uptime,
-        cleanse_count: result.cleanse_count,
-        cleanse_rate_per_20s: result.cleanse_rate_per_20s,
-    });
+/// A tab's measured half from its validated build: the engine's stat sheet
+/// ([`attach_chat_stats`]) and flow run ([`flow_rotation`]). Choya plates,
+/// the legacy Improve enrichment and Saves; the optimizer's own tabs get the
+/// same two from `synergy_result_to_suggestion`.
+pub(super) fn measure_validated(
+    suggestion: &mut crate::ui::comparison::BuildSuggestion,
+    validated: &gw2_optimizer::validation::ValidatedBuild,
+    db: &gw2_optimizer::gamedb::GameDb,
+    profession_name: &str,
+    weights: &gw2_optimizer::scoring::OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &gw2_optimizer::scenario::ScenarioSpec,
+) {
+    attach_chat_stats(
+        suggestion,
+        db,
+        profession_name,
+        &ctx.game_mode,
+        Some(validated),
+    );
+    suggestion.rotation = flow_rotation(validated, db, profession_name, weights, ctx, scenario);
 }
 
 /// Parse weapon sets from suggestion.weapons strings.
@@ -796,23 +712,6 @@ fn parse_weapon_sets(weapons: &[String]) -> Vec<(u8, Vec<String>)> {
         }
     }
     sets
-}
-
-/// Parse individual skill names from formatted suggestion.skills strings.
-/// "Heal: Mending" → "Mending"
-/// "Utils: Blood Reckoning, Bull's Charge, Signet of Fury" → 3 names
-/// "Elite: Head Butt" → "Head Butt"
-fn parse_skill_names(skills: &[String]) -> Vec<String> {
-    let parsed = crate::ui::gear_diff::parse_suggestion_skills(skills);
-    let mut names = Vec::new();
-    if !parsed.heal.is_empty() {
-        names.push(parsed.heal);
-    }
-    names.extend(parsed.utilities);
-    if !parsed.elite.is_empty() {
-        names.push(parsed.elite);
-    }
-    names
 }
 
 /// Infer profession name from specialization names in the suggestion.
@@ -2695,5 +2594,192 @@ mod tests {
         );
         assert_eq!(super::coverage_note_from(&[other]), None);
         assert_eq!(super::coverage_note_from(&[]), None);
+    }
+
+    /// One validated build in one scenario measures the same on every tab:
+    /// New Build and Improve (`synergy_result_to_suggestion`), a Choya plate
+    /// (`measure_validated`) and a loaded save (`simulate_suggestion_rotation`
+    /// over the tab's own strings). Needs the synced cache (dev.cfg).
+    #[test]
+    fn every_tab_measures_a_build_the_same() {
+        use gw2_optimizer::scenario::{CombatTier, ScenarioSpec};
+        let Ok(cache_dir) = gw2_api::dev_config::cache_dir() else {
+            println!("no dev.cfg: nothing to check");
+            return;
+        };
+        let db = gw2_optimizer::gamedb::GameDb::load(&gw2_api::cache::DataCache::new(cache_dir))
+            .expect("cached GameDb");
+        let corpus = gw2_optimizer::scraper::load_benchmarks_from(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../optimizer/tests/fixtures/benchmarks"
+        )));
+        let weights = gw2_optimizer::scoring::OptimizationWeights::default();
+        let measured = |s: &BuildSuggestion| {
+            serde_json::to_string(&(&s.rotation, &s.estimated_stats, &s.combat_solo))
+                .expect("serializable")
+        };
+        let mut checked = 0;
+        for (mode, tier) in [
+            (gw2_core::types::GameMode::WvW, CombatTier::Solo),
+            (gw2_core::types::GameMode::PvE, CombatTier::Party),
+        ] {
+            let ctx = gw2_optimizer::balance::BalanceContext::new(mode.clone());
+            let scenario = ScenarioSpec::for_request(&ctx, tier, None, &weights);
+            let rows = corpus
+                .iter()
+                .filter(|b| b.mode.eq_ignore_ascii_case(mode.label()))
+                .take(8);
+            for build in rows {
+                let Some(plate) = gw2_optimizer::benchmark::plate_from(build, &db) else {
+                    continue;
+                };
+                let prof = build.profession.as_str();
+                let v = gw2_optimizer::validation::validate_gemini_build(&plate, &db, prof);
+                if !v.errors.is_empty() {
+                    continue;
+                }
+                let who = format!("{prof} {} ({mode:?})", build.source_url);
+
+                let result = gw2_optimizer::engine::synergy_result_from_validated(
+                    v.clone(),
+                    &db,
+                    prof,
+                    &ctx,
+                    Some(&scenario),
+                );
+                let optimized = super::synergy_result_to_suggestion(
+                    &result, &db, prof, &scenario, None, None, None, &weights, &ctx,
+                );
+                let shown = optimized.rotation.as_ref().expect("a bar");
+                let report = gw2_optimizer::referee::evaluate_validated_build_ranked(
+                    &v, &db, prof, &weights, &ctx, &scenario,
+                );
+                let gate = report.rotation.as_ref().expect("gate run");
+                assert_eq!(
+                    (
+                        shown.stunbreak_count,
+                        shown.has_stability,
+                        shown.cleanse_count
+                    ),
+                    (gate.stunbreak_count, gate.has_stability, gate.cleanse_count),
+                    "control lines must be the gate run's: {who}"
+                );
+
+                let mut chat = BuildSuggestion::default();
+                super::measure_validated(&mut chat, &v, &db, prof, &weights, &ctx, &scenario);
+                assert_eq!(
+                    measured(&optimized),
+                    measured(&chat),
+                    "Choya vs optimizer: {who}"
+                );
+
+                let mut loaded = optimized.clone();
+                loaded.rotation = None;
+                loaded.estimated_stats = None;
+                loaded.combat_solo = None;
+                super::simulate_suggestion_rotation(
+                    &mut loaded,
+                    &db,
+                    prof,
+                    &weights,
+                    &ctx,
+                    &scenario,
+                );
+                assert_eq!(
+                    measured(&optimized),
+                    measured(&loaded),
+                    "save vs optimizer: {who}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 8, "only {checked} fixture builds validated");
+    }
+
+    /// CI half of `every_tab_measures_a_build_the_same`, on the hand-built
+    /// GameDb: a Choya plate (`measure_validated`) and the optimizer's tab
+    /// (`synergy_result_to_suggestion`) measure one validated build the same.
+    #[test]
+    fn choya_and_optimizer_tabs_measure_alike_on_a_hand_built_db() {
+        use gw2_optimizer::validation::{ValidatedBuild, ValidatedSpec};
+        let mut db = chat_code_db();
+        for id in 10..=14u32 {
+            let name = db.skills[&id].name.clone();
+            db.skills.insert(
+                id,
+                serde_json::from_value(serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "facts": [{ "type": "Damage", "hit_count": 1, "dmg_multiplier": 1.0 }]
+                }))
+                .expect("skill"),
+            );
+        }
+        db.itemstats.insert(
+            161,
+            gw2_api::models::ItemStat {
+                id: 161,
+                name: "Berserker's".into(),
+                attributes: vec![],
+            },
+        );
+        let mut v = ValidatedBuild {
+            specializations: vec![ValidatedSpec {
+                spec_id: 7,
+                name: "Daredevil".into(),
+                elite: true,
+                trait_ids: vec![1, 4, 7],
+                trait_names: vec![],
+                all_trait_ids: vec![1, 4, 7],
+            }],
+            ..Default::default()
+        };
+        v.skills.heal = Some((10, "Hide in Shadows".into()));
+        v.skills.utilities = vec![
+            Some((11, "Haste".into())),
+            Some((12, "Impairing Daggers".into())),
+            Some((13, "Skale Venom".into())),
+        ];
+        v.skills.elite = Some((14, "Dagger Storm".into()));
+        v.fill_worn_gear_slots(gw2_core::types::PrefixRef {
+            itemstat_id: 161,
+            name: "Berserker's".into(),
+        });
+
+        let weights = gw2_optimizer::scoring::OptimizationWeights::default();
+        for mode in [
+            gw2_core::types::GameMode::WvW,
+            gw2_core::types::GameMode::PvE,
+        ] {
+            let ctx = gw2_optimizer::balance::BalanceContext::new(mode.clone());
+            let scenario = gw2_optimizer::scenario::ScenarioSpec::for_request(
+                &ctx,
+                gw2_optimizer::scenario::CombatTier::Solo,
+                None,
+                &weights,
+            );
+            let result = gw2_optimizer::engine::synergy_result_from_validated(
+                v.clone(),
+                &db,
+                "Thief",
+                &ctx,
+                Some(&scenario),
+            );
+            let optimized = super::synergy_result_to_suggestion(
+                &result, &db, "Thief", &scenario, None, None, None, &weights, &ctx,
+            );
+            let mut chat = BuildSuggestion::default();
+            super::measure_validated(&mut chat, &v, &db, "Thief", &weights, &ctx, &scenario);
+            let measured = |s: &BuildSuggestion| {
+                serde_json::to_string(&(&s.rotation, &s.estimated_stats, &s.combat_solo))
+                    .expect("serializable")
+            };
+            let rotation = chat.rotation.as_ref().expect("the bar resolves");
+            assert!(
+                rotation.simulated_dps > 0,
+                "{mode:?}: damage skills deal damage"
+            );
+            assert_eq!(measured(&optimized), measured(&chat), "{mode:?}");
+        }
     }
 }

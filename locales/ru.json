@@ -466,7 +466,7 @@
   "fmt.stability_pct": "Стабильность: {pct}%",
   "label.condition_stacks": "Стаки состояний:",
   "label.key_skills": "Ключевые навыки:",
-  "tier.solo": "Соло (Снаряжение + Трейты)",
+  "tier.solo": "Соло (снаряжение, трейты, свои баффы)",
   "tier.party": "Группа (Might x15, Fury)",
   "tier.squad": "Полный отряд (Might x25, Fury, Vuln x25)",
   "stat.effective_power": "Эффективная сила",

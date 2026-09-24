@@ -472,7 +472,7 @@
   "fmt.stability_pct": "Stability: {pct}%",
   "label.condition_stacks": "Condition Stacks:",
   "label.key_skills": "Key Skills:",
-  "tier.solo": "Solo (Gear + Traits)",
+  "tier.solo": "Solo (gear, traits, own boons)",
   "tier.party": "Party (Might x15, Fury)",
   "tier.squad": "Full Squad (Might x25, Fury, Vuln x25)",
   "stat.effective_power": "Effective Power",

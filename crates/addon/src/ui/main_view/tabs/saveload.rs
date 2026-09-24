@@ -410,15 +410,27 @@ fn overwrite_named(state: &mut AddonState, name: &str) {
 
 /// SavedBuild to suggestion with rotation sim, 3-tier combat, and chat-code.
 /// Ranch Load runs this on a `spawn_worker` thread, not the draw pass.
+///
+/// With game data the save is measured like every other tab: the engine's
+/// stat sheet and flow run for its validated plate, in `scenario`.
 fn suggestion_from_saved_build(
     saved: &gw2_core::types::SavedBuild,
     game_db: Option<&gw2_optimizer::gamedb::GameDb>,
     game_mode: &gw2_core::types::GameMode,
+    weights: &gw2_optimizer::scoring::OptimizationWeights,
+    scenario: &gw2_optimizer::scenario::ScenarioSpec,
 ) -> crate::ui::comparison::BuildSuggestion {
     let mut suggestion = saved_to_suggestion(saved, game_db);
     let balance_ctx = gw2_optimizer::balance::BalanceContext::new(game_mode.clone());
     if let Some(db) = game_db {
-        optimization::simulate_suggestion_rotation(&mut suggestion, db, &balance_ctx);
+        optimization::simulate_suggestion_rotation(
+            &mut suggestion,
+            db,
+            saved_profession(saved),
+            weights,
+            &balance_ctx,
+            scenario,
+        );
     }
     suggestion
 }
@@ -484,6 +496,14 @@ fn load_named(state: &mut AddonState, name: &str) {
     // before CPU does not drop the draft.
     let game_db = state.main.game_db.clone();
     let game_mode = state.main.game_mode.clone();
+    let weights = state.main.weights.clone();
+    // The scenario the Improve button and Choya would judge in right now.
+    let scenario = crate::ui::main_view::optimize_flow::scenario_for_run(
+        &gw2_optimizer::balance::BalanceContext::new(game_mode.clone()),
+        crate::ui::main_view::optimize_flow::combat_tier_for(&game_mode, state.main.combat_tier),
+        state.main.selected_role,
+        &weights,
+    );
     let addon_dir = state.addon_dir.clone();
     let notes_retry = notes_snapshot.clone();
     let addon_dir_retry = addon_dir.clone();
@@ -494,7 +514,13 @@ fn load_named(state: &mut AddonState, name: &str) {
         if token.is_cancelled() {
             return;
         }
-        let suggestion = suggestion_from_saved_build(&saved, game_db.as_deref(), &game_mode);
+        let suggestion = suggestion_from_saved_build(
+            &saved,
+            game_db.as_deref(),
+            &game_mode,
+            &weights,
+            &scenario,
+        );
         if token.is_cancelled() {
             return;
         }
@@ -829,16 +855,9 @@ fn suggestion_to_saved(
     }
 }
 
-/// Convert a SavedBuild back to a BuildSuggestion for display.
-/// Recomputes combat metrics from estimated stats if available.
-/// When `game_db` is provided, reconstructs DamageModifiers from saved
-/// spec/trait/rune/sigil/relic names for accurate combat metric recomputation.
-fn saved_to_suggestion(
-    saved: &gw2_core::types::SavedBuild,
-    game_db: Option<&gw2_optimizer::gamedb::GameDb>,
-) -> crate::ui::comparison::BuildSuggestion {
-    // Determine profession — fallback to "Warrior" for pre-P3-16 saves
-    let profession = if saved.profession.is_empty() {
+/// The save's profession — "Warrior" for pre-P3-16 saves that stored none.
+fn saved_profession(saved: &gw2_core::types::SavedBuild) -> &str {
+    if saved.profession.is_empty() {
         nexus::log::log(
             nexus::log::LogLevel::Warning,
             "GW2BuildOpt",
@@ -847,13 +866,22 @@ fn saved_to_suggestion(
         "Warrior"
     } else {
         &saved.profession
-    };
+    }
+}
 
-    // Reconstruct DamageModifiers from saved build config if GameDb is available.
+/// Convert a SavedBuild back to a BuildSuggestion for display.
+/// Recomputes combat metrics from estimated stats if available, with no
+/// damage modifiers; the load worker re-measures with the engine.
+fn saved_to_suggestion(
+    saved: &gw2_core::types::SavedBuild,
+    game_db: Option<&gw2_optimizer::gamedb::GameDb>,
+) -> crate::ui::comparison::BuildSuggestion {
+    let profession = saved_profession(saved);
+
+    // No modifiers here: with game data the worker re-measures the save with
+    // the engine's stat sheet (`optimization::simulate_suggestion_rotation`).
     let ctx = gw2_optimizer::balance::BalanceContext::new(saved.game_mode.clone());
-    let mods = game_db
-        .map(|db| reconstruct_damage_modifiers(saved, db, &ctx))
-        .unwrap_or_default();
+    let mods = gw2_optimizer::combat::DamageModifiers::default();
 
     // Recompute combat metrics from saved stats (lossy i32→f64 but good enough for display)
     let (combat_solo, combat_party, combat_squad) = saved
@@ -917,136 +945,6 @@ fn saved_to_suggestion(
         suggestion.chat_code = optimization::suggestion_to_chat_code(&suggestion, db);
     }
     suggestion
-}
-
-/// Reconstruct DamageModifiers from a saved build by resolving spec/trait/rune/sigil/relic
-/// names against GameDb. Unresolvable entities are skipped with a warning.
-fn reconstruct_damage_modifiers(
-    saved: &gw2_core::types::SavedBuild,
-    db: &gw2_optimizer::gamedb::GameDb,
-    ctx: &gw2_optimizer::balance::BalanceContext,
-) -> gw2_optimizer::combat::DamageModifiers {
-    let mut equipped_trait_ids: Vec<u32> = Vec::new();
-
-    // Resolve specialization + trait names to IDs.
-    // Match case-insensitively so old/edited save files with drifted casing
-    // still resolve. find() returns one hit at most for exact-name lookup, so
-    // HashMap iteration order doesn't matter here.
-    for (spec_name, trait_names) in &saved.specializations {
-        let clean = spec_name.replace(" [E]", "");
-        let spec = db
-            .specializations
-            .values()
-            .find(|s| s.name.eq_ignore_ascii_case(&clean));
-        let Some(spec) = spec else {
-            nexus::log::log(
-                nexus::log::LogLevel::Warning,
-                "GW2BuildOpt",
-                format!(
-                    "Could not resolve spec '{}' for modifier reconstruction — skipping",
-                    spec_name
-                ),
-            );
-            continue;
-        };
-
-        for trait_name in trait_names {
-            let trait_id = db.traits_by_spec.get(&spec.id).and_then(|ids| {
-                ids.iter()
-                    .filter_map(|id| db.traits.get(id))
-                    .find(|t| t.name.eq_ignore_ascii_case(trait_name))
-                    .map(|t| t.id)
-            });
-            match trait_id {
-                Some(id) => equipped_trait_ids.push(id),
-                None => {
-                    nexus::log::log(
-                        nexus::log::LogLevel::Warning,
-                        "GW2BuildOpt",
-                        format!(
-                            "Could not resolve trait '{}' in spec '{}' — skipping",
-                            trait_name, spec_name
-                        ),
-                    );
-                }
-            }
-        }
-    }
-
-    // Resolve rune name to ID (case-insensitive)
-    let rune_id = if !saved.rune.is_empty() {
-        let found = db
-            .runes
-            .iter()
-            .filter_map(|id| db.items.get(id))
-            .find(|item| item.name.eq_ignore_ascii_case(&saved.rune))
-            .map(|item| item.id);
-        if found.is_none() {
-            nexus::log::log(
-                nexus::log::LogLevel::Warning,
-                "GW2BuildOpt",
-                format!("Could not resolve rune '{}' — skipping", saved.rune),
-            );
-        }
-        found
-    } else {
-        None
-    };
-
-    // Resolve sigil names to IDs
-    let sigil_ids: Vec<u32> = saved
-        .sigils
-        .iter()
-        .filter_map(|name| {
-            if name.is_empty() {
-                return None;
-            }
-            let found = db
-                .sigils
-                .iter()
-                .filter_map(|id| db.items.get(id))
-                .find(|item| item.name.eq_ignore_ascii_case(name))
-                .map(|item| item.id);
-            if found.is_none() {
-                nexus::log::log(
-                    nexus::log::LogLevel::Warning,
-                    "GW2BuildOpt",
-                    format!("Could not resolve sigil '{}' — skipping", name),
-                );
-            }
-            found
-        })
-        .collect();
-
-    // Resolve relic name to ID (case-insensitive)
-    let relic_id = if !saved.relic.is_empty() {
-        let found = db
-            .relics
-            .iter()
-            .filter_map(|id| db.items.get(id))
-            .find(|item| item.name.eq_ignore_ascii_case(&saved.relic))
-            .map(|item| item.id);
-        if found.is_none() {
-            nexus::log::log(
-                nexus::log::LogLevel::Warning,
-                "GW2BuildOpt",
-                format!("Could not resolve relic '{}' — skipping", saved.relic),
-            );
-        }
-        found
-    } else {
-        None
-    };
-
-    gw2_optimizer::combat::extract_damage_modifiers(
-        &equipped_trait_ids,
-        rune_id,
-        &sigil_ids,
-        relic_id,
-        &db.traits,
-        &db.items,
-        ctx,
-    )
 }
 
 /// Format a Unix timestamp as a readable date+time string (YYYY-MM-DD HH:MM).
@@ -1146,216 +1044,6 @@ mod tests {
                 armor: 0,
             }),
         }
-    }
-
-    fn build_test_gamedb_for_modifier_reconstruction() -> gw2_optimizer::gamedb::GameDb {
-        let trait_id = 1001u32;
-        let spec_id = 5001u32;
-        let rune_id = 2001u32;
-        let sigil_id = 2002u32;
-        let relic_id = 2003u32;
-
-        let mut traits = std::collections::HashMap::new();
-        traits.insert(
-            trait_id,
-            gw2_api::models::Trait {
-                id: trait_id,
-                name: "Test Condition Trait".into(),
-                icon: None,
-                description: None,
-                specialization: spec_id,
-                tier: 1,
-                order: 0,
-                slot: "Major".into(),
-                facts: vec![gw2_api::models::Fact::Percent {
-                    text: Some("Increase condition damage by 20%".into()),
-                    icon: None,
-                    percent: Some(20.0),
-                }],
-                traited_facts: vec![],
-                skills: vec![],
-            },
-        );
-
-        let mut specializations = std::collections::HashMap::new();
-        specializations.insert(
-            spec_id,
-            gw2_api::models::Specialization {
-                id: spec_id,
-                name: "Test Spec".into(),
-                profession: "Warrior".into(),
-                elite: false,
-                minor_traits: vec![],
-                major_traits: vec![trait_id],
-                weapon_trait: None,
-                icon: None,
-                background: None,
-                profession_icon: None,
-                profession_icon_big: None,
-            },
-        );
-
-        let mut items = std::collections::HashMap::new();
-        items.insert(
-            rune_id,
-            gw2_api::models::Item {
-                id: rune_id,
-                name: "Superior Rune of Test".into(),
-                description: None,
-                icon: None,
-                item_type: "UpgradeComponent".into(),
-                rarity: "Exotic".into(),
-                level: 80,
-                vendor_value: None,
-                chat_link: None,
-                default_skin: None,
-                flags: vec![],
-                game_types: vec![],
-                restrictions: vec![],
-                details: Some(gw2_api::models::ItemDetails {
-                    description: None,
-                    detail_type: Some("UpgradeComponent".into()),
-                    weight_class: None,
-                    defense: None,
-                    damage_type: None,
-                    min_power: None,
-                    max_power: None,
-                    suffix: None,
-                    bonuses: vec!["+20% Condition Duration".into()],
-                    infusion_upgrade_flags: vec![],
-                    infusion_slots: vec![],
-                    attribute_adjustment: None,
-                    infix_upgrade: None,
-                    suffix_item_id: None,
-                    secondary_suffix_item_id: None,
-                    stat_choices: vec![],
-                }),
-            },
-        );
-        items.insert(
-            sigil_id,
-            gw2_api::models::Item {
-                id: sigil_id,
-                name: "Superior Sigil of Bursting".into(),
-                description: None,
-                icon: None,
-                item_type: "UpgradeComponent".into(),
-                rarity: "Exotic".into(),
-                level: 80,
-                vendor_value: None,
-                chat_link: None,
-                default_skin: None,
-                flags: vec![],
-                game_types: vec![],
-                restrictions: vec![],
-                details: None,
-            },
-        );
-        items.insert(
-            relic_id,
-            gw2_api::models::Item {
-                id: relic_id,
-                name: "Relic of the Nightmare".into(),
-                description: Some("Gain 10% condition duration.".into()),
-                icon: None,
-                item_type: "Relic".into(),
-                rarity: "Exotic".into(),
-                level: 80,
-                vendor_value: None,
-                chat_link: None,
-                default_skin: None,
-                flags: vec![],
-                game_types: vec![],
-                restrictions: vec![],
-                details: None,
-            },
-        );
-
-        let mut traits_by_spec = std::collections::HashMap::new();
-        traits_by_spec.insert(spec_id, vec![trait_id]);
-
-        gw2_optimizer::gamedb::GameDb {
-            items,
-            itemstats: std::collections::HashMap::new(),
-            skills: std::collections::HashMap::new(),
-            traits,
-            specializations,
-            professions: std::collections::HashMap::new(),
-            legends: std::collections::HashMap::new(),
-            pvp_amulets: std::collections::HashMap::new(),
-            pets: std::collections::HashMap::new(),
-            skills_by_profession: std::collections::HashMap::new(),
-            traits_by_spec,
-            items_by_type: std::collections::HashMap::new(),
-            runes: vec![rune_id],
-            sigils: vec![sigil_id],
-            relics: vec![relic_id],
-            skill_to_palette: std::collections::HashMap::new(),
-            palette_to_skill: std::collections::HashMap::new(),
-            traits_by_condition: std::collections::HashMap::new(),
-            skills_by_condition: std::collections::HashMap::new(),
-            traits_by_buff: std::collections::HashMap::new(),
-            skills_by_buff: std::collections::HashMap::new(),
-            localized: None,
-        }
-    }
-
-    fn contains_approx(values: &[f64], expected: f64) -> bool {
-        values.iter().any(|v| (v - expected).abs() < 1e-9)
-    }
-
-    #[test]
-    fn test_reconstruct_damage_modifiers_resolves_saved_entities() {
-        let saved = build_saved_for_modifier_reconstruction();
-        let db = build_test_gamedb_for_modifier_reconstruction();
-        let ctx = gw2_optimizer::balance::BalanceContext::new(saved.game_mode.clone());
-
-        let mods = super::reconstruct_damage_modifiers(&saved, &db, &ctx);
-
-        assert!(
-            contains_approx(&mods.condition_pct, 0.20),
-            "expected trait-based +20% condition damage to be reconstructed"
-        );
-        // Bursting sits in the additive bucket (modifier_buckets.json); the
-        // point here is that the sigil was resolved at all.
-        assert!(
-            contains_approx(&mods.condition_pct, 0.06)
-                || contains_approx(&mods.condition_add_pct, 0.06),
-            "expected sigil-based +6% condition damage to be reconstructed"
-        );
-        assert!(
-            contains_approx(&mods.condi_duration_pct, 0.20),
-            "expected rune-based +20% condition duration to be reconstructed"
-        );
-        assert!(
-            contains_approx(&mods.condi_duration_pct, 0.10),
-            "expected relic-based +10% condition duration to be reconstructed"
-        );
-    }
-
-    #[test]
-    fn test_saved_to_suggestion_load_path_uses_reconstructed_modifiers() {
-        let saved = build_saved_for_modifier_reconstruction();
-        let db = build_test_gamedb_for_modifier_reconstruction();
-
-        let without_db = super::saved_to_suggestion(&saved, None);
-        let with_db = super::saved_to_suggestion(&saved, Some(&db));
-
-        let without_solo = without_db
-            .combat_solo
-            .expect("saved test fixture should produce combat metrics without GameDb");
-        let with_solo = with_db
-            .combat_solo
-            .expect("saved test fixture should produce combat metrics with GameDb");
-
-        assert!(
-            with_solo.condition_dps_index > without_solo.condition_dps_index,
-            "load path with GameDb should reconstruct condition modifiers instead of defaulting"
-        );
-        assert!(
-            with_solo.total_dps_index > without_solo.total_dps_index,
-            "total DPS should reflect reconstructed modifiers on load"
-        );
     }
 
     #[test]
@@ -1492,7 +1180,12 @@ mod tests {
     #[test]
     fn ranch_load_worker_body_matches_saved_to_suggestion_without_db() {
         let saved = build_saved_for_modifier_reconstruction();
-        let via_worker = super::suggestion_from_saved_build(&saved, None, &saved.game_mode);
+        let weights = gw2_optimizer::scoring::OptimizationWeights::default();
+        let scenario = gw2_optimizer::scenario::ScenarioSpec::from_balance_context(
+            &gw2_optimizer::balance::BalanceContext::new(saved.game_mode.clone()),
+        );
+        let via_worker =
+            super::suggestion_from_saved_build(&saved, None, &saved.game_mode, &weights, &scenario);
         let via_convert = super::saved_to_suggestion(&saved, None);
         assert_eq!(via_worker.label, via_convert.label);
         assert_eq!(via_worker.combat_solo, via_convert.combat_solo);

@@ -678,6 +678,7 @@ fn render_scale_row(ui: &Ui, state: &mut AddonState) {
             state.main.weights = role.to_weights_for(&state.main.game_mode, state.main.combat_tier);
         }
         state.main.comparison.suggestions.clear();
+        state.main.comparison.run_locked_spec = None;
         state.main.comparison.error = None;
     }
 }
@@ -714,6 +715,7 @@ fn apply_role(state: &mut AddonState, role: RoleObjective) {
     state.main.selected_role = Some(role);
     state.main.weights = role.to_weights_for(&state.main.game_mode, state.main.combat_tier);
     state.main.comparison.suggestions.clear();
+    state.main.comparison.run_locked_spec = None;
     state.main.comparison.selected_suggestion = 0;
     state.main.comparison.error = None;
 }
@@ -853,6 +855,7 @@ fn render_left_character_section(ui: &Ui, state: &mut AddonState) {
         // Clear prior character's suggestions, combat metrics, and locks — the new
         // character may be a different profession with different specs entirely.
         state.main.comparison.suggestions.clear();
+        state.main.comparison.run_locked_spec = None;
         state.main.comparison.selected_suggestion = 0;
         state.main.comparison.error = None;
         state.main.comparison.show_optimized = false;
@@ -902,6 +905,7 @@ fn render_left_character_section(ui: &Ui, state: &mut AddonState) {
         if let Some(idx) = bt_changed {
             state.main.selected_build_tab = Some(idx);
             state.main.comparison.suggestions.clear();
+            state.main.comparison.run_locked_spec = None;
             state.main.comparison.selected_suggestion = 0;
             state.main.comparison.error = None;
             state.main.comparison.show_optimized = false;
@@ -949,6 +953,7 @@ fn render_left_character_section(ui: &Ui, state: &mut AddonState) {
         if let Some(idx) = et_changed {
             state.main.selected_equipment_tab = Some(idx);
             state.main.comparison.suggestions.clear();
+            state.main.comparison.run_locked_spec = None;
             state.main.comparison.selected_suggestion = 0;
             state.main.comparison.error = None;
             state.main.comparison.show_optimized = false;
@@ -985,6 +990,7 @@ fn render_left_build_controls(ui: &Ui, state: &mut AddonState) {
             OptimizationWeights::default_for_mode(mode.label())
         };
         state.main.comparison.suggestions.clear();
+        state.main.comparison.run_locked_spec = None;
         state.main.comparison.selected_suggestion = 0;
         state.main.comparison.error = None;
         state.main.build_locks = gw2_core::types::BuildLocks::default();

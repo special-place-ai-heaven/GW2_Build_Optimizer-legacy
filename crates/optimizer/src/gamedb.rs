@@ -10,6 +10,29 @@ use gw2_api::models::{
     Item, ItemStat, Legend, Pet, Profession, PvpAmulet, Skill, Specialization, Trait as GW2Trait,
 };
 
+/// `data/form_variants.json`: palette skill id -> the id cast outside the
+/// form. Compile-time data, parsed by `druid_bar_carries_the_out_of_form_glyph`.
+fn form_variants() -> &'static HashMap<u32, u32> {
+    #[derive(serde::Deserialize)]
+    struct Variant {
+        skill: u32,
+        out_of_form: u32,
+    }
+    #[derive(serde::Deserialize)]
+    struct File {
+        variants: Vec<Variant>,
+    }
+    static VARIANTS: std::sync::OnceLock<HashMap<u32, u32>> = std::sync::OnceLock::new();
+    VARIANTS.get_or_init(|| {
+        let file: File = serde_json::from_str(include_str!("../../../data/form_variants.json"))
+            .expect("embedded form_variants.json is invalid");
+        file.variants
+            .into_iter()
+            .map(|v| (v.skill, v.out_of_form))
+            .collect()
+    })
+}
+
 /// In-memory indexed game database loaded from cache.
 #[derive(Clone)]
 pub struct GameDb {
@@ -306,6 +329,20 @@ impl GameDb {
 
     pub fn profession(&self, name: &str) -> Option<&Profession> {
         self.professions.get(name)
+    }
+
+    /// The skill the game casts for bar skill `id` outside a form. A Druid
+    /// glyph's palette skill (Glyph of Alignment 31322, the id the build tab
+    /// and palette 4821 carry) has no damage or conditions and no API link
+    /// to what is cast; `data/form_variants.json` names the variant from the
+    /// wiki (31607 out of Celestial Avatar). Ids it does not catalogue, and
+    /// variants missing from the cache, come back unchanged.
+    pub fn out_of_form_variant(&self, id: u32) -> u32 {
+        form_variants()
+            .get(&id)
+            .copied()
+            .filter(|variant| self.skills.contains_key(variant))
+            .unwrap_or(id)
     }
 
     /// Deterministic itemstat lookup by name (case-insensitive). Returns the

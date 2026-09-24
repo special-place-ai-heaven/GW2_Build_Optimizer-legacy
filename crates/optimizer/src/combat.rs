@@ -67,6 +67,21 @@ pub struct DamageModifiers {
     /// timeline removes a trait's share when it runs that trait's own
     /// Conditional record, so the bonus is counted once (review E1).
     pub trait_standing: Vec<TraitStanding>,
+    /// Trait strike increases that belong to named skills only, moved out
+    /// of `strike_pct` by [`scope_skill_damage`] (Power for Power: Willbender
+    /// Flames). The rotation applies them to those skills' strikes.
+    pub skill_strike: Vec<SkillScopedStrike>,
+}
+
+/// A trait's strike increase scoped to the skills it names.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillScopedStrike {
+    pub trait_id: u32,
+    /// The skills the API scopes it to (their `traited_facts` Damage facts
+    /// that require this trait).
+    pub skill_ids: Vec<u32>,
+    /// Factor on those skills' strike damage (3.0 for +200%).
+    pub factor: f64,
 }
 
 /// One trait's always-on share of the parsed modifiers.
@@ -177,6 +192,19 @@ impl DamageModifiers {
             && self.healing_pct.is_empty()
             && self.crit_chance_pct.is_empty()
             && self.deferred_target.is_empty())
+    }
+
+    /// Per-condition factors from `specific_condi` (Hidden Barbs: Bleeding
+    /// 1.20 in PvE), keyed by canonical condition name. They multiply on top
+    /// of [`Self::total_condi_mult`], as [`Self::total_condi_mult_for`] does.
+    pub fn specific_condi_mults(&self) -> HashMap<String, f64> {
+        self.specific_condi
+            .iter()
+            .map(|(condition, values)| {
+                let factor = values.iter().fold(1.0, |acc, &m| acc * (1.0 + m));
+                (condition.clone(), factor)
+            })
+            .collect()
     }
 
     /// Total multiplicative condition damage modifier for a specific condition.
@@ -871,13 +899,49 @@ pub fn extract_damage_modifiers(
             if overridden.contains(&(idx as u32)) {
                 continue;
             }
-            extract_modifier_from_fact(&mut trait_mods, fact);
+            extract_trait_modifier(&mut trait_mods, fact, t.description.as_deref());
         }
 
         // Process active traited_facts
         for tf in &t.traited_facts {
             if equipped_set.contains(&tf.requires_trait) {
-                extract_modifier_from_fact(&mut trait_mods, &tf.fact);
+                extract_trait_modifier(&mut trait_mods, &tf.fact, t.description.as_deref());
+            }
+        }
+
+        // The API's two values of a condition-owned increase are not in a
+        // fixed mode order (Hidden Barbs [20 PvE, 33 WvW], Potent Poison
+        // [33 PvE, 20 WvW]), so neither the larger nor the first is the PvE
+        // one. A wiki-sourced value for the mode, when the balance overrides
+        // carry one, replaces them; otherwise `absorb_pair` below decides.
+        for (condition, values) in trait_mods.specific_condi.iter_mut() {
+            let field = format!("condition_damage_pct:{}", condition.to_lowercase());
+            if let Some(crate::data::OverrideResult::Value { value, .. }) =
+                crate::data::balance_overrides::overrides().lookup(
+                    &ctx.patch_id,
+                    ctx.game_mode.label(),
+                    "Trait",
+                    trait_id,
+                    &field,
+                )
+            {
+                *values = vec![value / 100.0];
+            }
+        }
+        // Same for a bare "Damage Increase" (Power for Power: the API's
+        // [100, 200] happens to follow the larger-in-PvE rule; the wiki value
+        // for the mode is what counts, scoped or not).
+        if !trait_mods.strike_pct.is_empty() {
+            if let Some(crate::data::OverrideResult::Value { value, .. }) =
+                crate::data::balance_overrides::overrides().lookup(
+                    &ctx.patch_id,
+                    ctx.game_mode.label(),
+                    "Trait",
+                    trait_id,
+                    "damage_increase_pct",
+                )
+            {
+                trait_mods.strike_pct = vec![value / 100.0];
             }
         }
 
@@ -963,6 +1027,139 @@ pub fn extract_damage_modifiers(
     }
 
     mods
+}
+
+/// Skills whose API `traited_facts` carry a Damage fact requiring
+/// `trait_id`: the only place the API says which skills a trait's bare
+/// "Damage Increase" belongs to (the trait's own `skills` list is empty for
+/// all seven such traits, and its description names a class, not ids).
+// ponytail: full skill scan per scoped trait, only for traits with a bare
+// "Damage Increase"; index it on GameDb if a profiler ever points here.
+pub fn damage_scope_skills(
+    trait_id: u32,
+    skills: &HashMap<u32, gw2_api::models::Skill>,
+) -> Vec<u32> {
+    let mut ids: Vec<u32> = skills
+        .values()
+        .filter(|skill| {
+            skill
+                .traited_facts
+                .iter()
+                .any(|tf| tf.requires_trait == trait_id && matches!(tf.fact, Fact::Damage { .. }))
+        })
+        .map(|skill| skill.id)
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+/// Whether trait `t` publishes a bare "Damage Increase" percent (no
+/// strike, condition or target wording): the fact the stat sheet reads as
+/// a global strike increase.
+pub(crate) fn has_bare_damage_increase(t: &Trait) -> bool {
+    t.facts.iter().any(|fact| {
+        matches!(fact, Fact::Percent { text: Some(text), .. }
+            if text.trim().eq_ignore_ascii_case("damage increase"))
+    })
+}
+
+/// Move the strike share of every equipped trait whose bare "Damage
+/// Increase" the API scopes to skills ([`damage_scope_skills`]) out of the
+/// global strike multiplier into [`DamageModifiers::skill_strike`]. Power
+/// for Power's +200% belongs to Willbender Flames, not to every strike.
+/// The trait's standing share goes too, so the WvW timeline never divides
+/// out a factor that is no longer folded in. The value stays the one the
+/// trait loop picked for the mode.
+pub fn scope_skill_damage(
+    mods: &mut DamageModifiers,
+    traits: &HashMap<u32, Trait>,
+    skills: &HashMap<u32, gw2_api::models::Skill>,
+) {
+    for standing in &mut mods.trait_standing {
+        if standing.strike_pct.is_empty() {
+            continue;
+        }
+        let Some(t) = traits.get(&standing.trait_id) else {
+            continue;
+        };
+        if !has_bare_damage_increase(t) {
+            continue;
+        }
+        let skill_ids = damage_scope_skills(t.id, skills);
+        if skill_ids.is_empty() {
+            continue;
+        }
+        let mut factor = 1.0;
+        for value in standing.strike_pct.drain(..) {
+            if let Some(at) = mods.strike_pct.iter().position(|v| *v == value) {
+                mods.strike_pct.remove(at);
+            }
+            factor *= 1.0 + value;
+        }
+        mods.skill_strike.push(SkillScopedStrike {
+            trait_id: t.id,
+            skill_ids,
+            factor,
+        });
+    }
+}
+
+/// [`extract_modifier_from_fact`] for a trait fact, first routing a bare
+/// damage increase the trait's own words give to one condition into
+/// `specific_condi` (see [`condition_owning_damage`]).
+fn extract_trait_modifier(mods: &mut DamageModifiers, fact: &Fact, description: Option<&str>) {
+    if let Fact::Percent {
+        text: Some(text),
+        percent: Some(pct),
+        ..
+    } = fact
+    {
+        let owner = (parse_deferred_target_modifier(text, *pct).is_none()
+            && !percent_text_is_conditional(text))
+        .then(|| condition_owning_damage(text, description))
+        .flatten();
+        if let Some(condition) = owner {
+            mods.specific_condi
+                .entry(condition)
+                .or_default()
+                .push(pct / 100.0);
+            return;
+        }
+    }
+    extract_modifier_from_fact(mods, fact);
+}
+
+/// The damaging condition a bare damage-increase percent belongs to, when
+/// the trait says so. The API fact carries no target or status (Hidden
+/// Barbs is `{"text": "Damage Increase", "percent": 20}`), so the owner is
+/// read from the fact text ("Poison Damage Increase", "Bleeding Damage
+/// Bonus") or else from a description clause whose subject is the
+/// condition and which speaks of its damage ("Bleeding you inflict is more
+/// dangerous.", "Torment deals increased damage.", "...; your poison damage
+/// is increased."). "Deal increased damage to bleeding foes" is strike
+/// against a target and stays strike; "Power Converted to Burning Damage"
+/// is a conversion, not an increase.
+fn condition_owning_damage(text: &str, description: Option<&str>) -> Option<String> {
+    const CONDITIONS: [&str; 5] = ["bleeding", "burning", "poison", "torment", "confusion"];
+    let t = text.to_lowercase();
+    if !t.contains("damage")
+        || ["strike", "condition", "convert", "critical"]
+            .iter()
+            .any(|word| t.contains(word))
+    {
+        return None;
+    }
+    let owner = CONDITIONS.iter().find(|c| t.contains(**c)).or_else(|| {
+        let description = strip_gw2_markup(description?).to_lowercase();
+        description.split(['.', ';']).find_map(|clause| {
+            let clause = clause.trim();
+            let clause = clause.strip_prefix("your ").unwrap_or(clause);
+            let condition = CONDITIONS.iter().find(|c| clause.starts_with(**c))?;
+            (clause.contains("damage") || clause.contains("dangerous")).then_some(condition)
+        })
+    })?;
+    let name = capitalize(owner);
+    Some(crate::data::boon_condition_formulas::canonical_condition_name(&name).to_string())
 }
 
 /// Extract a damage modifier from a single Fact.
@@ -4296,5 +4493,38 @@ mod tests {
             .expect("poisoned parse");
         assert_eq!(parsed_alias.gate, TargetGate::Condition("Poisoned"));
         assert_eq!(parsed_canon.gate, TargetGate::Condition("Poisoned"));
+    }
+}
+
+/// Condition-owned "Damage Increase" facts: the trait says which condition.
+#[cfg(test)]
+mod condition_owned_damage_tests {
+    use super::*;
+    use gw2_core::types::GameMode;
+
+    /// Live API trait 1846 (trait cache, build 207318), icons dropped.
+    const HIDDEN_BARBS: &str = r#"{"id": 1846, "name": "Hidden Barbs", "description": "Bleeding you inflict is more dangerous.", "specialization": 30, "tier": 2, "order": 2, "slot": "Major", "facts": [{"percent": 20.0, "text": "Damage Increase", "type": "Percent"}, {"percent": 33.0, "text": "Damage Increase", "type": "Percent"}]}"#;
+
+    fn hidden_barbs(mode: GameMode) -> DamageModifiers {
+        let t: Trait = serde_json::from_str(HIDDEN_BARBS).expect("fixture parses");
+        let traits = HashMap::from([(t.id, t)]);
+        let ctx = BalanceContext::new(mode);
+        extract_damage_modifiers(&[1846], None, &[], None, &traits, &HashMap::new(), &ctx)
+    }
+
+    /// Wiki Hidden Barbs: condition damage increase on Bleeding, 20% in PvE
+    /// and 33% in WvW and PvP (2026-04-14: "Reduced the bleeding damage
+    /// increase from 33% to 20% in PvE only"). The API lists [20, 33], so
+    /// taking the larger value in PvE was wrong, and it was never strike.
+    #[test]
+    fn hidden_barbs_is_a_bleeding_modifier_by_game_mode() {
+        let pve = hidden_barbs(GameMode::PvE);
+        assert_eq!(pve.specific_condi.get("Bleeding"), Some(&vec![0.20]));
+        assert!(pve.strike_pct.is_empty() && pve.strike_add_pct.is_empty());
+        assert!(pve.condition_pct.is_empty());
+        assert!(pve.consumed_trait_ids.contains(&1846));
+        let wvw = hidden_barbs(GameMode::WvW);
+        assert_eq!(wvw.specific_condi.get("Bleeding"), Some(&vec![0.33]));
+        assert!(wvw.strike_pct.is_empty() && wvw.strike_add_pct.is_empty());
     }
 }

@@ -466,7 +466,7 @@
   "fmt.stability_pct": "Stabilität: {pct}%",
   "label.condition_stacks": "Zustandsstapel:",
   "label.key_skills": "Schlüsselfertigkeiten:",
-  "tier.solo": "Solo (Ausrüstung + Traits)",
+  "tier.solo": "Solo (Ausrüstung, Traits, eigene Segen)",
   "tier.party": "Gruppe (Macht x15, Furor)",
   "tier.squad": "Trupp (Macht x25, Furor, Verwundbarkeit x25)",
   "stat.effective_power": "Effektive Kraft",

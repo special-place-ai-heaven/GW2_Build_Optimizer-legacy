@@ -271,7 +271,8 @@ pub enum MobilityKind {
 /// An effect that a skill produces when used.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkillEffect {
-    /// Direct strike damage.
+    /// Direct strike damage: `hit_count` strikes of `dmg_multiplier` each
+    /// (the API coefficient is per strike; total = coefficient x hit_count).
     StrikeDamage {
         hit_count: u32,
         dmg_multiplier: f64,

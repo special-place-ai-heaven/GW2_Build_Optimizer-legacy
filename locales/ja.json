@@ -466,7 +466,7 @@
   "fmt.stability_pct": "安定: {pct}%",
   "label.condition_stacks": "コンディションスタック:",
   "label.key_skills": "キースキル:",
-  "tier.solo": "ソロ（装備＋トレイト）",
+  "tier.solo": "ソロ（装備・トレイト・自己バフ）",
   "tier.party": "パーティ（Might x15、Fury）",
   "tier.squad": "フルスクアッド（Might x25、Fury、Vuln x25）",
   "stat.effective_power": "実効パワー",

@@ -186,12 +186,16 @@ const CASES: &[Case] = &[
         CombatTier::Party,
         &["hardstuck:Zerg Boon DPS", "guildjen:Havoc Support"],
     ),
+    // Re-frozen in sprint 008 (skill facts increment), measured: the bar
+    // now carries the equipped traits' `traited_facts` (fix A), which lifts
+    // the guildjen Fractal Support build over the matching floor to 0.207.
+    // With traited facts switched off it matches nothing again.
     (
         "Mesmer",
         GameMode::PvE,
         RoleObjective::Buffer,
         CombatTier::Party,
-        &[],
+        &["guildjen:Fractal Support"],
     ),
     (
         "Elementalist",

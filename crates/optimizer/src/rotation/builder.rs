@@ -31,10 +31,364 @@ pub fn build_rotation_skills_for_context(
     skill_ids
         .iter()
         .filter_map(|&id| {
-            let skill = db.skills.get(&id)?;
+            let skill = db.skills.get(&db.out_of_form_variant(id))?;
             Some(skill_to_rotation_for_context(skill, ctx))
         })
         .collect()
+}
+
+/// A skill's facts with the equipped traits' `traited_facts` applied: a
+/// traited fact with `overrides: i` replaces base fact `i`, one without is
+/// added (Eclipse's Burning on Natural Convergence). Same rule as the trait
+/// loop in `combat::extract_damage_modifiers`: collect the overridden
+/// indices first, then skip those base facts. `i` indexes the API's raw
+/// array; `deserialize_facts` keeps every typed fact (`Range`, `NoData`
+/// included), so the indices line up (Poison Volley's `overrides: 6`).
+///
+/// A traited Damage fact of a trait with a bare "Damage Increase" is left
+/// out: that increase reaches the skill once, as the trait's mode value,
+/// through [`apply_skill_strike`] (the API's traited coefficient is the
+/// PvE one: Willbender Flames 0.66 = +200%, WvW +100%).
+fn active_skill_facts(skill: &Skill, equipped_traits: &[u32], db: &GameDb) -> Vec<Fact> {
+    let scoped = |trait_id: u32| {
+        db.traits
+            .get(&trait_id)
+            .is_some_and(crate::combat::has_bare_damage_increase)
+    };
+    let active: Vec<&gw2_api::models::TraitedFact> = skill
+        .traited_facts
+        .iter()
+        .filter(|tf| equipped_traits.contains(&tf.requires_trait))
+        .filter(|tf| !(matches!(tf.fact, Fact::Damage { .. }) && scoped(tf.requires_trait)))
+        .collect();
+    let overridden: Vec<u32> = active.iter().filter_map(|tf| tf.overrides).collect();
+    skill
+        .facts
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| !overridden.contains(&(*idx as u32)))
+        .map(|(_, fact)| fact.clone())
+        .chain(active.iter().map(|tf| tf.fact.clone()))
+        .collect()
+}
+
+/// Re-derive the effects of every bar skill whose facts the equipped traits
+/// change (`traited_facts`). Call after the bars are built and before
+/// [`enrich_with_cleanse`], which adds to the effects this replaces.
+/// Cooldowns stay the base value: trait recharge reductions are applied by
+/// the trait's own record, not by a traited `Recharge` fact.
+pub fn apply_traited_facts(
+    skills: &mut [RotationSkill],
+    db: &GameDb,
+    ctx: &BalanceContext,
+    equipped_traits: &[u32],
+) {
+    for rotation_skill in skills.iter_mut() {
+        let Some(skill) = db.skills.get(&rotation_skill.skill_id) else {
+            continue;
+        };
+        if !skill
+            .traited_facts
+            .iter()
+            .any(|tf| equipped_traits.contains(&tf.requires_trait))
+        {
+            continue;
+        }
+        let facts = active_skill_facts(skill, equipped_traits, db);
+        rotation_skill.effects =
+            extract_effects_for_context(skill.id, &facts, skill.description.as_deref(), ctx);
+    }
+}
+
+/// Scale the strikes of the skills a trait's scoped damage increase names
+/// ([`crate::combat::scope_skill_damage`]); no other skill changes.
+pub fn apply_skill_strike(
+    skills: &mut [RotationSkill],
+    scoped: &[crate::combat::SkillScopedStrike],
+) {
+    for scope in scoped {
+        for skill in skills
+            .iter_mut()
+            .filter(|s| scope.skill_ids.contains(&s.skill_id))
+        {
+            for effect in &mut skill.effects {
+                if let SkillEffect::StrikeDamage { dmg_multiplier, .. } = effect {
+                    *dmg_multiplier *= scope.factor;
+                }
+            }
+        }
+    }
+}
+
+/// Bar skills whose facts list a status with three or more different
+/// values ([`unresolved_alternatives`]), as `"<skill>: <status>
+/// alternatives"` for the gap line: those statuses apply nothing. Then
+/// single-hit strikes of a skill that publishes more impacts
+/// ([`unmodelled_impacts`]), as `"<skill>: <label> impacts"`.
+pub fn unresolved_alternative_names(skills: &[RotationSkill], db: &GameDb) -> Vec<String> {
+    skills
+        .iter()
+        .filter_map(|s| db.skills.get(&s.skill_id))
+        .flat_map(|skill| {
+            let alternatives = unresolved_alternatives(&skill.facts)
+                .into_iter()
+                .map(move |status| format!("{}: {status} alternatives", skill.name));
+            let impacts = unmodelled_impacts(&skill.facts)
+                .into_iter()
+                .map(move |label| format!("{}: {label} impacts", skill.name));
+            alternatives.chain(impacts)
+        })
+        .collect()
+}
+
+/// Labels of single-hit `Damage` rows on a skill whose `Number of Impacts`
+/// fact is larger. The impacts count the whole area (Whirling Wrath: 7
+/// projectiles; the player's golem log takes about 1.75 of them per cast),
+/// not the hits one foe takes, so the row stays one hit and is named.
+fn unmodelled_impacts(facts: &[Fact]) -> Vec<String> {
+    let impacts = facts.iter().find_map(|fact| match fact {
+        Fact::Number {
+            text: Some(text),
+            value: Some(value),
+            ..
+        } if text == "Number of Impacts" => Some(*value),
+        _ => None,
+    });
+    if !impacts.is_some_and(|n| n > 1) {
+        return Vec::new();
+    }
+    let floors = minimum_damage_floors(facts);
+    let mut labels: Vec<String> = facts
+        .iter()
+        .enumerate()
+        .filter(|(i, fact)| matches!(fact, Fact::Damage { .. }) && !floors.contains(i))
+        .map(|(_, fact)| strike(fact).0)
+        .filter(|(_, hits)| *hits == 1)
+        .map(|(label, _)| label.to_string())
+        .collect();
+    labels.dedup();
+    labels
+}
+
+/// (prefix skill, status) of one application; the prefix is empty for a `Buff`.
+type ApplicationKey<'a> = (&'a str, &'a str);
+
+/// One application of a status: its key (status, and for a `PrefixedBuff`
+/// the skill it is prefixed with) and its value (stacks, seconds). A bare
+/// status with neither is a listing, not an application: Vine Surge names
+/// the conditions it removes that way.
+fn application(fact: &Fact) -> Option<(ApplicationKey<'_>, (u32, u32))> {
+    let (prefix, status, apply_count, duration) = match fact {
+        Fact::Buff {
+            status: Some(status),
+            apply_count,
+            duration,
+            ..
+        } => ("", status, apply_count, duration),
+        Fact::PrefixedBuff {
+            prefix,
+            status: Some(status),
+            apply_count,
+            duration,
+            ..
+        } => (
+            prefix
+                .as_ref()
+                .and_then(|p| p.status.as_deref())
+                .unwrap_or(""),
+            status,
+            apply_count,
+            duration,
+        ),
+        _ => return None,
+    };
+    if apply_count.is_none() && duration.is_none() {
+        return None;
+    }
+    Some((
+        (prefix, status.as_str()),
+        (apply_count.unwrap_or(1), duration.unwrap_or(0)),
+    ))
+}
+
+/// For each status the facts apply, the indices of its distinct values in
+/// first-seen order, and the indices of every fact applying it.
+type ApplicationGroup<'a> = (ApplicationKey<'a>, Vec<usize>, Vec<usize>);
+
+fn application_groups(facts: &[Fact]) -> Vec<ApplicationGroup<'_>> {
+    let mut groups: Vec<ApplicationGroup<'_>> = Vec::new();
+    for (idx, fact) in facts.iter().enumerate() {
+        let Some((key, value)) = application(fact) else {
+            continue;
+        };
+        let group = match groups.iter().position(|(k, _, _)| *k == key) {
+            Some(g) => &mut groups[g],
+            None => {
+                groups.push((key, Vec::new(), Vec::new()));
+                groups.last_mut().expect("just pushed")
+            }
+        };
+        if !group
+            .1
+            .iter()
+            .any(|&d| application(&facts[d]).map(|(_, v)| v) == Some(value))
+        {
+            group.1.push(idx);
+        }
+        group.2.push(idx);
+    }
+    groups
+}
+
+/// One application per status. The API lists a status more than once when
+/// the wiki shows alternatives of one application, and no fact field says
+/// which: a game-mode split (Glyph of Alignment's bleed, 10 s PvE / 8 s
+/// WvW and PvP), a positional variant (Poison Volley 5 s, 7 s "Attack from
+/// Behind"; Crossfire 3 s flanking, 2 s otherwise) or a charge tier
+/// (Arcing Slice's Fury by adrenaline). Rule:
+///
+/// - identical duplicates are one application;
+/// - two values are one application, picked as `absorb_pair` in
+///   `combat::extract_damage_modifiers` picks a two-value split: the larger
+///   (stacks x seconds) in PvE, where golems are defiant and the flanking
+///   value applies, the smaller in PvP and WvW;
+/// - three or more values cannot be told apart: the status abstains (no
+///   application) and is named by [`unresolved_alternatives`].
+///
+/// `Damage` rows follow the same rule per strike (see [`damage_groups`]):
+/// Effulgent Stance lists Minimum 0.5 and Maximum 4.0 / 2.1, one burst per
+/// cast, and landed all three (6.6) before.
+fn select_alternatives(facts: &[Fact], ctx: &BalanceContext) -> Vec<Fact> {
+    let competitive = matches!(
+        ctx.game_mode,
+        gw2_core::types::GameMode::PvP | gw2_core::types::GameMode::WvW
+    );
+    let size =
+        |i: usize| application(&facts[i]).map_or(0, |(_, (n, s))| u64::from(n) * u64::from(s));
+    let mut keep = vec![true; facts.len()];
+    for i in minimum_damage_floors(facts) {
+        keep[i] = false;
+    }
+    for (_, distinct, members) in damage_groups(facts) {
+        let chosen = match distinct.as_slice() {
+            [only] => Some(*only),
+            [a, b] => {
+                let (small, large) = if strike(&facts[*b]).1 < strike(&facts[*a]).1 {
+                    (*b, *a)
+                } else {
+                    (*a, *b)
+                };
+                Some(if competitive { small } else { large })
+            }
+            _ => None,
+        };
+        for i in members {
+            keep[i] = Some(i) == chosen;
+        }
+    }
+    for (_, distinct, members) in application_groups(facts) {
+        let chosen = match distinct.as_slice() {
+            [only] => Some(*only),
+            [a, b] => {
+                let (small, large) = if size(*b) < size(*a) {
+                    (*b, *a)
+                } else {
+                    (*a, *b)
+                };
+                Some(if competitive { small } else { large })
+            }
+            _ => None,
+        };
+        for i in members {
+            keep[i] = Some(i) == chosen;
+        }
+    }
+    facts
+        .iter()
+        .zip(keep)
+        .filter(|(_, keep)| *keep)
+        .map(|(fact, _)| fact.clone())
+        .collect()
+}
+
+/// Statuses whose alternatives [`select_alternatives`] cannot pick between
+/// (three or more different values), which therefore apply nothing.
+pub fn unresolved_alternatives(facts: &[Fact]) -> Vec<String> {
+    let statuses = application_groups(facts)
+        .into_iter()
+        .filter(|(_, distinct, _)| distinct.len() > 2)
+        .map(|((_, status), _, _)| status.to_string());
+    let strikes = damage_groups(facts)
+        .into_iter()
+        .filter(|(_, distinct, _)| distinct.len() > 2)
+        .map(|((label, _), _, _)| label.to_string());
+    statuses.chain(strikes).collect()
+}
+
+/// A `Damage` row's strike key (label, hit count) and coefficient; callers
+/// pass `Damage` rows only (any other fact reads as an empty key and NaN).
+fn strike(fact: &Fact) -> ((&str, u32), f64) {
+    match fact {
+        Fact::Damage {
+            text,
+            hit_count,
+            dmg_multiplier,
+            ..
+        } => (
+            (text.as_deref().unwrap_or("Damage"), hit_count.unwrap_or(1)),
+            dmg_multiplier.unwrap_or(1.0),
+        ),
+        _ => (("", 0), f64::NAN),
+    }
+}
+
+/// `Minimum ...` damage rows of a skill that also lists another damage row:
+/// the floor of that strike (range, charge or target-count falloff:
+/// Blowtorch 2.0 / Minimum 1.0, Effulgent Stance Maximum / Minimum), not a
+/// strike of its own.
+fn minimum_damage_floors(facts: &[Fact]) -> Vec<usize> {
+    let is_minimum = |fact: &Fact| strike(fact).0 .0.starts_with("Minimum");
+    let damage = |fact: &&Fact| matches!(fact, Fact::Damage { .. });
+    if !facts.iter().filter(damage).any(|f| !is_minimum(f)) {
+        return Vec::new();
+    }
+    (0..facts.len())
+        .filter(|&i| damage(&&facts[i]) && is_minimum(&facts[i]))
+        .collect()
+}
+
+/// A strike's key (label, hit count), its distinct-value rows and all its rows.
+type StrikeGroup<'a> = ((&'a str, u32), Vec<usize>, Vec<usize>);
+
+/// For each strike the `Damage` rows describe, keyed by label and hit
+/// count, the indices of its distinct coefficients in first-seen order and
+/// of every row. Rows with the same label and hit count are alternatives of
+/// one strike the API lists per game mode (Rushing Justice Impact Damage
+/// 1.5 PvE / 1.2 WvW, Jurisdiction 3.0 / 0.01) or duplicates of it; a
+/// different label (Explosion, Impact, Symbol Damage) or hit count is a
+/// separate strike, and a multi-hit row keeps its hit count. `Minimum`
+/// floors are left out ([`minimum_damage_floors`]).
+fn damage_groups(facts: &[Fact]) -> Vec<StrikeGroup<'_>> {
+    let floors = minimum_damage_floors(facts);
+    let mut groups: Vec<StrikeGroup<'_>> = Vec::new();
+    for (idx, fact) in facts.iter().enumerate() {
+        if !matches!(fact, Fact::Damage { .. }) || floors.contains(&idx) {
+            continue;
+        }
+        let (key, value) = strike(fact);
+        let group = match groups.iter().position(|(k, _, _)| *k == key) {
+            Some(g) => &mut groups[g],
+            None => {
+                groups.push((key, Vec::new(), Vec::new()));
+                groups.last_mut().expect("just pushed")
+            }
+        };
+        if !group.1.iter().any(|&d| strike(&facts[d]).1 == value) {
+            group.1.push(idx);
+        }
+        group.2.push(idx);
+    }
+    groups
 }
 
 /// Enrich rotation skills with `RemovesCondition` effects: the cleanse registry
@@ -442,14 +796,24 @@ pub fn profession_skills_for_build(
     slots
         .into_iter()
         .filter_map(|(_, mut skills)| {
-            // A form entry's flip is the form's exit, not the press
-            // (Release Celestial Avatar 31411 sorted ahead of Celestial
-            // Avatar 31869 by id). Other flips stay candidates: Legendary
-            // Renegade Stance flips to a second id of itself.
+            // A flip is reached by pressing its parent, never the slot's own
+            // press: a form entry's exit (Release Celestial Avatar 31411
+            // sorted ahead of Celestial Avatar 31869 by id), and a
+            // differently named flip of a skill of the same specialization
+            // -- the effect a virtue leaves (Willbender Flames 62618 behind
+            // Rushing Justice 62668), an exit (Exit Radiant Forge), a
+            // follow-up. A same-name flip is the same press under a second
+            // id (Legendary Renegade Stance), and a core skill's flip to an
+            // elite one (Virtue of Justice to Spear of Justice) is the elite
+            // replacement, so both stay candidates.
             let exits: Vec<u32> = skills
                 .iter()
-                .filter(|skill| !skill.transform_skills.is_empty())
-                .filter_map(|skill| skill.flip_skill)
+                .filter_map(|skill| {
+                    let flip = skills.iter().find(|s| Some(s.id) == skill.flip_skill)?;
+                    let effect =
+                        flip.name != skill.name && flip.specialization == skill.specialization;
+                    (!skill.transform_skills.is_empty() || effect).then_some(flip.id)
+                })
                 .collect();
             skills.retain(|skill| !exits.contains(&skill.id));
             skills.sort_by_key(|skill| (u8::from(skill.specialization.is_none()), skill.id));
@@ -631,6 +995,7 @@ fn extract_effects_for_context(
     description: Option<&str>,
     ctx: &BalanceContext,
 ) -> Vec<SkillEffect> {
+    let facts = &select_alternatives(facts, ctx);
     let mut effects = Vec::new();
     let (interval_ms, window_ms) = pulse_window_ms(facts);
     let sourced_damage = sourced_damage_coefficient_profile(ctx, skill_id);
@@ -2208,5 +2573,444 @@ mod tests {
             profession_skills_for_build(&db, "Warrior", &[], &ValidatedWeapons::default())[0],
             (14353, "Eviscerate".into())
         );
+    }
+}
+
+/// The facts a bar skill applies: traited facts for the equipped traits,
+/// one application per status, the out-of-form variant of a form glyph.
+/// Fixtures are the live API JSON (skill cache, build 207318), icons dropped.
+#[cfg(test)]
+mod fact_selection_tests {
+    use super::*;
+    use gw2_core::types::GameMode;
+
+    const CROSSFIRE: &str = r#"{"id": 12470, "name": "Crossfire", "slot": "Weapon_1", "facts": [{"type": "Range", "text": "Range", "value": 900}, {"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.5}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 3, "status": "Bleeding", "apply_count": 1}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 2, "status": "Bleeding", "apply_count": 1}, {"type": "ComboFinisher", "text": "Combo Finisher", "finisher_type": "Projectile", "percent": 20}], "traited_facts": [{"requires_trait": 1912, "overrides": 2, "type": "Buff", "text": "Apply Buff/Condition", "duration": 5, "status": "Bleeding", "apply_count": 1}]}"#;
+    const POISON_VOLLEY: &str = r#"{"id": 12468, "name": "Poison Volley", "slot": "Weapon_2", "facts": [{"type": "Range", "text": "Range", "value": 900}, {"type": "Recharge", "text": "Recharge", "value": 8.0}, {"type": "Damage", "text": "Damage", "hit_count": 5, "dmg_multiplier": 0.3}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 5, "status": "Poisoned", "apply_count": 5}, {"type": "NoData", "text": "Pierces"}, {"type": "Number", "text": "Targets per Arrow", "value": 5}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 7, "status": "Poisoned", "apply_count": 5}], "traited_facts": [{"requires_trait": 1912, "overrides": 6, "type": "Buff", "text": "Apply Buff/Condition", "duration": 9, "status": "Poisoned", "apply_count": 5}]}"#;
+    const NATURAL_CONVERGENCE: &str = r#"{"id": 31503, "name": "Natural Convergence", "slot": "Weapon_5", "facts": [{"type": "Recharge", "text": "Recharge", "value": 10.0}, {"type": "Damage", "text": "Pulse Damage", "hit_count": 1, "dmg_multiplier": 0.75}, {"type": "Damage", "text": "Final Damage", "hit_count": 1, "dmg_multiplier": 2.0}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 10, "status": "Might", "apply_count": 1}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 1, "status": "Crippled", "apply_count": 1}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 1, "status": "Slow", "apply_count": 1}, {"type": "Number", "text": "Pulses", "value": 4}, {"type": "Distance", "text": "Radius", "distance": 360}, {"type": "Number", "text": "Number of Targets", "value": 5}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 2, "status": "Immobile", "apply_count": 4}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 2, "status": "Stability", "apply_count": 2}], "traited_facts": [{"requires_trait": 2055, "overrides": null, "type": "Buff", "text": "Apply Buff/Condition", "duration": 5, "status": "Burning", "apply_count": 1}, {"requires_trait": 2055, "overrides": null, "type": "Buff", "text": "Apply Buff/Condition", "duration": 5, "status": "Burning", "apply_count": 3}]}"#;
+    const ARCING_SLICE: &str = r#"{"id": 14375, "name": "Arcing Slice", "slot": "Profession_1", "facts": [{"type": "Buff", "text": "Apply Buff/Condition", "duration": 8, "status": "Fury", "apply_count": 1}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 12, "status": "Fury", "apply_count": 1}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 16, "status": "Fury", "apply_count": 1}]}"#;
+    const GLYPH_PALETTE: &str = r#"{"id": 31322, "name": "Glyph of Alignment", "slot": "Utility", "specialization": 5, "facts": [{"type": "Recharge", "text": "Recharge", "value": 20.0}, {"type": "Number", "text": "Number of Targets", "value": 5}, {"type": "Distance", "text": "Radius", "distance": 300}]}"#;
+    const GLYPH_OUT_OF_FORM: &str = r#"{"id": 31607, "name": "Glyph of Alignment", "slot": "Utility", "specialization": 5, "facts": [{"type": "Recharge", "text": "Recharge", "value": 20.0}, {"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.5}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 10, "status": "Bleeding", "apply_count": 3}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 8, "status": "Bleeding", "apply_count": 3}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 2, "status": "Immobile", "apply_count": 1}, {"type": "Buff", "text": "Apply Buff/Condition", "duration": 5, "status": "Weakness", "apply_count": 1}, {"type": "Number", "text": "Number of Targets", "value": 5}, {"type": "Distance", "text": "Radius", "distance": 300}]}"#;
+
+    fn db_with(skills: &[&str]) -> GameDb {
+        let mut db = GameDb::empty_for_tests();
+        for json in skills {
+            let skill: Skill = serde_json::from_str(json).expect("fixture parses");
+            db.skills.insert(skill.id, skill);
+        }
+        db
+    }
+
+    /// The bar skill as the engine prepares it: built, then the equipped
+    /// traits' facts applied.
+    fn bar_skill(db: &GameDb, id: u32, mode: GameMode, traits: &[u32]) -> RotationSkill {
+        let ctx = BalanceContext::new(mode);
+        let mut skills = build_rotation_skills_for_context(&[id], db, &ctx);
+        apply_traited_facts(&mut skills, db, &ctx, traits);
+        skills.pop().expect("skill on the bar")
+    }
+
+    /// (stacks, duration_ms) of every application of `status`.
+    fn applications(skill: &RotationSkill, status: &str) -> Vec<(u32, u32)> {
+        skill
+            .effects
+            .iter()
+            .filter_map(|e| match e {
+                SkillEffect::ApplyCondition {
+                    condition,
+                    stacks,
+                    duration_ms,
+                } if condition == status => Some((*stacks, *duration_ms)),
+                SkillEffect::ApplyBuff {
+                    buff,
+                    stacks,
+                    duration_ms,
+                } if buff == status => Some((*stacks, *duration_ms)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Wiki Crossfire: bleeding 3 s when flanking or against a defiant foe,
+    /// 2 s otherwise (PvE). Light on your Feet overrides the flanking fact
+    /// (API `overrides: 2`) with 5 s. One application per cast.
+    #[test]
+    fn light_on_your_feet_lengthens_crossfire_bleed() {
+        let db = db_with(&[CROSSFIRE]);
+        let plain = bar_skill(&db, 12470, GameMode::PvE, &[]);
+        assert_eq!(applications(&plain, "Bleeding"), vec![(1, 3_000)]);
+        let traited = bar_skill(&db, 12470, GameMode::PvE, &[1912]);
+        assert_eq!(applications(&traited, "Bleeding"), vec![(1, 5_000)]);
+    }
+
+    /// Wiki Eclipse (trait 2055): Natural Convergence inflicts Burning 5 s
+    /// (PvE). The API carries it only as the skill's traited facts.
+    #[test]
+    fn eclipse_makes_natural_convergence_burn() {
+        let db = db_with(&[NATURAL_CONVERGENCE]);
+        let plain = bar_skill(&db, 31503, GameMode::PvE, &[]);
+        assert!(applications(&plain, "Burning").is_empty());
+        let traited = bar_skill(&db, 31503, GameMode::PvE, &[2055]);
+        let burning = applications(&traited, "Burning");
+        assert_eq!(burning.len(), 1, "one Burning application: {burning:?}");
+        assert_eq!(burning[0].1, 5_000);
+    }
+
+    /// Wiki Poison Volley: poison 5 stacks, 5 s from the front or 7 s
+    /// "Attack from Behind" (flanking, or a defiant foe). The two facts are
+    /// alternatives of one application, never 10 stacks.
+    #[test]
+    fn poison_volley_applies_five_stacks() {
+        let db = db_with(&[POISON_VOLLEY]);
+        let pve = bar_skill(&db, 12468, GameMode::PvE, &[]);
+        assert_eq!(applications(&pve, "Poisoned"), vec![(5, 7_000)]);
+        let wvw = bar_skill(&db, 12468, GameMode::WvW, &[]);
+        assert_eq!(applications(&wvw, "Poisoned"), vec![(5, 5_000)]);
+        let traited = bar_skill(&db, 12468, GameMode::PvE, &[1912]);
+        assert_eq!(applications(&traited, "Poisoned"), vec![(5, 9_000)]);
+    }
+
+    /// Three different values of one status (Arcing Slice's Fury by
+    /// adrenaline tier) cannot be told apart from the facts: the status
+    /// abstains by name instead of applying 36 s of Fury.
+    #[test]
+    fn three_way_alternatives_abstain_by_name() {
+        let db = db_with(&[ARCING_SLICE]);
+        let skill = bar_skill(&db, 14375, GameMode::PvE, &[]);
+        assert!(applications(&skill, "Fury").is_empty());
+        let facts = &db.skills[&14375].facts;
+        assert_eq!(unresolved_alternatives(facts), vec!["Fury".to_string()]);
+    }
+
+    /// The abstaining status reaches the gap line by skill and status.
+    #[test]
+    fn three_way_alternatives_are_named_for_the_gap_line() {
+        let db = db_with(&[ARCING_SLICE, POISON_VOLLEY]);
+        let ctx = BalanceContext::new(GameMode::PvE);
+        let skills = build_rotation_skills_for_context(&[14375, 12468], &db, &ctx);
+        assert_eq!(
+            unresolved_alternative_names(&skills, &db),
+            vec!["Arcing Slice: Fury alternatives".to_string()]
+        );
+    }
+
+    const WILLBENDER_FLAMES: &str = r#"{"id": 62618, "name": "Willbender Flames", "slot": "Profession_1", "facts": [{"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.22}, {"type": "Number", "text": "Number of Targets", "value": 3}, {"type": "Number", "text": "Number of Impacts", "value": 5}, {"type": "Time", "text": "Interval", "duration": 1}, {"type": "Time", "text": "Duration", "duration": 5}], "traited_facts": [{"requires_trait": 2190, "overrides": 0, "type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.66}]}"#;
+    const POWER_FOR_POWER: &str = r#"{"id": 2190, "name": "Power for Power", "description": "Gain increased power. <c=@abilitytype>Willbender Flames</c> deal increased damage to foes they strike.", "specialization": 65, "tier": 1, "order": 1, "slot": "Major", "facts": [{"percent": 100.0, "text": "Damage Increase", "type": "Percent"}, {"target": "Power", "text": null, "type": "AttributeAdjust", "value": 120}, {"percent": 200.0, "text": "Damage Increase", "type": "Percent"}]}"#;
+
+    fn strike(skill: &RotationSkill) -> f64 {
+        skill
+            .effects
+            .iter()
+            .map(|e| match e {
+                SkillEffect::StrikeDamage {
+                    hit_count,
+                    dmg_multiplier,
+                } => *hit_count as f64 * dmg_multiplier,
+                _ => 0.0,
+            })
+            .sum()
+    }
+
+    /// Wiki Power for Power: Willbender Flames damage +200% in PvE, +100%
+    /// in WvW and PvP. The API scopes it through Willbender Flames'
+    /// traited Damage fact. It leaves the global strike multiplier, raises
+    /// the Flames once (not the traited 0.66 and the percent on top), and
+    /// no other skill.
+    #[test]
+    fn power_for_power_raises_willbender_flames_only() {
+        let mut db = db_with(&[WILLBENDER_FLAMES, CROSSFIRE]);
+        let t: gw2_api::models::Trait = serde_json::from_str(POWER_FOR_POWER).expect("fixture");
+        db.traits.insert(t.id, t);
+        for (mode, factor) in [(GameMode::PvE, 3.0), (GameMode::WvW, 2.0)] {
+            let ctx = BalanceContext::new(mode);
+            let mut mods = crate::combat::extract_damage_modifiers(
+                &[2190],
+                None,
+                &[],
+                None,
+                &db.traits,
+                &db.items,
+                &ctx,
+            );
+            crate::combat::scope_skill_damage(&mut mods, &db.traits, &db.skills);
+            assert!(
+                mods.strike_pct.is_empty(),
+                "global strike: {:?}",
+                mods.strike_pct
+            );
+            assert_eq!(mods.total_strike_mult(), 1.0);
+            assert_eq!(mods.skill_strike.len(), 1);
+            assert_eq!(mods.skill_strike[0].skill_ids, vec![62618]);
+            assert!((mods.skill_strike[0].factor - factor).abs() < 1e-9);
+
+            let mut skills = build_rotation_skills_for_context(&[62618, 12470], &db, &ctx);
+            apply_traited_facts(&mut skills, &db, &ctx, &[2190]);
+            apply_skill_strike(&mut skills, &mods.skill_strike);
+            assert!((strike(&skills[0]) - 0.22 * factor).abs() < 1e-9);
+            assert!(
+                (strike(&skills[1]) - 0.5).abs() < 1e-9,
+                "Crossfire unchanged"
+            );
+        }
+    }
+
+    /// Wiki Glyph of Alignment (palette 4821, id 31322) is the palette
+    /// entry; out of Celestial Avatar the game casts Glyph of Alignment
+    /// (non-celestial), id 31607, which bleeds (3 stacks, 10 s PvE).
+    #[test]
+    fn druid_bar_carries_the_out_of_form_glyph() {
+        let db = db_with(&[GLYPH_PALETTE, GLYPH_OUT_OF_FORM]);
+        let glyph = bar_skill(&db, 31322, GameMode::PvE, &[]);
+        assert_eq!(glyph.skill_id, 31607);
+        assert_eq!(applications(&glyph, "Bleeding"), vec![(3, 10_000)]);
+        let wvw = bar_skill(&db, 31322, GameMode::WvW, &[]);
+        assert_eq!(applications(&wvw, "Bleeding"), vec![(3, 8_000)]);
+    }
+
+    /// The Willbender's virtue slots as the API publishes them: each virtue
+    /// flips to the Willbender Flames it leaves (62618, 62528), sorted ahead
+    /// of it by id; Crashing Courage flips to a second id of itself (62532)
+    /// and the third Flames (62552) is linked from nothing. Wiki
+    /// Willbender_Flames_(Rushing_Justice): `parent = Rushing Justice`,
+    /// no description type; the player's golem log has zero casts of it.
+    /// A core skill's flip to an elite one (Virtue of Justice 9115 to Spear
+    /// of Justice 29887) stays the elite replacement.
+    #[test]
+    fn a_differently_named_flip_of_the_same_spec_is_not_the_slot_press() {
+        let mut db = GameDb::empty_for_tests();
+        let mut ids = Vec::new();
+        for (id, name, slot, spec, flip) in [
+            (9115, "Virtue of Justice", "Profession_1", None, Some(29887)),
+            (29887, "Spear of Justice", "Profession_1", Some(27), None),
+            (
+                62668,
+                "Rushing Justice",
+                "Profession_1",
+                Some(65),
+                Some(62618),
+            ),
+            (62618, "Willbender Flames", "Profession_1", Some(65), None),
+            (
+                62603,
+                "Flowing Resolve",
+                "Profession_2",
+                Some(65),
+                Some(62528),
+            ),
+            (62528, "Willbender Flames", "Profession_2", Some(65), None),
+            (
+                62648,
+                "Crashing Courage",
+                "Profession_3",
+                Some(65),
+                Some(62532),
+            ),
+            (62532, "Crashing Courage", "Profession_3", Some(65), None),
+            (62552, "Willbender Flames", "Profession_3", Some(65), None),
+        ] {
+            let skill: Skill = serde_json::from_value(serde_json::json!({
+                "id": id, "name": name, "slot": slot, "facts": [],
+                "specialization": spec, "flip_skill": flip,
+            }))
+            .expect("fixture");
+            db.skills.insert(id, skill);
+            ids.push(id);
+        }
+        db.skills_by_profession.insert("Guardian".into(), ids);
+        let weapons = crate::validation::ValidatedWeapons::default();
+        let bar = |specs: &[u32]| -> Vec<u32> {
+            profession_skills_for_build(&db, "Guardian", specs, &weapons)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect()
+        };
+        assert_eq!(bar(&[42, 46, 65]), vec![62668, 62603, 62532]);
+        assert_eq!(bar(&[42, 46, 27]), vec![29887]);
+    }
+
+    /// The player's Willbender (golem log 20260923-204811, chat code
+    /// `[&DQEQPi4VQSYmDwAARwEAADYBAADYGgAAiRIAAAAAAAAAAAAAAAAAAAAAAAADNgAxADIAAA==]`):
+    /// the castable bar carries the virtues and the greatsword chain, and
+    /// no Willbender Flames (a zero-cooldown filler before, 26 casts a
+    /// minute that the log does not have).
+    #[test]
+    #[ignore = "reads the live skill cache"]
+    fn player_willbender_bar_has_the_virtues_and_greatsword_chain_not_the_flames() {
+        let cache = gw2_api::cache::DataCache::new(
+            gw2_api::dev_config::cache_dir().expect("dev.cfg cache dir"),
+        );
+        let db = crate::gamedb::GameDb::load(&cache).expect("cached game data");
+        let plate = serde_json::json!({
+            "specializations": [
+                {"name": "Radiance", "traits": ["Right-Hand Strength", "Retribution", "Righteous Instincts"]},
+                {"name": "Virtues", "traits": ["Unscathed Contender", "Inspiring Virtue", "Permeating Wrath"]},
+                {"name": "Willbender", "traits": ["Power for Power", "Restorative Virtues", "Tyrant's Momentum"]},
+            ],
+            "weapons": {"set1": {"main": "Greatsword", "off": null}, "set2": {"main": "Sword", "off": "Focus"}},
+            "skills": {
+                "heal": "\"Receive the Light!\"",
+                "utilities": ["Judge's Intervention", "Whirling Light", "\"Stand Your Ground!\""],
+                "elite": "\"Feel My Wrath!\"",
+            },
+            "rune": "Superior Rune of the Scholar",
+            "sigils": ["Superior Sigil of Force", "Superior Sigil of Fire"],
+            "relic": "Relic of the Thief",
+            "stat_prefix": "Berserker",
+            "explanation": "player build",
+        });
+        let parsed = crate::prompts::parse_gemini_build(&plate.to_string()).expect("plate");
+        let validated = crate::validation::validate_gemini_build(&parsed, &db, "Guardian");
+        assert!(validated.errors.is_empty(), "{:?}", validated.errors);
+        let ctx = BalanceContext::pve();
+        let (stats, _) =
+            crate::engine::calculate_validated_stats(&validated, &db, "Guardian", &ctx);
+        let prepared = crate::engine::prepare_validated_rotation(&validated, &db, &stats, None)
+            .expect("prepares");
+        let bar: Vec<u32> = prepared.skills.iter().map(|s| s.skill_id).collect();
+        for id in [62668, 62603, 9137, 9138, 9139] {
+            assert!(bar.contains(&id), "{id} missing from {bar:?}");
+        }
+        for id in [62618, 62528, 62552] {
+            assert!(!bar.contains(&id), "Willbender Flames {id} on {bar:?}");
+        }
+    }
+
+    fn damage(text: &str, hit_count: u32, dmg_multiplier: f64) -> Fact {
+        Fact::Damage {
+            text: Some(text.into()),
+            icon: None,
+            hit_count: Some(hit_count),
+            dmg_multiplier: Some(dmg_multiplier),
+        }
+    }
+
+    fn strikes(facts: &[Fact], mode: GameMode) -> Vec<(u32, f64)> {
+        extract_effects_for_context(0, facts, None, &BalanceContext::new(mode))
+            .into_iter()
+            .filter_map(|e| match e {
+                SkillEffect::StrikeDamage {
+                    hit_count,
+                    dmg_multiplier,
+                } => Some((hit_count, dmg_multiplier)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Wiki Effulgent_Stance (read 2026-09-24): one burst of light per cast,
+    /// maximum-strength coefficient 4.0 in PvE and 2.1 in WvW/PvP, 0.5 when
+    /// not fully charged. The API lists Minimum 0.5, Maximum 4.0 and Maximum
+    /// 2.1, and all three landed (6.6 per cast).
+    #[test]
+    fn effulgent_stance_lands_one_burst_per_cast() {
+        let facts = [
+            damage("Minimum Damage", 1, 0.5),
+            damage("Maximum Damage", 1, 4.0),
+            damage("Maximum Damage", 1, 2.1),
+        ];
+        assert_eq!(strikes(&facts, GameMode::PvE), vec![(1, 4.0)]);
+        assert_eq!(strikes(&facts, GameMode::WvW), vec![(1, 2.1)]);
+    }
+
+    /// Wiki Unload: 8 strikes of 0.42 (3.36); the API lists the 8 x 0.42 row
+    /// twice. Wiki Rushing_Justice: Impact Damage 1.5 PvE, 1.2 WvW/PvP.
+    /// Rows with another label are other strikes (Whirling Wrath's spin and
+    /// projectiles), and a three-value row abstains by name.
+    #[test]
+    fn damage_rows_of_one_strike_are_alternatives() {
+        let unload = [damage("Damage", 8, 0.42), damage("Damage", 8, 0.42)];
+        assert_eq!(strikes(&unload, GameMode::PvE), vec![(8, 0.42)]);
+        let rushing = [
+            damage("Impact Damage", 1, 1.5),
+            damage("Impact Damage", 1, 1.2),
+        ];
+        assert_eq!(strikes(&rushing, GameMode::PvE), vec![(1, 1.5)]);
+        assert_eq!(strikes(&rushing, GameMode::WvW), vec![(1, 1.2)]);
+        let wrath = [
+            damage("Damage", 7, 0.35),
+            damage("Projectile Damage", 1, 0.275),
+        ];
+        assert_eq!(strikes(&wrath, GameMode::PvE), vec![(7, 0.35), (1, 0.275)]);
+        let sword = [
+            damage("Damage", 4, 0.72),
+            damage("Damage", 4, 0.8),
+            damage("Damage", 4, 0.45),
+        ];
+        assert!(strikes(&sword, GameMode::PvE).is_empty());
+        assert_eq!(unresolved_alternatives(&sword), vec!["Damage".to_string()]);
+    }
+
+    /// Wiki Whirling_Wrath: 7 projectiles ("Number of Impacts: 7"); the API
+    /// row is one hit, and the player's golem log takes about 1.75 per cast.
+    /// The impacts count the area, so the row stays one hit and is named.
+    #[test]
+    fn area_impacts_are_named_not_multiplied() {
+        let facts = [
+            damage("Damage", 7, 0.35),
+            damage("Projectile Damage", 1, 0.275),
+            Fact::Number {
+                text: Some("Number of Impacts".into()),
+                icon: None,
+                value: Some(7),
+            },
+        ];
+        assert_eq!(
+            unmodelled_impacts(&facts),
+            vec!["Projectile Damage".to_string()]
+        );
+        assert_eq!(strikes(&facts, GameMode::PvE), vec![(7, 0.35), (1, 0.275)]);
+    }
+
+    const IMPOSSIBLE_ODDS: &str = r#"{"id": 27107, "name": "Impossible Odds", "slot": "Utility", "facts": [{"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.45}, {"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.65}, {"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.55}]}"#;
+    const PHANTOMS_ONSLAUGHT: &str = r#"{"id": 62895, "name": "Phantom's Onslaught", "slot": "Weapon_3", "facts": [{"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 1.6}, {"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 1.33}, {"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 1.18}]}"#;
+    const SPLINTER_WEAPON: &str = r#"{"id": 76975, "name": "Splinter Weapon", "slot": "Utility", "facts": [{"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.4}, {"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.25}, {"type": "Damage", "text": "Damage", "hit_count": 1, "dmg_multiplier": 0.5}]}"#;
+    const SWORD_OF_JUSTICE: &str = r#"{"id": 9168, "name": "Sword of Justice", "slot": "Utility", "facts": [{"type": "Damage", "text": "Damage", "hit_count": 4, "dmg_multiplier": 0.72}, {"type": "Damage", "text": "Damage", "hit_count": 4, "dmg_multiplier": 0.8}, {"type": "Damage", "text": "Damage", "hit_count": 4, "dmg_multiplier": 0.45}]}"#;
+
+    /// Wiki Impossible Odds: per-hit follow-up strike coefficient 0.65 PvE,
+    /// 0.55 WvW, 0.45 PvP (`https://wiki.guildwars2.com/wiki/Impossible_Odds`).
+    /// The API lists the three as unlabelled one-hit Damage rows the builder
+    /// cannot tell apart; `damage_coefficient:above_50` overrides land the
+    /// per-mode value the same way a health-threshold skill does.
+    #[test]
+    fn impossible_odds_lands_the_wiki_coefficient_per_mode() {
+        let db = db_with(&[IMPOSSIBLE_ODDS]);
+        assert!((strike(&bar_skill(&db, 27107, GameMode::PvE, &[])) - 0.65).abs() < 1e-9);
+        assert!((strike(&bar_skill(&db, 27107, GameMode::WvW, &[])) - 0.55).abs() < 1e-9);
+        assert!((strike(&bar_skill(&db, 27107, GameMode::PvP, &[])) - 0.45).abs() < 1e-9);
+    }
+
+    /// Wiki Phantom's Onslaught: coefficient 1.6 PvE, 1.33 WvW, 1.18 PvP
+    /// (`https://wiki.guildwars2.com/wiki/Phantom's_Onslaught`).
+    #[test]
+    fn phantoms_onslaught_lands_the_wiki_coefficient_per_mode() {
+        let db = db_with(&[PHANTOMS_ONSLAUGHT]);
+        assert!((strike(&bar_skill(&db, 62895, GameMode::PvE, &[])) - 1.6).abs() < 1e-9);
+        assert!((strike(&bar_skill(&db, 62895, GameMode::WvW, &[])) - 1.33).abs() < 1e-9);
+        assert!((strike(&bar_skill(&db, 62895, GameMode::PvP, &[])) - 1.18).abs() < 1e-9);
+    }
+
+    /// Wiki Splinter Weapon: coefficient 0.4 PvE, 0.25 WvW, 0.5 PvP
+    /// (`https://wiki.guildwars2.com/wiki/Splinter_Weapon`).
+    #[test]
+    fn splinter_weapon_lands_the_wiki_coefficient_per_mode() {
+        let db = db_with(&[SPLINTER_WEAPON]);
+        assert!((strike(&bar_skill(&db, 76975, GameMode::PvE, &[])) - 0.4).abs() < 1e-9);
+        assert!((strike(&bar_skill(&db, 76975, GameMode::WvW, &[])) - 0.25).abs() < 1e-9);
+        assert!((strike(&bar_skill(&db, 76975, GameMode::PvP, &[])) - 0.5).abs() < 1e-9);
+    }
+
+    /// Wiki Sword of Justice hits 4 times per cast at a per-strike
+    /// coefficient (0.8 PvE / 0.72 PvP / 0.45 WvW,
+    /// `https://wiki.guildwars2.com/wiki/Sword_of_Justice`), but the override
+    /// format has no field for a strike's hit count -- only
+    /// `damage_coefficient:*`, which lands a single strike. Sourcing the
+    /// coefficient alone would silently drop the summon from 4 hits to 1, so
+    /// this skill is left abstaining (0 damage) until the format grows a
+    /// hit-count field; documented here rather than "fixed" wrong.
+    #[test]
+    fn sword_of_justice_still_abstains_hit_count_not_expressible() {
+        let db = db_with(&[SWORD_OF_JUSTICE]);
+        assert_eq!(strike(&bar_skill(&db, 9168, GameMode::PvE, &[])), 0.0);
+        let facts = &db.skills[&9168].facts;
+        assert_eq!(unresolved_alternatives(facts), vec!["Damage".to_string()]);
     }
 }

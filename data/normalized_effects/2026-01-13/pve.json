@@ -1180,6 +1180,182 @@
         "target_scope": "self",
         "base_duration_ms": 3000
       }
+    },
+    {
+      "effect_id": "trait:2189:0",
+      "source_type": "Trait",
+      "source_id": 2189,
+      "source_name": "Lethal Tempo",
+      "category": "TriggeredEffect",
+      "value": 2.0,
+      "stacking_rule": "RefreshAllStacks",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Lethal_Tempo (read 2026-09-24: Each time you activate a virtue or your virtue's passives are triggered, gain a damage bonus; Lethal Tempo (effect) 6 s, +2% strike damage and +2% condition damage per stack in PvE (2022-11-29: 1% to 2% in PvE only), maximum 5 stacks; gaining a stack refreshes other stacks. Virtue passive triggers are not modelled (WvW coverage block), strike half)",
+      "inner_category": "StrikeDamagePct",
+      "effect_duration": 6.0,
+      "max_stacks": 5,
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:2189:1",
+      "source_type": "Trait",
+      "source_id": 2189,
+      "source_name": "Lethal Tempo",
+      "category": "TriggeredEffect",
+      "value": 2.0,
+      "stacking_rule": "RefreshAllStacks",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Lethal_Tempo (read 2026-09-24: Each time you activate a virtue or your virtue's passives are triggered, gain a damage bonus; Lethal Tempo (effect) 6 s, +2% strike damage and +2% condition damage per stack in PvE (2022-11-29: 1% to 2% in PvE only), maximum 5 stacks; gaining a stack refreshes other stacks. Virtue passive triggers are not modelled (WvW coverage block), condition half)",
+      "inner_category": "ConditionDamagePct",
+      "effect_duration": 6.0,
+      "max_stacks": 5,
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:603:0",
+      "source_type": "Trait",
+      "source_id": 603,
+      "source_name": "Inspiring Virtue",
+      "category": "TriggeredEffect",
+      "value": 10.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Inspiring_Virtue (read 2026-09-24: Strike damage dealt is increased after activating a virtue; Inspiring Virtue (effect) 6 s, +10% strike damage, no game-mode split; 2020-02-26: no longer stacks duration, resets its 6 s when triggered)",
+      "inner_category": "StrikeDamagePct",
+      "effect_duration": 6.0,
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:604:0",
+      "source_type": "Trait",
+      "source_id": 604,
+      "source_name": "Virtue of Resolution",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Virtue_of_Resolution (read 2026-09-24: Gain resolution when you activate a Virtue, Resolution 3 s, no game-mode split; the +25% resolution duration is not modelled)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Resolution",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 3000
+      },
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "trait:2222:0",
+      "source_type": "Trait",
+      "source_id": 2222,
+      "source_name": "Righteous Sprint",
+      "category": "AppliesBoon",
+      "value": 1.0,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Righteous_Sprint (read 2026-09-24: Gain swiftness when you activate a virtue, Swiftness 5 s, no game-mode split; the +25% movement speed is not modelled)",
+      "status_operation": {
+        "operation_type": "AppliesBoon",
+        "target_side": "self",
+        "status_kind": "Swiftness",
+        "amount_mode": "Stacks",
+        "amount_value": 1.0,
+        "target_scope": "self",
+        "base_duration_ms": 5000
+      },
+      "trigger_scope": {
+        "Category": "Virtue"
+      }
+    },
+    {
+      "effect_id": "skill:62668:0",
+      "source_type": "Skill",
+      "source_id": 62668,
+      "source_name": "Rushing Justice",
+      "category": "ProcEffect",
+      "value": 1.1,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Willbender_Flames_(Rushing_Justice) (read 2026-09-24: parent = Rushing Justice, id 62618, activated by the virtue, not pressed; damage coefficient 0.22, Number of Impacts 5, Interval 1 s, Duration 5 s, 3 targets, no game-mode split; value = 0.22 x 5 impacts. The format has no impact-count/interval field and the flow sim does not play ProcEffect, so it names this record on the gap line. Player golem log 20260923-204811: 2.9 flames hits per cast)",
+      "effect_duration": 5.0,
+      "derived_from": [
+        0.22,
+        5.0
+      ]
+    },
+    {
+      "effect_id": "skill:62603:0",
+      "source_type": "Skill",
+      "source_id": 62603,
+      "source_name": "Flowing Resolve",
+      "category": "ProcEffect",
+      "value": 1.1,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Willbender_Flames_(Flowing_Resolve) (read 2026-09-24: parent = Flowing Resolve, id 62528, activated by the virtue, not pressed; damage coefficient 0.22, Number of Impacts 5, Interval 1 s, Duration 5 s, 3 targets, no game-mode split; value = 0.22 x 5 impacts. The format has no impact-count/interval field and the flow sim does not play ProcEffect, so it names this record on the gap line. Player golem log 20260923-204811: 3.8 flames hits per cast)",
+      "effect_duration": 5.0,
+      "derived_from": [
+        0.22,
+        5.0
+      ]
+    },
+    {
+      "effect_id": "skill:62648:0",
+      "source_type": "Skill",
+      "source_id": 62648,
+      "source_name": "Crashing Courage",
+      "category": "ProcEffect",
+      "value": 1.1,
+      "stacking_rule": "NonStacking",
+      "trigger_rule": "OnSkillUse",
+      "uptime_model": {
+        "kind": "Unknown"
+      },
+      "evidence_level": "Factual",
+      "source": "https://wiki.guildwars2.com/wiki/Willbender_Flames_(Crashing_Courage) (read 2026-09-24: parent = Crashing Courage, id 62552, activated by the virtue, not pressed; damage coefficient 0.22, Number of Impacts 5, Interval 1 s, Duration 5 s, 5 targets, no game-mode split; value = 0.22 x 5 impacts. The format has no impact-count/interval field and the flow sim does not play ProcEffect, so it names this record on the gap line. Player golem log 20260923-204811: 4.7 flames hits per cast)",
+      "effect_duration": 5.0,
+      "derived_from": [
+        0.22,
+        5.0
+      ]
     }
   ]
 }

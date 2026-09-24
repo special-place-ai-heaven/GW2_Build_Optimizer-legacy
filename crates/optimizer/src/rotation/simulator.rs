@@ -224,6 +224,10 @@ pub struct SimParams {
     /// modifier from an additive source joins that bucket.
     pub strike_add: f64,
     pub condition_add: f64,
+    /// Per-condition damage factors by canonical name (Hidden Barbs:
+    /// `Bleeding` 1.20 in PvE), on top of `condition_mult`, multiplicative
+    /// as `DamageModifiers::total_condi_mult_for`. Absent means 1.
+    pub condition_type_mults: HashMap<String, f64>,
     /// Always-on shares the fact parser folded into the multipliers for
     /// traits whose records this simulation plays on their own clock.
     pub folded: FoldedShares,
@@ -450,8 +454,17 @@ impl SimParams {
             triggered: Vec::new(),
             strike_add: 0.0,
             condition_add: 0.0,
+            condition_type_mults: HashMap::new(),
             folded: FoldedShares::default(),
         }
+    }
+}
+
+impl SimParams {
+    /// The per-condition factor for `condition` ([`Self::condition_type_mults`]).
+    pub fn condition_type_mult(&self, condition: &str) -> f64 {
+        let name = crate::data::boon_condition_formulas::canonical_condition_name(condition);
+        self.condition_type_mults.get(name).copied().unwrap_or(1.0)
     }
 }
 
@@ -1356,8 +1369,8 @@ impl SimState {
     }
 
     /// Use a skill: apply effects, set cooldown, advance next_action time.
-    /// One strike in flight: lands at `at_ms` with its share of the skill's
-    /// damage, priced with the buffs live at that moment.
+    /// One strike in flight: lands at `at_ms` with its per-strike coefficient,
+    /// priced with the buffs live at that moment.
     fn land_scheduled_strikes(&mut self, power: f64, weapon_strength: f64) {
         let mut i = 0;
         while i < self.scheduled_hits.len() {
@@ -1450,14 +1463,15 @@ impl SimState {
                     // Hits land across the activation (measured spacing from
                     // data/formulas/hit_timing.json, even spread otherwise),
                     // each priced at the Might and Fury of its own moment.
-                    let per_hit = dmg_multiplier / (*hit_count).max(1) as f64;
+                    // `dmg_multiplier` is already per strike (wiki Soul
+                    // Spiral: 12 x 0.7 = 8.4), so each hit carries all of it.
                     for offset in
                         crate::data::hit_timing::hit_schedule(&skill_name, cast_time, *hit_count)
                     {
                         self.scheduled_hits.push(ScheduledStrike {
                             at_ms: self.current_time_ms.saturating_add(offset),
                             skill_id,
-                            dmg_multiplier: per_hit,
+                            dmg_multiplier: *dmg_multiplier,
                         });
                     }
                 }
@@ -1751,6 +1765,7 @@ impl SimState {
                 condition_tick_damage(&condition.name, condition_damage, &self.params.mode)
                     * condition.stacks as f64
                     * self.params.condition_mult
+                    * self.params.condition_type_mult(&condition.name)
                     * incoming_mult;
 
             while condition.next_tick_ms <= now {
@@ -4637,6 +4652,54 @@ mod tests {
         }]
     }
 
+    /// Coefficients of the strikes one cast of `skill` schedules.
+    fn scheduled_coefficients(skill: RotationSkill) -> Vec<f64> {
+        let skills = [skill];
+        let mut sim = SimState::new(
+            &skills,
+            10_000,
+            TargetState::from_seed(EnemyDummy::open()),
+            SimParams::basic(2_000.0, 0.0, 1_000.0),
+        );
+        sim.use_skill(0, 2_000.0, 1_000.0);
+        sim.scheduled_hits
+            .iter()
+            .map(|h| h.dmg_multiplier)
+            .collect()
+    }
+
+    /// The API `dmg_multiplier` is the coefficient of ONE strike; a cast
+    /// lands `hit_count` of them (regression: 2090739 divided it by the
+    /// hit count, so multi-hit skills dealt 1/hit_count of their damage).
+    #[test]
+    fn a_multi_hit_cast_lands_hit_count_strikes_of_the_full_coefficient() {
+        let skill = bar_skill(1, "Triple", SkillSlot::Weapon2, 0, 900, 0, strike(3, 0.5));
+        let hits = scheduled_coefficients(skill);
+        assert_eq!(hits, vec![0.5; 3]);
+        assert!((hits.iter().sum::<f64>() - 1.5).abs() < 1e-9);
+    }
+
+    /// Wiki Soul Spiral (fetched 2026-09-24, PvE):
+    /// "Damage (12x): 2,232 (8.4)" and "Increased power coefficient from 0.6
+    /// to 0.7 in PvE only." The API fact (skill 30504) is hit_count 12,
+    /// dmg_multiplier 0.7: 12 strikes x 0.7 = 8.4 over the cast.
+    #[test]
+    fn soul_spiral_lands_twelve_strikes_totalling_the_wiki_coefficient() {
+        let skill = bar_skill(
+            30504,
+            "Soul Spiral",
+            SkillSlot::Weapon2,
+            0,
+            3_000,
+            0,
+            strike(12, 0.7),
+        );
+        let hits = scheduled_coefficients(skill);
+        assert_eq!(hits.len(), 12);
+        assert!(hits.iter().all(|c| (c - 0.7).abs() < 1e-9));
+        assert!((hits.iter().sum::<f64>() - 8.4).abs() < 1e-9);
+    }
+
     const FORM_ENTRY: u32 = 900;
 
     /// A 100-point pool that lasts 10 s, 10 s recharge, no gains.
@@ -5338,5 +5401,61 @@ mod tests {
         assert_eq!(casts(&sim, 30_825), 4);
         assert!(casts(&sim, 29_442) > 20);
         assert!(casts(&sim, 29_421) > 40);
+    }
+}
+
+/// Per-condition damage factors (`SimParams::condition_type_mults`).
+#[cfg(test)]
+mod condition_type_mult_tests {
+    use super::*;
+    use crate::rotation::combat_model::EnemyDummy;
+
+    fn applier(condition: &str) -> RotationSkill {
+        RotationSkill {
+            targets: 1,
+            categories: Vec::new(),
+            slot_name: None,
+            skill_id: 70,
+            name: condition.into(),
+            slot: SkillSlot::Weapon1,
+            cast_time_ms: 1_000,
+            cooldown_ms: 0,
+            effects: vec![SkillEffect::ApplyCondition {
+                condition: condition.into(),
+                stacks: 1,
+                duration_ms: 5_000,
+            }],
+            next_chain: None,
+            is_stunbreak: false,
+            reaches_allies: false,
+            weapon_set: 0,
+        }
+    }
+
+    fn condition_damage(condition: &str, mults: &[(&str, f64)]) -> f64 {
+        let mut params = SimParams::basic(1_000.0, 1_500.0, 1_000.0);
+        params.condition_type_mults = mults.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let result = simulate_with(
+            &[applier(condition)],
+            30_000,
+            &params,
+            EnemyDummy::default(),
+        );
+        result.condition_dps
+    }
+
+    /// Wiki Hidden Barbs: +20% bleeding damage in PvE. The stat sheet's
+    /// `Bleeding` factor 1.20 raises bleeding ticks by exactly that and
+    /// leaves every other condition alone.
+    #[test]
+    fn hidden_barbs_raises_only_bleeding_ticks() {
+        let barbs = [("Bleeding", 1.20)];
+        let bleed = condition_damage("Bleeding", &[]);
+        assert!(bleed > 0.0);
+        let ratio = condition_damage("Bleeding", &barbs) / bleed;
+        assert!((ratio - 1.20).abs() < 1e-9, "bleeding ratio {ratio}");
+        let burn = condition_damage("Burning", &[]);
+        assert!(burn > 0.0);
+        assert_eq!(condition_damage("Burning", &barbs), burn);
     }
 }

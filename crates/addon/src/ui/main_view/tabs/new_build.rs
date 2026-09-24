@@ -105,6 +105,7 @@ pub(in crate::ui::main_view) fn render_new_build_tab(ui: &Ui, state: &mut AddonS
         ui.same_line();
         if ui.small_button(t("btn.clear_results")) {
             state.main.comparison.suggestions.clear();
+            state.main.comparison.run_locked_spec = None;
             state.main.comparison.error = None;
         }
     }

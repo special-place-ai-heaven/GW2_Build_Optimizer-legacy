@@ -619,16 +619,15 @@ fn pct_of(ours: f64, theirs: f64) -> f64 {
 /// Compute a `BenchmarkDelta` comparing the optimizer's scored result to the
 /// closest community reference build.
 ///
-/// Both sides are `RefereeReport::ranked_direction_score` under the SAME
-/// `weights`, `ctx` and `scenario` the optimized build was scored with, so
-/// the percentage means what a player reads it as. Uncapped, rather than
-/// `user_intent_score`: per-axis saturation flattens two builds that are far
-/// apart into the same number, and a ratio of two flattened numbers says
-/// nothing. `ranked_direction_score` rather than `raw_direction_score`
-/// because that one collapses to the -1.0 non-viability sentinel, and ~42% of
-/// synced WvW references fail a gate at the player's scale — the meter used
-/// to silently skip past them to a worse reference, or report none at all.
-/// Gate results are carried on `ref_viable`/`our_viable` instead.
+/// Both sides are [`crate::referee::meter_score`] under the SAME `weights`,
+/// `ctx` and `scenario` the optimized build was scored with: the quantity
+/// `search_rank` orders on (checks passed, burst landed, capped radar score,
+/// role fit clamped at the floor), so the percentage agrees with the ranking.
+/// It used to be the uncapped `ranked_direction_score`, and a Hearty tank's
+/// sustain past 1.0 read 144 % of a Marauder power reference under Power
+/// 100 % (2026-09-24). No -1.0 sentinel: ~42% of synced WvW references fail
+/// a gate at the player's scale and must still be measured; gate results are
+/// also carried on `ref_viable`/`our_viable`.
 ///
 /// The reference is chosen by the SAME rule the cards are - see
 /// [`crate::picks`]: every synced row with published ids is refereed under
@@ -644,16 +643,17 @@ pub fn compute_benchmark_delta(
     mode: &str,
     role_hint: &str,
     weights: &OptimizationWeights,
-    our_score: f64,
-    our_viable: bool,
+    our_report: &crate::referee::RefereeReport,
     db: &crate::gamedb::GameDb,
     ctx: &crate::balance::BalanceContext,
     scenario: &crate::scenario::ScenarioSpec,
 ) -> Option<BenchmarkDelta> {
     // A build the simulator could not drive at all has no output to compare.
-    if !our_score.is_finite() || our_score <= 0.0 {
+    let measured = our_report.ranked_direction_score;
+    if !measured.is_finite() || measured <= 0.0 {
         return None;
     }
+    let our_score = crate::referee::meter_score(our_report, weights);
     let candidates = picks::candidates(builds, profession, mode);
     // No kit: the meter compares against our own result, which this
     // function is not handed, so the kit tie-break has nothing to compare
@@ -678,7 +678,7 @@ pub fn compute_benchmark_delta(
     })?;
     let reference = candidates[best.index];
     let ref_report = best.report.as_ref()?;
-    let ref_score = ref_report.ranked_direction_score;
+    let ref_score = crate::referee::meter_score(ref_report, weights);
     // A reference that produced NOTHING measurable is no yardstick; dividing
     // by zero is not a percentage. A failed gate is reported, not hidden.
     if !ref_score.is_finite() || ref_score <= 0.0 {
@@ -695,7 +695,7 @@ pub fn compute_benchmark_delta(
         ref_score,
         our_score,
         ref_viable: ref_report.viability.is_viable,
-        our_viable,
+        our_viable: our_report.viability.is_viable,
         pct_of_ref: pct_of(our_score, ref_score),
         ref_url: reference.source_url.clone(),
     })
@@ -704,6 +704,14 @@ pub fn compute_benchmark_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Our side of the meter: a viable report that measured `score`.
+    fn our_report(score: f64) -> crate::referee::RefereeReport {
+        let mut report =
+            crate::referee::tests::make_rank_report(crate::referee::tests::make_viable_rotation());
+        report.ranked_direction_score = score;
+        report
+    }
 
     fn make_build(profession: &str, mode: &str, role: &str, gear: &str) -> BenchmarkBuild {
         BenchmarkBuild {
@@ -857,8 +865,7 @@ mod tests {
             "PvE",
             "Power DPS",
             &w,
-            0.7,
-            true,
+            &our_report(0.7),
             &db,
             &ctx,
             &scenario,
@@ -897,13 +904,81 @@ mod tests {
             "PvE",
             "Power DPS",
             &w,
-            0.0,
-            false,
+            &our_report(0.0),
             &db,
             &ctx,
             &scenario,
         )
         .is_none());
+    }
+
+    /// Player report 2026-09-24: WvW Roam Damage, Power 100 %, Sustain
+    /// 48 %. The served Hearty/Sentinel tank read "144 % of reference" against
+    /// guildjen's Dragon's Roaming DPS because the meter divided uncapped
+    /// direction scores and the tank's sustain ran past 1.0. The meter now
+    /// reads the ranking's quantity. Axes, alignment and gate counts are the
+    /// referee's for both builds (`examples/optimize_tank_repro.rs`).
+    #[test]
+    fn a_tank_does_not_read_above_a_power_reference_under_power_weights() {
+        let mut weights = OptimizationWeights::preset_power_dps();
+        for (axis, v) in [
+            (0, 1.0),
+            (1, 0.0),
+            (2, 0.33),
+            (3, 0.0),
+            (4, 0.48),
+            (5, 0.11),
+        ] {
+            weights.set_constrained(axis, v);
+        }
+        let report = |axes: [f64; 6], alignment: f64, passed: usize, landed: bool| {
+            let mut rot = crate::referee::tests::make_viable_rotation();
+            let fight = rot.wvw.as_mut().expect("WvW report");
+            fight.chain_completed = landed;
+            fight.target_reached = landed;
+            let mut r = crate::referee::tests::make_rank_report(rot);
+            r.viability.gates = (0..9)
+                .map(|i| crate::referee::GateResult {
+                    gate: crate::referee::ViabilityGate::CleanseRate,
+                    passed: i < passed,
+                    skipped: false,
+                    note: String::new(),
+                })
+                .collect();
+            let [power, condition, boon_support, healing, sustain, control] = axes;
+            r.realized = crate::scoring::RealizedAxes {
+                power,
+                condition,
+                boon_support,
+                healing,
+                sustain,
+                control,
+            };
+            r.intent_alignment = Some(alignment);
+            r.ranked_direction_score = crate::scoring::raw_realized(&r.realized, &weights);
+            r
+        };
+        let tank = report([0.0209, 0.0, 0.3765, 0.0, 1.1080, 0.3478], 0.474, 8, false);
+        let dragon = report(
+            [0.2046, 0.0096, 0.1214, 0.0, 0.4740, 0.4839],
+            0.317,
+            9,
+            true,
+        );
+
+        // The old quantity is the bug this pins: the tank read over 100 %.
+        assert!(pct_of(tank.ranked_direction_score, dragon.ranked_direction_score) > 100.0);
+
+        let meter = pct_of(
+            crate::referee::meter_score(&tank, &weights),
+            crate::referee::meter_score(&dragon, &weights),
+        );
+        assert!(
+            meter <= 100.0,
+            "tank reads {meter:.0} % of the Dragon's reference"
+        );
+        // And the ranking agrees with the meter.
+        assert!(crate::referee::search_rank(&dragon) > crate::referee::search_rank(&tank));
     }
 
     /// The meter used to skip every reference whose direction score was the
@@ -1011,8 +1086,7 @@ mod tests {
             "WvW",
             &reference.role,
             &w,
-            0.7,
-            true,
+            &our_report(0.7),
             &db,
             &ctx,
             &scenario,

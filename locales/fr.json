@@ -466,7 +466,7 @@
   "fmt.stability_pct": "Stabilité : {pct}%",
   "label.condition_stacks": "Stacks d'altérations :",
   "label.key_skills": "Compétences clés :",
-  "tier.solo": "Solo (équipement + traits)",
+  "tier.solo": "Solo (équipement, traits, avantages propres)",
   "tier.party": "Groupe (Puissance x15, Fureur)",
   "tier.squad": "Escouade (Puissance x25, Fureur, Vuln x25)",
   "stat.effective_power": "Puissance effective",

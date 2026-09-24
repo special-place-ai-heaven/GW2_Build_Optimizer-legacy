@@ -2037,6 +2037,42 @@ mod tests {
         assert!(coverage <= 581, "coverage blocks grew to {coverage}");
     }
 
+    /// Wiki Lethal_Tempo (read 2026-09-24): each virtue activation grants a
+    /// stack, 6 s, +2% strike and +2% condition damage per stack in PvE
+    /// (+3% WvW/PvP), 5 stacks, a new stack refreshes the others. The PvE
+    /// file had none, so the player's golem never gained it.
+    #[test]
+    fn lethal_tempo_has_executable_pve_records() {
+        let pve = load_effects_file(PVE_EFFECTS_JSON).expect("PvE loads");
+        let records: Vec<&NormalizedEffect> = pve
+            .effects
+            .iter()
+            .filter(|e| e.source_type == SourceType::Trait && e.source_id == 2189)
+            .collect();
+        let axes: Vec<Option<EffectCategory>> =
+            records.iter().map(|e| e.inner_category.clone()).collect();
+        assert_eq!(
+            axes,
+            vec![
+                Some(EffectCategory::StrikeDamagePct),
+                Some(EffectCategory::ConditionDamagePct)
+            ]
+        );
+        for e in records {
+            assert_eq!(e.value, FactualValue::Resolved(2.0));
+            assert_eq!(e.effect_duration, Some(FactualValue::Resolved(6.0)));
+            assert_eq!(e.max_stacks, Some(FactualValue::Resolved(5)));
+            assert_eq!(e.stacking_rule, StackingRule::RefreshAllStacks);
+            assert_eq!(e.trigger_rule, TriggerRule::OnSkillUse);
+            assert_eq!(
+                e.trigger_scope,
+                Some(TriggerScope::Category("Virtue".into()))
+            );
+            assert!(e.coverage.is_none());
+            assert_eq!(crate::rotation::wvw_timeline::unexecutable_reason(e), None);
+        }
+    }
+
     /// Sprint 3: the fourteen Sprint 2 WvW records load unchanged.
     #[test]
     fn sprint2_records_still_load() {

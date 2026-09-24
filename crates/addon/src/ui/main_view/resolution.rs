@@ -53,8 +53,21 @@ pub(super) fn resolve_selected_build_inner(state: &mut AddonState) {
             if state.main.active_tab == MainTab::Improve {
                 auto_populate_locks(&build, &mut state.main.build_locks);
             }
+            // Damage modifiers from the engine's stat sheet, read off the
+            // same validated plate the Improve baseline ranks, so the
+            // current build's combat line cannot price a trait the engine
+            // prices differently.
+            let plate = super::optimize_flow::baseline_plate_from_loadout(&build);
+            let validated =
+                gw2_optimizer::validation::validate_gemini_build(&plate, db, &build.profession);
+            let (_, modifiers) = gw2_optimizer::engine::calculate_validated_stats(
+                &validated,
+                db,
+                &build.profession,
+                &gw2_optimizer::balance::BalanceContext::new(game_mode.clone()),
+            );
             state.main.current_build = Some(build);
-            match calculate_current_stats_from_db(&bt.build, &et, db, &game_mode) {
+            match calculate_current_stats_from_db(&bt.build, &et, db, &game_mode, &modifiers) {
                 Ok((stats, combat_solo, combat_party, combat_squad)) => {
                     state.main.current_stats = Some(stats);
                     state.main.comparison.current_combat_solo = combat_solo;
@@ -136,6 +149,7 @@ fn calculate_current_stats_from_db(
     equipment: &gw2_api::models::EquipmentTab,
     db: &gw2_optimizer::gamedb::GameDb,
     game_mode: &gw2_core::types::GameMode,
+    modifiers: &gw2_optimizer::combat::DamageModifiers,
 ) -> Result<CombatBundle, String> {
     let profession = build.profession.clone().unwrap_or_default();
 
@@ -148,11 +162,10 @@ fn calculate_current_stats_from_db(
                     let opt_stats = gw2_optimizer::stats::calculate_pvp_stats(&amulet.attributes);
                     let derived = gw2_optimizer::stats::compute_derived(&opt_stats, &profession);
                     let stats = opt_stats_to_stat_block(&opt_stats, &derived);
-                    let modifiers = gw2_optimizer::combat::DamageModifiers::default();
                     let (solo, party, squad) = compute_3tier_combat(
                         &opt_stats,
                         &derived,
-                        &modifiers,
+                        modifiers,
                         &profession,
                         &balance_ctx,
                     );
@@ -224,23 +237,8 @@ fn calculate_current_stats_from_db(
         game_mode,
     );
 
-    let relic_id = equipment
-        .equipment
-        .iter()
-        .find(|p| p.slot == "Relic")
-        .map(|p| p.id);
-    let modifiers = gw2_optimizer::combat::extract_damage_modifiers(
-        &equipped_trait_ids,
-        rune_id,
-        &sigil_ids,
-        relic_id,
-        &db.traits,
-        &db.items,
-        &balance_ctx,
-    );
-
     let (combat_solo, combat_party, combat_squad) =
-        compute_3tier_combat(&opt_stats, &derived, &modifiers, &profession, &balance_ctx);
+        compute_3tier_combat(&opt_stats, &derived, modifiers, &profession, &balance_ctx);
 
     Ok((
         opt_stats_to_stat_block(&opt_stats, &derived),

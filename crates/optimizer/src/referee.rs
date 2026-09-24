@@ -277,9 +277,16 @@ pub fn search_rank(report: &RefereeReport) -> [i64; 10] {
     // one. Signed, so a build can sort below one that does nothing at all.
     // Unmeasurable (no profile, or the collapsed axes) sorts under every real
     // alignment, which only ever ties builds that already lost on key 0.
+    //
+    // Clamped at the floor: alignment says WHETHER a build serves the role,
+    // not how well. Above the floor every on-intent build ties here and the
+    // exchange keys and the player's radar decide. Unclamped, it outranked
+    // both: a WvW Roam Damage run with Power 100 % served a Hearty tank over
+    // a Dragon's/Marauder roamer because the profile's solo row also focuses
+    // sustain, and sustain runs past 1.0 (2026-09-24, first bad 1.14.39).
     let alignment = report
         .intent_alignment
-        .map(|a| (a * 1_000_000.0).round() as i64)
+        .map(|a| (a.min(scoring::INTENT_ALIGNMENT_FLOOR) * 1_000_000.0).round() as i64)
         .unwrap_or(-2_000_000);
     let gates = report.viability.gates.iter().filter(|g| g.passed).count() as i64;
     if ranks_on_the_wvw_timeline(&report.scenario) {
@@ -351,6 +358,41 @@ pub fn search_rank(report: &RefereeReport) -> [i64; 10] {
         let stats = (report.stat_direction_score * 1_000_000.0) as i64;
         [viable, alignment, gates, score, raw, stats, 0, 0, 0, 0]
     }
+}
+
+/// The "vs meta" meter's number: [`search_rank`] folded into one scalar so a
+/// ratio of two of them means what the ranking means.
+///
+/// - radar: the capped, neglect-penalised radar score (`user_intent_score`
+///   without the non-viability sentinel). Uncapped direction let a tank's
+///   sustain past 1.0 read 144 % of a power reference (2026-09-24).
+/// - checks: the share of the rank's pass/fail keys that passed - gates, and
+///   on the WvW timeline the completed sequence and the landed outcome.
+/// - role fit: alignment clamped at [`scoring::INTENT_ALIGNMENT_FLOOR`] as
+///   in `search_rank`: at or above it adds nothing, below it subtracts.
+pub fn meter_score(report: &RefereeReport, weights: &OptimizationWeights) -> f64 {
+    let rank = search_rank(report);
+    let judged = report
+        .viability
+        .gates
+        .iter()
+        .filter(|g| g.passed || !g.skipped)
+        .count();
+    let (passed, checks) = if ranks_on_the_wvw_timeline(&report.scenario) {
+        (rank[2] + rank[3] + rank[4], judged + 2)
+    } else {
+        (rank[2], judged)
+    };
+    let checks_passed = if checks == 0 {
+        1.0
+    } else {
+        passed as f64 / checks as f64
+    };
+    let radar = scoring::score_realized(&report.realized, weights).max(0.0);
+    let role_fit = report
+        .intent_alignment
+        .map_or(0.0, |a| a.min(scoring::INTENT_ALIGNMENT_FLOOR));
+    radar * checks_passed + role_fit
 }
 
 /// Failed-gate notes for the optimize error path.
@@ -1619,7 +1661,7 @@ fn evaluate_inner(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     // Intentional invariant tripwires.
     #![allow(clippy::assertions_on_constants)]
     use super::{
@@ -1645,7 +1687,7 @@ mod tests {
     // Gate test helpers
 
     /// A `SimulationResult` that satisfies all WvW/PvP gates.
-    fn make_viable_rotation() -> SimulationResult {
+    pub(crate) fn make_viable_rotation() -> SimulationResult {
         SimulationResult {
             duration_ms: 20_000,
             strike_dps: 5_000.0,
@@ -2041,7 +2083,7 @@ mod tests {
         assert!(!starved.skipped && !starved.passed, "{}", starved.note);
     }
 
-    fn make_rank_report(rotation: SimulationResult) -> RefereeReport {
+    pub(crate) fn make_rank_report(rotation: SimulationResult) -> RefereeReport {
         let mut scenario = make_wvw_scenario();
         scenario.combat_tier = CombatTier::Solo;
         RefereeReport {
@@ -2785,6 +2827,69 @@ mod tests {
 
         assert!(search_rank(&make_rank_report(earlier)) > search_rank(&make_rank_report(later)));
     }
+    /// Player report 2026-09-24 (Willbender, WvW Roam, Damage, Power 100 %,
+    /// Sustain 48 %): Improve served a Hearty/Sentinel Luminary tank over a
+    /// Dragon's/Marauder power roamer. Both are on-intent for the Damage
+    /// profile; the tank only measured a higher alignment because the solo
+    /// row focuses sustain too and its sustain axis runs past 1.0. Alignment
+    /// is a floor: once both builds clear it, the burst that lands and the
+    /// player's radar decide. Numbers are the referee's, from
+    /// `examples/optimize_tank_repro.rs` on 1.14.42.
+    #[test]
+    fn an_on_intent_tank_does_not_outrank_a_power_roamer_on_alignment() {
+        let gates = |n: usize| {
+            (0..n)
+                .map(|_| GateResult {
+                    gate: ViabilityGate::CleanseRate,
+                    passed: true,
+                    skipped: false,
+                    note: String::new(),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut roamer_rot = make_viable_rotation();
+        {
+            let fight = roamer_rot.wvw.as_mut().expect("WvW report");
+            fight.chain_completed = true;
+            fight.target_reached = true;
+        }
+        let mut roamer = make_rank_report(roamer_rot);
+        roamer.viability.gates = gates(9);
+        roamer.intent_alignment = Some(0.438);
+        roamer.user_intent_score = 0.511;
+
+        let mut tank_rot = make_viable_rotation();
+        {
+            let fight = tank_rot.wvw.as_mut().expect("WvW report");
+            fight.chain_completed = false;
+            fight.target_reached = false;
+            fight.peak_protected_damage_2s = 626.0;
+        }
+        let mut tank = make_rank_report(tank_rot);
+        tank.viability.gates = gates(8);
+        tank.intent_alignment = Some(0.506);
+        tank.user_intent_score = 0.108;
+
+        assert!(
+            search_rank(&roamer) > search_rank(&tank),
+            "roamer {:?} tank {:?}",
+            search_rank(&roamer),
+            search_rank(&tank)
+        );
+
+        // The floor still bites: an off-intent build loses to an on-intent
+        // one however much better it performs, and stays signed below it.
+        let mut off = make_rank_report(make_viable_rotation());
+        off.viability.gates = gates(12);
+        off.intent_alignment = Some(crate::scoring::INTENT_ALIGNMENT_FLOOR - 0.2);
+        off.user_intent_score = 0.99;
+        let mut further_off = off.clone();
+        further_off.intent_alignment = Some(crate::scoring::INTENT_ALIGNMENT_FLOOR - 0.4);
+        assert!(search_rank(&tank) > search_rank(&off));
+        assert!(search_rank(&off) > search_rank(&further_off));
+    }
+
     #[test]
     fn roam_disabler_rank_honors_user_weights_after_required_exchange() {
         let mut aligned_rotation = make_viable_rotation();
@@ -4556,15 +4661,17 @@ coverage: {:?}",
         // they used to count its own Might and its own heal. The intent
         // score moves with them. Re-pinned in sprint 008 (forms): the flow
         // now plays the fixture's shroud, whose invented bar strikes softer
-        // than its greatsword and controls less.
+        // than its greatsword and controls less. Re-pinned 2026-09-24:
+        // multi-hit skills land every strike at the full per-strike
+        // coefficient (was divided by hit_count), power 0.0266 -> 0.0530.
         const PINNED: [f64; 7] = [
-            0.026640683025287,
+            0.05296084297412295,
             0.0,
             0.0,
             0.0,
             0.4302897574123989,
             0.05444444444444444,
-            0.07964220380336308,
+            0.08385342939517683,
         ];
         for (i, (g, p)) in got.iter().zip(&PINNED).enumerate() {
             assert!(

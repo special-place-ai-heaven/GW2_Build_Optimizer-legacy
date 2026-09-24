@@ -466,7 +466,7 @@
   "fmt.stability_pct": "Estabilidade: {pct}%",
   "label.condition_stacks": "Stacks de condição:",
   "label.key_skills": "Habilidades-chave:",
-  "tier.solo": "Solo (Equip. + Traits)",
+  "tier.solo": "Solo (equip., traits, bênçãos próprias)",
   "tier.party": "Grupo (Might x15, Fury)",
   "tier.squad": "Esquadrão completo (Might x25, Fury, Vuln x25)",
   "stat.effective_power": "Poder efetivo",

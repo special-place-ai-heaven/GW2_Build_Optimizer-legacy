@@ -466,7 +466,7 @@
   "fmt.stability_pct": "Stabilność: {pct}%",
   "label.condition_stacks": "Stosy stanów:",
   "label.key_skills": "Kluczowe umiejętności:",
-  "tier.solo": "Solo (Ekwipunek + Cechy)",
+  "tier.solo": "Solo (ekwipunek, cechy, własne wzmocnienia)",
   "tier.party": "Grupa (Might x15, Fury)",
   "tier.squad": "Pełny oddział (Might x25, Fury, Vuln x25)",
   "stat.effective_power": "Efektywna moc",

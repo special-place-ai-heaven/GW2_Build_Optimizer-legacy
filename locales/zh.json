@@ -466,7 +466,7 @@
   "fmt.stability_pct": "稳定：{pct}%",
   "label.condition_stacks": "状态层数：",
   "label.key_skills": "关键技能：",
-  "tier.solo": "单人（装备 + 天赋）",
+  "tier.solo": "单人（装备、天赋、自身增益）",
   "tier.party": "小队（威能 x15，激怒）",
   "tier.squad": "满编团队（威能 x25，激怒，易伤 x25）",
   "stat.effective_power": "有效力量",

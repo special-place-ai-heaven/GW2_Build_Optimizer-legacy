@@ -403,6 +403,10 @@ pub struct ComparisonState {
     pub result_pane: ResultPane,
     /// Build tab shows Optimized when a suggestion exists. Default true.
     pub show_optimized: bool,
+    /// Elite spec the last optimisation run was locked to, from the lock
+    /// snapshot taken at its start. The Improve pill reads this, not the live
+    /// locks, which `auto_populate_locks` refills after every run.
+    pub run_locked_spec: Option<String>,
 }
 
 /// A link to the site a published build came from, named after that site.

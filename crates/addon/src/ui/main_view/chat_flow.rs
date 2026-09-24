@@ -1,8 +1,8 @@
 use super::optimization::{
     apply_gemini_response, apply_radar_prefix, attach_chat_stats, chat_display_text,
     coverage_note_from, fill_holes_from_loadout, format_provider_issue, gemini_from_validated,
-    humanize_tool_names, keep_equipped_weapons, keep_loadout_pets, kitchen_brief, result_alert_tab,
-    simulate_suggestion_rotation, suggestion_to_chat_code, summarize_resolved_build,
+    humanize_tool_names, keep_equipped_weapons, keep_loadout_pets, kitchen_brief,
+    measure_validated, result_alert_tab, suggestion_to_chat_code, summarize_resolved_build,
     summarize_suggestion, validated_build_to_chat_code,
 };
 use std::sync::Arc;
@@ -337,11 +337,8 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
     // The plate is ranked before it is served, so the chat path needs the same
     // scenario the Improve button builds — same tier mapping, same role
     // profile. Without one there is nothing for the referee to judge against.
-    let combat_tier = match state.main.game_mode {
-        gw2_core::types::GameMode::WvW => state.main.combat_tier,
-        gw2_core::types::GameMode::PvP => gw2_optimizer::scenario::CombatTier::Solo,
-        gw2_core::types::GameMode::PvE => gw2_optimizer::scenario::CombatTier::Party,
-    };
+    let combat_tier =
+        super::optimize_flow::combat_tier_for(&state.main.game_mode, state.main.combat_tier);
     let selected_role = state.main.selected_role;
     // The message outranks the left panel. A specialization the player
     // names replaces the panel's elite lock for this request, so the
@@ -402,28 +399,12 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
             let repair_used = std::cell::Cell::new(false);
             // The scenario every referee call in this request judges against,
             // the fallback verdict included.
-            let scenario = gw2_optimizer::scenario::ScenarioSpec {
-                game_mode: chat_balance_ctx.game_mode.clone(),
+            let scenario = super::optimize_flow::scenario_for_run(
+                &chat_balance_ctx,
                 combat_tier,
-                combat_kind: selected_role
-                    .map(|r| r.combat_kind_for_weights(&weights))
-                    .unwrap_or_else(|| {
-                        if weights.condition > weights.power {
-                            gw2_optimizer::scenario::CombatKind::CondiRamp
-                        } else {
-                            gw2_optimizer::scenario::CombatKind::StrikeSpike
-                        }
-                    }),
-                target_profile: gw2_optimizer::scenario::TargetProfile::Single,
-                optimization_target: gw2_optimizer::scenario::OptimizationTarget {
-                    label: game_mode_label.clone(),
-                },
-                patch_id: Some(chat_balance_ctx.patch_id.clone()),
-                objective_profile_id: selected_role.map(|r| {
-                    r.profile_id_for(&chat_balance_ctx.game_mode, combat_tier)
-                        .to_string()
-                }),
-            };
+                selected_role,
+                &weights,
+            );
             let result = (|| -> Result<gw2_optimizer::prompts::GeminiBuildResponse, String> {
                 let client = gw2_optimizer::llm::create_client(&config, &addon_dir)
                     .map_err(|e| e.to_string())?;
@@ -1151,13 +1132,26 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                     suggestion.slot_prefixes = Some(v.gear_slots.clone());
                                 }
                                 if let Some(ref db) = live_db {
-                                    attach_chat_stats(
-                                        &mut suggestion,
-                                        db,
-                                        &profession,
-                                        &live_mode,
-                                        validated.as_ref(),
-                                    );
+                                    // Measured like every other tab, in the
+                                    // scenario the plate was refereed in.
+                                    match &validated {
+                                        Some(v) => measure_validated(
+                                            &mut suggestion,
+                                            v,
+                                            db,
+                                            &profession,
+                                            &weights,
+                                            &chat_balance_ctx,
+                                            &scenario,
+                                        ),
+                                        None => attach_chat_stats(
+                                            &mut suggestion,
+                                            db,
+                                            &profession,
+                                            &live_mode,
+                                            None,
+                                        ),
+                                    }
                                     if let Some(v) = &validated {
                                         suggestion.chat_code =
                                             validated_build_to_chat_code(v, &profession, db);
@@ -1166,8 +1160,6 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                         suggestion.chat_code =
                                             suggestion_to_chat_code(&suggestion, db);
                                     }
-                                    let balance_ctx = BalanceContext::new(live_mode.clone());
-                                    simulate_suggestion_rotation(&mut suggestion, db, &balance_ctx);
                                 }
                                 if let Some(report) = plate_report.borrow().as_ref() {
                                     suggestion.data_quality = report.quality.clone();
@@ -1206,6 +1198,8 @@ fn send_chat_message_with(state: &mut AddonState, message: String, continuation:
                                     );
                                     s.main.comparison.error = None;
                                     s.main.comparison.suggestions.push(suggestion);
+                                    // A Choya reply was not made under the last run's lock.
+                                    s.main.comparison.run_locked_spec = None;
                                     s.main.comparison.selected_suggestion =
                                         s.main.comparison.suggestions.len() - 1;
                                     s.main.comparison.show_optimized = true;
@@ -1706,7 +1700,7 @@ pub(super) fn classify(message: &str, has_plate: bool, wished: Option<String>) -
 }
 
 /// The plate as the validator reads it, from what the strip holds.
-fn plate_from_suggestion(
+pub(super) fn plate_from_suggestion(
     s: &crate::ui::comparison::BuildSuggestion,
 ) -> gw2_optimizer::prompts::GeminiBuildResponse {
     gw2_optimizer::prompts::GeminiBuildResponse {

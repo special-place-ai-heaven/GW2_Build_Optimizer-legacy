@@ -73,6 +73,78 @@
         "activation_ms": { "value": 0, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Steal" },
         "recharge_ms": { "value": 25000, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Steal" }
       }
+    },
+    {
+      "source_type": "Trait",
+      "source_id": 1846,
+      "name": "Hidden Barbs",
+      "overrides": {
+        "condition_damage_pct:bleeding": { "value": 33, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Hidden_Barbs (facts: Condition Damage Increase 20 (game mode pve), 33 (wvw pvp); 2026-04-14 reduced from 33% to 20% in PvE only)" }
+      }
+    },
+    {
+      "source_type": "Trait",
+      "source_id": 1291,
+      "name": "Potent Poison",
+      "overrides": {
+        "condition_damage_pct:poisoned": { "value": 20, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Potent_Poison (facts: condition damage increase 33 (pve), 20 (pvp wvw))" }
+      }
+    },
+    {
+      "source_type": "Trait",
+      "source_id": 1686,
+      "name": "Amplified Wrath",
+      "overrides": {
+        "condition_damage_pct:burning": { "value": 15, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Amplified_Wrath (facts: condition damage increase 10 (pve), 15 (wvw pvp))" }
+      }
+    },
+    {
+      "source_type": "Trait",
+      "source_id": 2164,
+      "name": "Demonic Lore",
+      "overrides": {
+        "condition_damage_pct:torment": { "value": 33, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Demonic_Lore (facts: condition damage increase 33 (pve wvw), 20 (pvp))" }
+      }
+    },
+    {
+      "source_type": "Trait",
+      "source_id": 2264,
+      "name": "Strength of Shadows",
+      "overrides": {
+        "condition_damage_pct:torment": { "value": 25, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Strength_of_Shadows (facts: condition damage increase (torment) 20 (pve), 25 (wvw pvp))" }
+      }
+    },
+    {
+      "source_type": "Trait",
+      "source_id": 2190,
+      "name": "Power for Power",
+      "overrides": {
+        "damage_increase_pct": { "value": 100, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Power_for_Power (facts: Damage Increase 200 (game mode pve), 100 (wvw pvp); improves type Willbender Flames; 2026-07-15 increased from 100% to 200% in PvE only)" }
+      }
+    },
+    {
+      "source_type": "Skill",
+      "source_id": 27107,
+      "name": "Impossible Odds",
+      "overrides": {
+        "damage_coefficient:above_50": { "value": 0.55, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Impossible_Odds (facts show three unlabelled Damage rows 0.65/0.55/0.45; version history only mentions PvE and PvP coefficient changes, leaving 0.55 as the untouched WvW baseline)" }
+      }
+    },
+    {
+      "source_type": "Skill",
+      "source_id": 62895,
+      "name": "Phantom's Onslaught",
+      "overrides": {
+        "damage_coefficient:above_50": { "value": 1.33, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Phantom's_Onslaught (facts show three unlabelled Damage rows 1.6/1.33/1.18; version history: 'Increased power coefficient from 1.18 to 1.33 in PvP and WvW' with no later WvW-specific change identifies 1.33 as current WvW)" }
+      }
+    },
+    {
+      "source_type": "Skill",
+      "source_id": 76975,
+      "name": "Splinter Weapon",
+      "overrides": {
+        "damage_coefficient:above_50": { "value": 0.25, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Splinter_Weapon (facts show three unlabelled Damage rows 0.4/0.25/0.5; version history: 'Reduced the power coefficient ... from 0.35 to 0.25 in WvW' identifies 0.25 as current WvW)" }
+      }
     }
   ]
 }

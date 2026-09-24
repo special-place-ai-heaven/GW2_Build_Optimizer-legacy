@@ -269,6 +269,150 @@ Increment log:
   more Quickness from stacked durations). Re-frozen with that reason;
   duration stacking stays (the game rule).
 
+- 2026-09-24, engine fix: multi-hit landing, alignment cap, fact-parser
+  fixes. Both simulators divided a multi-hit skill's API coefficient by its
+  hit count before landing each strike, a regression since `2090739`
+  (2026-09-07); the API value is per strike (wiki Soul Spiral 12 x 0.7 = 8.4,
+  Whirling Wrath 7 x 0.35; the player's log lands each Perforate strike at
+  1784). Fixed at `simulator.rs` and `wvw_timeline.rs` landing (the scheduler
+  already ranked with the full value); three tests written failing-first plus
+  a wiki-pinned Soul Spiral test; one fixture re-pinned (power axis 0.0266 ->
+  0.0530). Measured on the player's own logs: Reaper golem 5581 -> 6903 (log
+  11707), Willbender golem 3403 -> 6104 (log 11343), Willbender solo duel
+  2786 -> 5157 (log 6582), Druid 1884 -> 1950. `calibrate` WvW every-gate
+  50 -> 54 of 140, ProtectedExecution 57 -> 61; PvE identical; corpus 3/3; no
+  constants changed. Separately, `c764ddf` (1.14.39) made intent alignment
+  the second rank key above gates, burst and the radar weights, with sustain
+  uncapped, so with power scores squeezed by the multi-hit bug a
+  Hearty/Sentinel Luminary tank won a WvW Roam Damage request at Power 100 %
+  (Power 2560 -> 1108, Ferocity 0, "144 % of reference"; player report
+  `GW2_Build_Optimizer-work/optimize-tank-2026-09-24/report.md`). Alignment
+  is now capped at `INTENT_ALIGNMENT_FLOOR` in `search_rank`; test
+  `an_on_intent_tank_does_not_outrank_a_power_roamer_on_alignment`; example
+  `optimize_tank_repro` reproduces the case. After the fix: Radiance/Zeal/
+  Willbender, Marauder x14 + Dragon's x1, Power 2667, Ferocity 880. Data:
+  traited skill facts now apply for equipped traits (override indices
+  collected first); alternative Buff facts pick one per status instead of
+  summing; bare "Damage Increase" facts that are condition-scoped by text
+  become per-condition modifiers (17 facts across 12 traits, wiki-cited PvE/
+  WvW overrides where split) with new flow-sim `condition_type_mults`; seven
+  skill-scoped "Damage Increase" traits now apply only to their skills
+  instead of the global strike multiplier (the Willbender's earlier near-
+  match was this bug: 8741 -> 3403 before the multi-hit fix); Glyph of
+  Alignment resolves to its out-of-form variant via new
+  `data/form_variants.json`. Druid golem 1656 -> 1884, condition share
+  0.726 -> 0.816, Poison 5.5 stacks (was double-counted 8.1), Burning now
+  appears. `corpus_matching`: Mesmer PvE Buffer/Support re-frozen to
+  guildjen Fractal Support 0.207 with the measured reason. Improve Build
+  results pane shows one scrollbar (two nested scrolling `ChildWindow`s
+  removed). Follow-ups: the "vs meta" meter still compares uncapped
+  direction scores (E25); a "Locked: Willbender" label sat on a Luminary
+  result (E26); Unload's duplicate Damage fact lands 16 strikes and
+  Whirling Wrath projectiles are undercounted (E23); the player's current
+  build fails the CleanseRate gate (1.0 vs 2.0 per 20 s).
+
+- 2026-09-24, engine increment: one evaluation path for every tab. New
+  `engine::simulate_validated_flow` builds the engine stat sheet, then runs
+  `prepare_validated_rotation` + `simulate_flow`, exactly as the referee;
+  addon wrappers `flow_rotation` and `measure_validated` in
+  `ui/main_view/optimization.rs`. Every tab now measures a validated build
+  through it: New Build / Improve tiers 1-2 (`synergy_result_to_suggestion`;
+  the Rotation block previously showed the referee's 5 s gate window, which
+  is why every skill read "x1" and Simulated DPS 1081), the legacy Improve
+  tier (`optimize_flow.rs`), Choya plating (`chat_flow.rs`, which also had a
+  hand-copied scenario literal, now `scenario_for_run`), the reference-build
+  tabs (`provider_picks` worker), Saves (`saveload.rs`; a save whose names no
+  longer resolve keeps its stored numbers and lists the errors in quality
+  reasons instead of being re-priced as a partial build), and the LLM
+  `simulate_rotation` tool (`gemini_tools.rs`; `rotation_sim_params` and its
+  hand-built `SimParams` deleted, `duration_seconds` parameter removed,
+  always the 60 s window, utilities capped at 3). Damage modifiers for
+  `gemini_tools` `simulate_combat`, the synergy report, `resolution.rs` and
+  Saves now come from the engine stat sheet (`reconstruct_damage_modifiers`
+  deleted). Stunbreak/stability/cleanse lines come from the gate run (same
+  run as the viability verdict); DPS and skill usage from the 60 s flow.
+  `compute_3tier_combat` uses the referee's per-profession buff profiles for
+  the Current column too (it already did for Optimized); tier.solo label now
+  "Solo (gear, traits, own boons)" in all 12 locales. Boon and condition
+  uptime lists are sorted (the top eight no longer change run to run). Tests:
+  `tests/flow_display_parity.rs` (35 fixture builds: same DPS, skill usage
+  and realized axes as `log_compare` and the referee),
+  `every_tab_measures_a_build_the_same` and a CI-runnable
+  `choya_and_optimizer_tabs_measure_alike_on_a_hand_built_db` in the addon
+  crate. Willbender from the cache, WvW Roam: gate-window display 7489 (5 s)
+  and hand-built path 3035 (30 s, listed skills from weapons the build does
+  not hold) both replaced by 4052 (60 s) before the multi-hit fix.
+
+- 2026-09-24, engine fix: vs-meta meter and lock label. The "vs meta" meter
+  (`benchmark.rs` `compute_benchmark_delta`) no longer divides uncapped
+  direction scores. New `referee::meter_score` built from `search_rank`'s own
+  keys: the capped radar score with its neglected-axis penalty, times the
+  share of pass/fail checks passed (gates, completed sequence, landed
+  burst), plus alignment clamped at `INTENT_ALIGNMENT_FLOOR`. The served
+  tank read 136 % of the guildjen Roaming DPS reference before and 28 %
+  after; the 1.14.42 ranking's tank winner 120 % -> 23 %; power builds
+  unchanged (1.14.37 roamer 143 %, current unlocked winner 151 %,
+  Willbender-locked winner 134 %). Test
+  `a_tank_does_not_read_above_a_power_reference_under_power_weights`;
+  `optimize_tank_repro` now prints the meter. Closes E25. Locks: the engine
+  honours an elite-spec lock in every tier (new `tests/locks_every_tier.rs`
+  runs `optimize_v2` beam including community seeds and seed repair, the
+  deterministic tier and all five legacy candidates under a Willbender
+  lock). The "Locked: Willbender" pill was stale: it reads the live
+  `build_locks` while the run used its start snapshot, and
+  `auto_populate_locks` refills locks after a run; fix in progress (draw the
+  pill from the run's own snapshot, E26). After this work the current
+  unlocked WvW Roam Damage winner for the player's character is
+  Zeal/Radiance/Dragonhunter Marauder; with a Willbender lock,
+  Radiance/Valor/Willbender.
+
+- 2026-09-24, engine + data increment: Guardian, proc-only skills off the
+  bar, Damage alternatives, PvE records
+  (`GW2_Build_Optimizer-work/guardian-2026-09-24/`). `builder.rs`
+  `profession_skills_for_build`: a skill that is the `flip_skill` of another
+  skill in the same slot and specialization under a different name is no
+  longer that slot's press (Willbender Flames 62618/62528 were winning the
+  F1/F2 slots over Rushing Justice / Flowing Resolve on the lower-id sort).
+  Corpus replacements: Guardian 58 (Flames -> Rushing Justice 21, ->
+  Flowing Resolve 21, Exit -> Engage Radiant Forge 16), Engineer 17
+  (Deactivate -> Engage Photon Forge), Revenant 15 (Alliance Tactics ->
+  Energy Meld); same-name flips and core-to-elite flips unchanged.
+  Damage-fact alternatives: rows sharing a label and hit count are one
+  strike; identical rows count once (Unload lands 8 x 0.42, not 16
+  strikes); two values pick by mode (PvE larger, WvW/PvP smaller); three or
+  more abstain by name; "Minimum ..." rows dropped as floors. Effulgent
+  Stance lands 4.0 PvE / 2.1 WvW-PvP instead of 6.6 per cast. Corpus
+  skill/mode rows changed: Ele 31, Engi 11, Guard 25, Mes 45, Necro 8,
+  Ranger 26, Rev 25, Thief 11, War 34. Four skills with three-way rows now
+  abstain to 0 pending wiki overrides: Sword of Justice, Impossible Odds,
+  Phantom's Onslaught, Splinter Weapon (E27). Eviscerate "Level 1/2/3" rows
+  still summed (different labels). Whirling Wrath: the API "Number of
+  Impacts: 7" counts impacts across the area while the log shows ~1.75 hits
+  per cast on one target; kept as one hit and named on the gap line.
+  Rushing Justice: its "(Hit)" impact (1.5) now lands because the virtue is
+  on the bar; the flames field is 0.22 x 5 impacts over 5 s (wiki), added as
+  PvE `ProcEffect` records `skill:62668/62603/62648:0` value 1.1, which the
+  flow sim cannot play yet and names on the gap line (schema lacks
+  impacts/interval; E28). Guardian PvE records added with wiki citations:
+  Lethal Tempo 2189 (+2 % strike and condition per stack, 6 s, 5 stacks,
+  refresh-all, on virtue use), Virtue of Resolution 604 (Resolution 3 s),
+  Righteous Sprint 2222 (Swiftness 5 s), Inspiring Virtue 603 (+10 % strike
+  6 s). Abstained by name: Tyrant's Momentum 2201 (a record cannot alter
+  another record's value/duration; likely most of the log's +20.9 %),
+  Righteous Instincts 1683 (crit-while-Resolution has no flow path),
+  Justice is Blind 572 and Inspired Virtue 621 (need per-slot virtue
+  scope), Permeating Wrath 622 (virtue passive triggers), Restorative
+  Virtues 2197 (cooldown reduction). `effect_coverage` Guardian major
+  executable 12 -> 13, coverage 43 -> 42. Measured (before the multi-hit fix
+  was in that tree): Willbender golem 3403 -> 4615 (error -0.700 -> -0.593),
+  Willbender Flames casts 26 -> 0, greatsword autos 0 -> 0.22 share;
+  `skill_share` TVD 0.387 -> 0.410 only because the log names the impact
+  "Rushing Justice (Hit)" while the sim credits "Rushing Justice" (0.354
+  name-matched; comparator alias pending). `calibrate` WvW every-gate 50 ->
+  49 (Power Virtuoso Roaming Assassin now fails ProtectedExecution on WvW
+  coefficients; Evoker Roaming Bruiser and D/D Thief Havoc Assassin now
+  pass); PvE identical. Closes E24.
+
 Engine gaps the review measured (counted Executable, never run). The next
 engine increment (single-writer) closes these before more professions are
 authored, or the executable column overstates:
@@ -296,6 +440,13 @@ authored, or the executable column overstates:
 | E20 | optimizer food/utility selection ignores `StatConversion` consumables; conversions are applied after trait conversions rather than before | `consumables.rs`, `search_v2.rs` |
 | E21 | WvW timeline runs boons side by side (`apply_buff` pushes a parallel `TimedBuff`), so duration-stacking records add nothing there (the "Feel My Wrath!" self record, any overlapping Quickness/Fury grant) | `wvw_timeline.rs apply_buff` |
 | E22 | WvW Reaper rows over-produce Quickness once it stacks in duration: Lucian Lord 0.785 -> 0.997 vs logs 0.2-0.6; some Necromancer WvW Quickness record fires too often, unidentified | `wvw.json` Necromancer records, flow sim |
+| E18 | weapon choice, still open | `rotation/simulator.rs` scheduler |
+| E23 | multi-hit landing fixed 2026-09-24, Unload's duplicate fact fixed 2026-09-24; Whirling Wrath projectiles still undercounted (API `hit_count` 1 vs ~1.75 impacts on one target), named on the gap line | `builder.rs` |
+| E24 | CLOSED 2026-09-24: Effulgent Stance and other skills with mutually exclusive Damage rows landed all rows per cast | `builder.rs:658-667` |
+| E25 | CLOSED 2026-09-24: the "vs meta" meter used uncapped direction alignment | `benchmark.rs:681` |
+| E26 | CLOSED 2026-09-24: stale lock label. The Improve results lock pill now shows the lock the run actually used (`ComparisonState.run_locked_spec`, set from the run's start snapshot, cleared on every list reset and on Choya pushes) instead of the live locks, so a result produced without a lock is never labelled "Locked" | engine/search tiers |
+| E27 | 3 of 4 closed 2026-09-24: wiki-cited per-mode overrides added for Impossible Odds, Phantom's Onslaught, Splinter Weapon; Sword of Justice needs a hit-count field in the override format | `builder.rs` damage-alternative resolution, `balance_overrides` format |
+| E28 | `effect_coverage` counts a record executable by schema shape alone; Rushing Justice's flames `ProcEffect` records count executable but the flow sim has no impacts/interval consumer for them, an instrument overstatement | `effect_coverage` |
 
 Format gaps the builders named (each is a coverage block today): on-weapon-swap,
 on-struck, on-ally-healed, on-kill, on-combo / on-aura, first-strike-after-
@@ -429,6 +580,25 @@ received 11 per minute; downs 0.9-1.0 per player-minute. These are the numbers
 the scripted `WvwProfile::for_scenario` pressure cycle and the every-hit-lands
 assumption are to be replaced with.
 
+### 2026-09-24 note
+
+Multi-hit landing before/after (own logs, see the increment log entry above):
+Reaper golem 5581 -> 6903 (log 11707), Willbender golem 3403 -> 6104 (log
+11343), Willbender solo duel 2786 -> 5157 (log 6582), Druid 1884 -> 1950.
+
+Per-hit decomposition after the multi-hit fix (`GW2_Build_Optimizer-work/
+perhit-2026-09-24/report.md`): the Reaper shortfall is now entirely per hit
+(Might 6.1 vs 19 stacks, Vulnerability 3.2 vs 18.7, Fury 72 % vs 99 %). On the
+Willbender, Lethal Tempo has PvE records missing (WvW only, +21 % in the
+log), Willbender Flames casts as a cd-0 filler where the log shows it as a
+proc with zero casts, and greatsword autos never fire in 60 s (the log
+carries ~1200 DPS from them).
+
+Boon envelope (24 WvW fights, zerg tier, `GW2_Build_Optimizer-work/
+envelope-2026-09-23/wvw_squad_envelope.draft.json`): the diver (our player)
+vs in-squad teammates average Might 5.3 vs 4.9 stacks, Fury 57 % vs 60 %,
+Quickness 25 % vs 17 %, in 2.9 windows/min averaging 4.3 s on and 6.3 s off.
+
 ### Yardsticks (player doctrine, 2026-09-23)
 
 Power builds have no sustained damage; damage comes in bursts where Quickness,
@@ -466,6 +636,8 @@ The first two yardsticks are now measured: `burst_peak_5s`,
 `condition_share` and `condition_ramp_s` for the sustained-condition yardstick
 (see the 2026-09-23 "Fidelity: burst and condition observables" increment).
 The WvW disruption-budget and playstyle-window yardsticks remain unmeasured.
+
+Every tab evaluates through the same production path (`engine::simulate_validated_flow`); a hand-built `SimParams` or modifier computation anywhere in the addon is a bug (owner rule 2026-09-24).
 
 ## Gate 4: intent and matching
 

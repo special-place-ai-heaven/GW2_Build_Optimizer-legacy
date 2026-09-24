@@ -703,7 +703,7 @@ fn decl_get_build_synergy_report() -> FunctionDeclaration {
 fn decl_simulate_rotation() -> FunctionDeclaration {
     FunctionDeclaration {
         name: "simulate_rotation".into(),
-        description: "Simulate a skill rotation to estimate real DPS, condition uptime, buff uptime, and control metrics. Validates whether a build's skills actually work together over time. Estimates a skill list on an open dummy; not a full-build verdict; use score_build with a build for that.".into(),
+        description: "Simulate a skill rotation to estimate real DPS, condition uptime, buff uptime, and control metrics. Validates whether a build's skills actually work together over time. Runs the same 60-second flow simulation the app scores builds on, for the weapons the listed weapon skills belong to, the listed heal/utility/elite skills and the listed traits; not a full-build verdict; use score_build with a build for that.".into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -716,14 +716,10 @@ fn decl_simulate_rotation() -> FunctionDeclaration {
                     "type": "string",
                     "description": "Gear stat prefix (e.g. 'Berserker\\'s') for stat calculation"
                 },
-                "duration_seconds": {
-                    "type": "integer",
-                    "description": "Optional simulation duration (default 30 seconds)"
-                },
                 "trait_ids": {
                     "type": "array",
                     "items": { "type": "integer" },
-                    "description": "Optional list of equipped trait IDs for vs-target modifier extraction"
+                    "description": "Optional list of equipped trait IDs (their specializations, minor traits included, join the simulated build)"
                 }
             },
             "required": ["skill_ids"]
@@ -1085,19 +1081,7 @@ fn exec_simulate_combat(args: &Value, ctx: &ToolContext) -> Value {
         })
         .unwrap_or_default();
 
-    let modifiers = if trait_ids.is_empty() {
-        DamageModifiers::default()
-    } else {
-        combat::extract_damage_modifiers(
-            &trait_ids,
-            None,
-            &[],
-            None,
-            &ctx.db.traits,
-            &ctx.db.items,
-            ctx.balance_ctx,
-        )
-    };
+    let modifiers = engine_modifiers(&trait_ids, ctx);
 
     // Simulate under all 3 buff profiles using profession-specific rotation profile data
     let profiles = combat::buff_profiles_for_profession(ctx.profession_name, ctx.balance_ctx);
@@ -1662,15 +1646,7 @@ fn exec_get_build_synergy_report(args: &Value, ctx: &ToolContext) -> Value {
     let synergies_result = exec_find_synergies(args, ctx);
 
     // 2. Damage modifiers from traits
-    let modifiers = combat::extract_damage_modifiers(
-        &trait_ids,
-        None,
-        &[],
-        None,
-        &ctx.db.traits,
-        &ctx.db.items,
-        ctx.balance_ctx,
-    );
+    let modifiers = engine_modifiers(&trait_ids, ctx);
 
     // 3. All conditions the build can apply
     let mut all_conditions: HashMap<String, Vec<String>> = HashMap::new();
@@ -1732,35 +1708,14 @@ fn exec_get_build_synergy_report(args: &Value, ctx: &ToolContext) -> Value {
     })
 }
 
-/// Upper bound on `simulate_rotation`'s `duration_seconds` tool argument.
-///
-/// `rotation::simulator::SimState::run` advances one scheduled action at a
-/// time for the full requested duration — there is no early-exit budget like
-/// the search beam's deadline/eval cap. Ten minutes of simulated combat is far
-/// beyond any real rotation-planning need; it exists to keep a malformed or
-/// adversarial tool call from turning into a multi-hour compute loop on the
-/// chat/optimize worker thread (the same thread `AddonState::spawn_worker`'s
-/// `UNLOAD_JOIN_BUDGET` is trying to bound).
-const MAX_ROTATION_DURATION_SECONDS: u32 = 600;
-
-/// Clamp a `duration_seconds` tool argument into `1..=MAX_ROTATION_DURATION_SECONDS`.
-///
-/// Clamps the `u64` *before* narrowing to `u32` — a bare `as u32` on an
-/// oversized LLM-supplied value (e.g. `u64::MAX`) wraps instead of erroring,
-/// and `duration_s * 1000` on the wrapped result can itself overflow `u32`.
-/// Missing/unparseable input keeps the documented default of 30 seconds.
-fn clamp_rotation_duration(raw: Option<u64>) -> u32 {
-    raw.map(|n| n.clamp(1, MAX_ROTATION_DURATION_SECONDS as u64) as u32)
-        .unwrap_or(30)
-}
-
-/// Sort a flat skill list into (set 1, set 2, non-weapon) by the weapon each
-/// skill belongs to. Two-handers and main-hand skills (slots 1-3) open a set;
-/// off-hand skills (slots 4-5) join the first set without an off-hand.
+/// Sort a flat skill list into the two weapon sets its weapon skills belong
+/// to, plus the non-weapon ids. Two-handers and main-hand skills (slots 1-3)
+/// open a set; off-hand skills (slots 4-5) join the first set without an
+/// off-hand.
 fn split_weapon_sets(
     skill_ids: &[u32],
     db: &crate::gamedb::GameDb,
-) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+) -> (crate::validation::ValidatedWeapons, Vec<u32>) {
     const TWO_HANDED: [&str; 9] = [
         "Greatsword",
         "Hammer",
@@ -1821,13 +1776,88 @@ fn split_weapon_sets(
         }
         sets[target].2.push(id);
     }
-    let [(_, _, set1), (_, _, set2)] = sets;
-    (set1, set2, other)
+    let [set1, set2] = sets.map(|(main, off, _)| crate::validation::ValidatedWeaponSet {
+        // A two-hander fills both cells above; the build holds it once.
+        off_hand: off.filter(|o| main.as_deref() != Some(o.as_str())),
+        main_hand: main,
+    });
+    (crate::validation::ValidatedWeapons { set1, set2 }, other)
+}
+
+/// A flat tool-call kit as the engine reads a build: the traits grouped
+/// into their specialization lines (minor traits added, as the validator
+/// does), the weapons the weapon skills belong to, the rest of the bar by
+/// slot, and `prefix` in every worn slot. The id-list tools read the
+/// engine's stat sheet and flow run through this instead of building their
+/// own `DamageModifiers` or `SimParams`.
+fn validated_from_ids(
+    db: &GameDb,
+    trait_ids: &[u32],
+    skill_ids: &[u32],
+    prefix: Option<&ItemStat>,
+) -> crate::validation::ValidatedBuild {
+    let mut v = crate::validation::ValidatedBuild::default();
+    for &id in trait_ids {
+        let Some(t) = db.traits.get(&id) else {
+            continue;
+        };
+        let Some(spec) = db.specializations.get(&t.specialization) else {
+            continue;
+        };
+        let at = match v.specializations.iter().position(|s| s.spec_id == spec.id) {
+            Some(at) => at,
+            None => {
+                v.specializations.push(crate::validation::ValidatedSpec {
+                    spec_id: spec.id,
+                    name: spec.name.clone(),
+                    elite: spec.elite,
+                    trait_ids: Vec::new(),
+                    trait_names: Vec::new(),
+                    all_trait_ids: spec.minor_traits.clone(),
+                });
+                v.specializations.len() - 1
+            }
+        };
+        let line = &mut v.specializations[at];
+        if !line.all_trait_ids.contains(&id) {
+            line.all_trait_ids.push(id);
+        }
+        if !spec.minor_traits.contains(&id) && !line.trait_ids.contains(&id) {
+            line.trait_ids.push(id);
+            line.trait_names.push(t.name.clone());
+        }
+    }
+    let (weapons, other) = split_weapon_sets(skill_ids, db);
+    v.weapons = weapons;
+    for id in other {
+        let Some(skill) = db.skills.get(&id) else {
+            continue;
+        };
+        let entry = Some((id, skill.name.clone()));
+        match skill.slot.as_deref() {
+            Some("Heal") if v.skills.heal.is_none() => v.skills.heal = entry,
+            Some("Utility") if v.skills.utilities.len() < 3 => v.skills.utilities.push(entry),
+            Some("Elite") if v.skills.elite.is_none() => v.skills.elite = entry,
+            _ => v.skills.profession.push((id, skill.name.clone())),
+        }
+    }
+    if let Some(itemstat) = prefix {
+        v.fill_worn_gear_slots(gw2_core::types::PrefixRef {
+            itemstat_id: itemstat.id,
+            name: itemstat.name.clone(),
+        });
+    }
+    v
+}
+
+/// The engine's damage modifiers for a flat trait list: the same stat sheet
+/// (`engine::calculate_validated_stats`) the optimizer and the referee read.
+fn engine_modifiers(trait_ids: &[u32], ctx: &ToolContext) -> DamageModifiers {
+    let v = validated_from_ids(ctx.db, trait_ids, &[], None);
+    crate::engine::calculate_validated_stats(&v, ctx.db, ctx.profession_name, ctx.balance_ctx).1
 }
 
 fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
-    use crate::rotation;
-
     let mut skill_ids: Vec<u32> = args
         .get("skill_ids")
         .and_then(|v| v.as_array())
@@ -1845,15 +1875,15 @@ fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
         return json!({ "error": "No skill IDs provided" });
     }
 
-    let duration_s = clamp_rotation_duration(args.get("duration_seconds").and_then(|v| v.as_u64()));
-
     let gear_prefix = args
         .get("gear_prefix")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let Some(gear_stats) = find_itemstat_by_name(ctx.db, gear_prefix)
+    let itemstat = find_itemstat_by_name(ctx.db, gear_prefix);
+    if itemstat
         .and_then(|istat| calculate_full_set_stats(ctx.db, istat, ctx.balance_ctx))
-    else {
+        .is_none()
+    {
         return json!({
             "error": format!(
                 "No stat sheet for '{}' in {}: the prefix is unknown, or it has no budget the game mode can price.",
@@ -1861,9 +1891,7 @@ fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
                 ctx.balance_ctx.game_mode.label()
             )
         });
-    };
-    let mut full = stats::base_stats();
-    full += &gear_stats;
+    }
     let mut trait_ids: Vec<u32> = args
         .get("trait_ids")
         .and_then(|v| v.as_array())
@@ -1876,39 +1904,21 @@ fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
     // A build has at most 9 traits; cap generously to bound CPU on the LLM
     // thread against a runaway model-supplied list.
     trait_ids.truncate(36);
-    let params = rotation_sim_params(
-        &full,
-        ctx.profession_name,
-        ctx.balance_ctx,
+
+    // The same flow run the referee scores a build on (sprint 008 rule 8):
+    // the engine builds the bar, the stat sheet and the SimParams.
+    let validated = validated_from_ids(ctx.db, &trait_ids, &skill_ids, itemstat);
+    let Some(result) = crate::engine::simulate_validated_flow(
+        &validated,
         ctx.db,
-        &trait_ids,
-    );
-
-    // The model hands over a flat id list. Weapon skills belong to a set —
-    // two weapons cannot both be in hand — so group them the way the engine
-    // does: first weapon seen is set 1, the next main-hand weapon is set 2,
-    // off-hands fill whichever set still has room. Everything else is set 0.
-    let (set1_ids, set2_ids, other_ids) = split_weapon_sets(&skill_ids, ctx.db);
-    let mut rotation_skills =
-        rotation::builder::build_rotation_skills_for_context(&other_ids, ctx.db, ctx.balance_ctx);
-    let mut set1 =
-        rotation::builder::build_rotation_skills_for_context(&set1_ids, ctx.db, ctx.balance_ctx);
-    rotation::builder::tag_weapon_set(&mut set1, 1);
-    let mut set2 =
-        rotation::builder::build_rotation_skills_for_context(&set2_ids, ctx.db, ctx.balance_ctx);
-    rotation::builder::tag_weapon_set(&mut set2, 2);
-    rotation_skills.extend(rotation::builder::merge_weapon_sets(set1, set2));
-
-    if rotation_skills.is_empty() {
+        ctx.profession_name,
+        &ctx.weights,
+        ctx.balance_ctx,
+        &ctx.scenario,
+    ) else {
         return json!({ "error": "No valid skills found for the provided IDs" });
-    }
-
-    let result = rotation::simulator::simulate_with(
-        &rotation_skills,
-        duration_s * 1000,
-        &params,
-        rotation::combat_model::EnemyDummy::open(),
-    );
+    };
+    let duration_s = crate::engine::FLOW_WINDOW_MS / 1000;
 
     // Format condition uptimes
     let mut condition_uptimes: Vec<Value> = result
@@ -1964,7 +1974,7 @@ fn exec_simulate_rotation(args: &Value, ctx: &ToolContext) -> Value {
             "has_stability": result.has_stability,
             "stability_uptime_pct": format!("{:.0}%", result.stability_uptime * 100.0)
         },
-        "skills_simulated": rotation_skills.len()
+        "skills_simulated": result.skill_usage.len()
     })
 }
 
@@ -1989,68 +1999,6 @@ fn calculate_full_set_stats(
         // zeroed stat sheet is not an estimate, so say there is none.
         Some(_) => None,
         None => Some(gear_stats),
-    }
-}
-
-/// Prefix-only combat inputs for the LLM rotation tool. Trait mods stay at
-/// default — the tool sees a named prefix, not a validated trait line.
-/// Vs-target / per-stack percents still come from `extract_damage_modifiers`
-/// (same list `prepare_validated_rotation` clones into SimParams).
-/// Weapon strength stays 1100 until W068 publishes `REFERENCE_WEAPON_STRENGTH`.
-fn rotation_sim_params(
-    full: &stats::StatBlock,
-    profession: &str,
-    ctx: &BalanceContext,
-    db: &GameDb,
-    trait_ids: &[u32],
-) -> crate::rotation::simulator::SimParams {
-    let derived = stats::compute_derived(full, profession);
-    let mods = DamageModifiers::default();
-    let mode = ctx.game_mode.clone();
-    crate::rotation::simulator::SimParams {
-        power: full.power,
-        condition_damage: full.condition_damage,
-        weapon_strength: 1100.0,
-        precision: full.precision,
-        ferocity: full.ferocity,
-        crit_chance_bonus: 0.0,
-        fury_crit_chance_bonus: crate::data::boon_condition_formulas::boons()
-            .fury_crit_bonus(mode.clone())
-            * 100.0,
-        strike_mult: 1.0,
-        condition_mult: 1.0,
-        condition_duration_mult: combat::outgoing_condition_duration_mult(
-            full.expertise,
-            &mods,
-            ctx,
-        ),
-        boon_duration_mult: combat::outgoing_boon_duration_mult(full.concentration, &mods, ctx),
-        healing_power: full.healing_power,
-        healing_mult: 1.0,
-        max_health: derived.health,
-        armor: derived.armor,
-        mode,
-        intent: None,
-        deferred_target: combat::extract_damage_modifiers(
-            trait_ids,
-            None,
-            &[],
-            None,
-            &db.traits,
-            &db.items,
-            ctx,
-        )
-        .deferred_target,
-        weaver: trait_ids.iter().any(|id| {
-            db.traits
-                .get(id)
-                .is_some_and(|t| t.specialization == crate::rotation::attunement::WEAVER_SPEC_ID)
-        }),
-        form: None,
-        triggered: Vec::new(),
-        strike_add: 0.0,
-        condition_add: 0.0,
-        folded: Default::default(),
     }
 }
 
@@ -3027,115 +2975,6 @@ mod tests {
         );
     }
 
-    // C23: simulate_rotation's duration_seconds cannot run forever
-
-    #[test]
-    fn duration_seconds_is_clamped() {
-        // Below the ceiling: passes through unchanged.
-        assert_eq!(clamp_rotation_duration(Some(45)), 45);
-        // At/above the ceiling: pinned to MAX_ROTATION_DURATION_SECONDS, not
-        // wrapped by a bare u64->u32 cast (u64::MAX as u32 == u32::MAX, which the
-        // old unclamped code fed straight into `duration_s * 1000` — u32
-        // overflow).
-        assert_eq!(
-            clamp_rotation_duration(Some(u64::MAX)),
-            MAX_ROTATION_DURATION_SECONDS
-        );
-        assert_eq!(
-            clamp_rotation_duration(Some(1_000_000)),
-            MAX_ROTATION_DURATION_SECONDS
-        );
-        // Zero floors to 1 rather than silently reaching the simulator's
-        // internal "0 means default" convention — the tool's reported duration
-        // must match what it actually asked the simulator to run.
-        assert_eq!(clamp_rotation_duration(Some(0)), 1);
-        // Missing argument keeps the documented default.
-        assert_eq!(clamp_rotation_duration(None), 30);
-
-        // Independent proof through the real tool entry point: an absurd
-        // duration_seconds must come back clamped in the tool's own JSON answer,
-        // and the call must return promptly — a hang here would mean the clamp
-        // never reached `rotation::simulator::simulate_with`.
-        let mut db = db_with_itemstats(vec![(1, "Berserker's")]);
-        db.itemstats.insert(
-            1,
-            ItemStat {
-                id: 1,
-                name: "Berserker's".into(),
-                attributes: vec![
-                    StatAttribute {
-                        attribute: "Power".into(),
-                        multiplier: 0.35,
-                        value: 0,
-                    },
-                    StatAttribute {
-                        attribute: "Precision".into(),
-                        multiplier: 0.25,
-                        value: 0,
-                    },
-                    StatAttribute {
-                        attribute: "Ferocity".into(),
-                        multiplier: 0.25,
-                        value: 0,
-                    },
-                ],
-            },
-        );
-        db.skills.insert(
-            999,
-            gw2_api::models::Skill {
-                id: 999,
-                name: "Test Strike".into(),
-                description: None,
-                icon: None,
-                chat_link: None,
-                skill_type: None,
-                weapon_type: None,
-                professions: vec![],
-                slot: None,
-                facts: vec![],
-                traited_facts: vec![],
-                categories: vec![],
-                attunement: None,
-                cost: None,
-                dual_wield: None,
-                flip_skill: None,
-                initiative: None,
-                next_chain: None,
-                prev_chain: None,
-                transform_skills: vec![],
-                bundle_skills: vec![],
-                toolbelt_skill: None,
-                flags: vec![],
-                specialization: None,
-            },
-        );
-        let empty_candidates: Vec<BuildCandidate> = vec![];
-        let balance_ctx = BalanceContext::new(gw2_core::types::GameMode::PvE);
-        let ctx = ToolContext {
-            db: &db,
-            profession_name: "Guardian",
-            candidates: &empty_candidates,
-            current_build_summary: None,
-            weights: OptimizationWeights::default(),
-            balance_ctx: &balance_ctx,
-            scenario: crate::scenario::ScenarioSpec::from_balance_context(&balance_ctx),
-        };
-        let args = json!({
-            "skill_ids": [999],
-            "gear_prefix": "Berserker's",
-            "duration_seconds": u64::MAX
-        });
-        let result = exec_simulate_rotation(&args, &ctx);
-        let reported = result["duration_s"]
-            .as_u64()
-            .expect("a valid skill list must produce a duration_s in the response");
-        assert_eq!(
-            reported, MAX_ROTATION_DURATION_SECONDS as u64,
-            "tool must clamp an absurd duration_seconds, not run (or report) it unbounded"
-        );
-    }
-
     #[test]
     fn simulate_rotation_errors_when_prefix_cannot_be_priced() {
         let mut db = db_with_itemstats(vec![]);
@@ -3193,8 +3032,10 @@ mod tests {
         assert!(result.get("dps").is_none());
     }
 
+    /// The rotation tool is the engine's flow run for the kit it names, not
+    /// a `SimParams` of its own (sprint 008 rule 8).
     #[test]
-    fn simulate_rotation_uses_resolved_crit_not_basic_defaults() {
+    fn simulate_rotation_is_the_engine_flow_run() {
         let mut db = db_with_itemstats(vec![(1, "Berserker's")]);
         db.itemstats.insert(
             1,
@@ -3239,151 +3080,32 @@ mod tests {
             scenario: crate::scenario::ScenarioSpec::from_balance_context(&balance_ctx),
         };
         let result = exec_simulate_rotation(
-            &json!({
-                "skill_ids": [999],
-                "gear_prefix": "Berserker's",
-                "duration_seconds": 10
-            }),
+            &json!({ "skill_ids": [999], "gear_prefix": "Berserker's" }),
             &ctx,
         );
-        let tool_strike: f64 = result["dps"]["strike"]
+        let tool_total: f64 = result["dps"]["total"]
             .as_str()
-            .expect("priced strike skill must report strike DPS")
+            .expect("priced strike skill must report DPS")
             .parse()
-            .expect("strike DPS is a formatted number");
+            .expect("DPS is a formatted number");
 
-        let skills =
-            crate::rotation::builder::build_rotation_skills_for_context(&[999], &db, &balance_ctx);
-        let gear = calculate_full_set_stats(
+        let validated =
+            validated_from_ids(&db, &[], &[999], find_itemstat_by_name(&db, "Berserker's"));
+        let flow = crate::engine::simulate_validated_flow(
+            &validated,
             &db,
-            find_itemstat_by_name(&db, "Berserker's").expect("seeded prefix"),
+            "Guardian",
+            &ctx.weights,
             &balance_ctx,
+            &ctx.scenario,
         )
-        .expect("Berserker's is priceable");
-        let mut full = stats::base_stats();
-        full += &gear;
-        let basic = crate::rotation::simulator::simulate(
-            &skills,
-            10_000,
-            full.power,
-            full.condition_damage,
-            1100.0,
-        );
-        let with = crate::rotation::simulator::simulate_with(
-            &skills,
-            10_000,
-            &rotation_sim_params(&full, "Guardian", &balance_ctx, &db, &[]),
-            crate::rotation::combat_model::EnemyDummy::open(),
-        );
-        assert_ne!(
-            basic.strike_dps.round(),
-            with.strike_dps.round(),
-            "Berserker precision must move strike off SimParams::basic (precision=0)"
-        );
+        .expect("the bar resolves");
+        assert!(flow.total_dps > 0.0, "a damage skill must deal damage");
+        assert_eq!(tool_total, flow.total_dps.round(), "{result}");
         assert_eq!(
-            tool_strike,
-            with.strike_dps.round(),
-            "tool must call simulate_with on resolved stats, not simulate()/basic: {result}"
+            result["duration_s"].as_u64(),
+            Some(u64::from(crate::engine::FLOW_WINDOW_MS / 1000))
         );
-    }
-
-    #[test]
-    fn rotation_sim_params_threads_extracted_deferred_target() {
-        let mut db = db_with_itemstats(vec![]);
-        db.traits.insert(
-            9001,
-            GW2Trait {
-                id: 9001,
-                name: "Kent Vs Target".into(),
-                icon: None,
-                description: None,
-                specialization: 0,
-                tier: 0,
-                order: 0,
-                slot: "Minor".into(),
-                facts: vec![Fact::Percent {
-                    text: Some("Strike Damage vs. Vulnerability".into()),
-                    icon: None,
-                    percent: Some(10.0),
-                }],
-                traited_facts: vec![],
-                skills: vec![],
-            },
-        );
-        let balance_ctx = BalanceContext::new(gw2_core::types::GameMode::PvE);
-        let full = stats::base_stats();
-        let params = rotation_sim_params(&full, "Guardian", &balance_ctx, &db, &[9001]);
-        let extracted = combat::extract_damage_modifiers(
-            &[9001],
-            None,
-            &[],
-            None,
-            &db.traits,
-            &db.items,
-            &balance_ctx,
-        );
-        assert!(
-            !params.deferred_target.is_empty(),
-            "vs-target fact must reach SimParams.deferred_target"
-        );
-        assert_eq!(
-            params.deferred_target.len(),
-            extracted.deferred_target.len(),
-            "rotation preview must clone the extracted deferred_target list"
-        );
-        assert_eq!(
-            params.deferred_target[0].percent,
-            extracted.deferred_target[0].percent
-        );
-        assert!(
-            !params.weaver,
-            "Guardian fixture trait is spec 0, not Weaver"
-        );
-    }
-
-    #[test]
-    fn rotation_sim_params_sets_weaver_from_trait_spec() {
-        let mut db = db_with_itemstats(vec![]);
-        db.traits.insert(
-            2177,
-            GW2Trait {
-                id: 2177,
-                name: "Weaver's Prowess".into(),
-                icon: None,
-                description: None,
-                specialization: crate::rotation::attunement::WEAVER_SPEC_ID,
-                tier: 1,
-                order: 0,
-                slot: "Major".into(),
-                facts: vec![],
-                traited_facts: vec![],
-                skills: vec![],
-            },
-        );
-        let balance_ctx = BalanceContext::new(gw2_core::types::GameMode::PvE);
-        let full = stats::base_stats();
-        let weaver = rotation_sim_params(&full, "Elementalist", &balance_ctx, &db, &[2177]);
-        assert!(weaver.weaver);
-        db.traits.insert(
-            2178,
-            GW2Trait {
-                id: 2178,
-                name: "Willbender trait".into(),
-                icon: None,
-                description: None,
-                specialization: 65,
-                tier: 1,
-                order: 0,
-                slot: "Major".into(),
-                facts: vec![],
-                traited_facts: vec![],
-                skills: vec![],
-            },
-        );
-        let willbender = rotation_sim_params(&full, "Guardian", &balance_ctx, &db, &[2178]);
-        assert!(!willbender.weaver, "spec 65 is Willbender, not Weaver");
-        let core = rotation_sim_params(&full, "Elementalist", &balance_ctx, &db, &[]);
-        assert!(!core.weaver);
     }
 
     /// The reference replaces tool rounds, so it has to carry what those
