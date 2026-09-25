@@ -480,7 +480,7 @@ authored, or the executable column overstates:
 | E24 | CLOSED 2026-09-24: Effulgent Stance and other skills with mutually exclusive Damage rows landed all rows per cast | `builder.rs:658-667` |
 | E25 | CLOSED 2026-09-24: the "vs meta" meter used uncapped direction alignment | `benchmark.rs:681` |
 | E26 | CLOSED 2026-09-24: stale lock label. The Improve results lock pill now shows the lock the run actually used (`ComparisonState.run_locked_spec`, set from the run's start snapshot, cleared on every list reset and on Choya pushes) instead of the live locks, so a result produced without a lock is never labelled "Locked" | engine/search tiers |
-| E27 | 3 of 4 closed 2026-09-24: wiki-cited per-mode overrides added for Impossible Odds, Phantom's Onslaught, Splinter Weapon; Sword of Justice needs a hit-count field in the override format | `builder.rs` damage-alternative resolution, `balance_overrides` format |
+| E27 | CLOSED: wiki-cited per-mode overrides for Impossible Odds, Phantom's Onslaught, Splinter Weapon, and Sword of Justice 9168 (`hit_count` 4 + `damage_coefficient:above_50`). Test `sword_of_justice_lands_wiki_hits_per_mode`. | `builder.rs` damage-alternative resolution, `balance_overrides` format |
 | E28 | `effect_coverage` counts a record executable by schema shape alone; Rushing Justice's flames `ProcEffect` records count executable but the flow sim has no impacts/interval consumer for them, an instrument overstatement | `effect_coverage` |
 
 Format gaps the builders named (each is a coverage block today): on-weapon-swap,

@@ -125,14 +125,33 @@ pub fn apply_skill_strike(
 /// alternatives"` for the gap line: those statuses apply nothing. Then
 /// single-hit strikes of a skill that publishes more impacts
 /// ([`unmodelled_impacts`]), as `"<skill>: <label> impacts"`.
-pub fn unresolved_alternative_names(skills: &[RotationSkill], db: &GameDb) -> Vec<String> {
+///
+/// A three-way Damage row that the override format fully sources
+/// (`damage_coefficient:above_50` and `hit_count`) is resolved, not a gap.
+/// Coefficient alone stays named: that path used to collapse to one hit.
+pub fn unresolved_alternative_names(
+    skills: &[RotationSkill],
+    db: &GameDb,
+    ctx: &BalanceContext,
+) -> Vec<String> {
     skills
         .iter()
         .filter_map(|s| db.skills.get(&s.skill_id))
         .flat_map(|skill| {
-            let alternatives = unresolved_alternatives(&skill.facts)
+            let strike_sourced = sourced_damage_coefficient_profile(ctx, skill.id).is_some()
+                && sourced_skill_u32(ctx, skill.id, "hit_count").is_some_and(|n| n > 0);
+            let mut alternatives = unresolved_alternatives(&skill.facts);
+            if strike_sourced {
+                let labels: Vec<&str> = damage_groups(&skill.facts)
+                    .into_iter()
+                    .filter(|(_, distinct, _)| distinct.len() > 2)
+                    .map(|(key, _, _)| key.0)
+                    .collect();
+                alternatives.retain(|label| !labels.contains(&label.as_str()));
+            }
+            let alternatives = alternatives
                 .into_iter()
-                .map(move |status| format!("{}: {status} alternatives", skill.name));
+                .map(|status| format!("{}: {status} alternatives", skill.name));
             let impacts = unmodelled_impacts(&skill.facts)
                 .into_iter()
                 .map(move |label| format!("{}: {label} impacts", skill.name));
@@ -1005,11 +1024,19 @@ fn extract_effects_for_context(
         // current rotation representation cannot switch coefficients as target
         // health changes, so emit the exact above-50 initial-target value once.
         // Never add the API's threshold rows as simultaneous strikes.
-        let hit_count = facts
-            .iter()
-            .find_map(|fact| match fact {
-                Fact::Damage { hit_count, .. } => *hit_count,
-                _ => None,
+        //
+        // `hit_count` is a first-class override field. Three-way Damage
+        // rows are dropped by [`select_alternatives`], so reading only the
+        // leftover facts then `unwrap_or(1)` would silently land one hit
+        // (Sword of Justice is 4). Override first, then a surviving fact,
+        // then 1 for the one-hit skills that only source a coefficient.
+        let hit_count = sourced_skill_u32(ctx, skill_id, "hit_count")
+            .filter(|n| *n > 0)
+            .or_else(|| {
+                facts.iter().find_map(|fact| match fact {
+                    Fact::Damage { hit_count, .. } => *hit_count,
+                    _ => None,
+                })
             })
             .unwrap_or(1);
         effects.push(SkillEffect::StrikeDamage {
@@ -1969,6 +1996,13 @@ mod tests {
         assert_eq!(sourced_skill_u32(&pve, 13097, "activation_ms"), Some(750));
         assert_eq!(sourced_skill_u32(&pvp, 13097, "activation_ms"), Some(750));
         assert_eq!(sourced_skill_u32(&wvw, 13097, "activation_ms"), Some(750));
+        assert_eq!(sourced_skill_u32(&pve, 9168, "hit_count"), Some(4));
+        assert_eq!(sourced_skill_u32(&pvp, 9168, "hit_count"), Some(4));
+        assert_eq!(sourced_skill_u32(&wvw, 9168, "hit_count"), Some(4));
+        assert_eq!(
+            sourced_skill_value(&pve, 9168, "damage_coefficient:above_50"),
+            Some(0.8)
+        );
     }
 
     #[test]
@@ -2812,7 +2846,7 @@ mod fact_selection_tests {
         let ctx = BalanceContext::new(GameMode::PvE);
         let skills = build_rotation_skills_for_context(&[14375, 12468], &db, &ctx);
         assert_eq!(
-            unresolved_alternative_names(&skills, &db),
+            unresolved_alternative_names(&skills, &db, &ctx),
             vec!["Arcing Slice: Fury alternatives".to_string()]
         );
     }
@@ -3122,19 +3156,54 @@ mod fact_selection_tests {
         assert!((strike(&bar_skill(&db, 76975, GameMode::PvP, &[])) - 0.5).abs() < 1e-9);
     }
 
-    /// Wiki Sword of Justice hits 4 times per cast at a per-strike
-    /// coefficient (0.8 PvE / 0.72 PvP / 0.45 WvW,
-    /// `https://wiki.guildwars2.com/wiki/Sword_of_Justice`), but the override
-    /// format has no field for a strike's hit count -- only
-    /// `damage_coefficient:*`, which lands a single strike. Sourcing the
-    /// coefficient alone would silently drop the summon from 4 hits to 1, so
-    /// this skill is left abstaining (0 damage) until the format grows a
-    /// hit-count field; documented here rather than "fixed" wrong.
+    /// Wiki Sword of Justice: 4 hits per cast at 0.8 PvE / 0.45 WvW / 0.72
+    /// PvP (`https://wiki.guildwars2.com/wiki/Sword_of_Justice`). The
+    /// override `hit_count` field lands the multiplicity; a
+    /// `damage_coefficient:*` row alone would collapse to one hit after
+    /// [`select_alternatives`] drops the three-way Damage rows.
+    /// `select_alternatives` still returns None on the raw three-value
+    /// group (see [`damage_rows_of_one_strike_are_alternatives`]).
     #[test]
-    fn sword_of_justice_still_abstains_hit_count_not_expressible() {
+    fn sword_of_justice_lands_wiki_hits_per_mode() {
         let db = db_with(&[SWORD_OF_JUSTICE]);
-        assert_eq!(strike(&bar_skill(&db, 9168, GameMode::PvE, &[])), 0.0);
-        let facts = &db.skills[&9168].facts;
-        assert_eq!(unresolved_alternatives(facts), vec!["Damage".to_string()]);
+        for (mode, coeff) in [
+            (GameMode::PvE, 0.8),
+            (GameMode::WvW, 0.45),
+            (GameMode::PvP, 0.72),
+        ] {
+            let skill = bar_skill(&db, 9168, mode.clone(), &[]);
+            let hits: Vec<(u32, f64)> = skill
+                .effects
+                .iter()
+                .filter_map(|e| match e {
+                    SkillEffect::StrikeDamage {
+                        hit_count,
+                        dmg_multiplier,
+                    } => Some((*hit_count, *dmg_multiplier)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(hits, vec![(4, coeff)], "{mode:?}");
+            assert!(
+                (strike(&skill) - 4.0 * coeff).abs() < 1e-9,
+                "{mode:?} total {} is not 4 x {coeff}",
+                strike(&skill)
+            );
+            let damage_gaps: Vec<String> = unresolved_alternative_names(
+                std::slice::from_ref(&skill),
+                &db,
+                &BalanceContext::new(mode),
+            )
+            .into_iter()
+            .filter(|n| n.contains("Damage"))
+            .collect();
+            assert_eq!(damage_gaps, Vec::<String>::new(), "{mode:?}");
+        }
+        // Raw three-value facts still cannot be told apart; the consume
+        // path is what lands the strike, not a coeff-only pick.
+        assert_eq!(
+            unresolved_alternatives(&db.skills[&9168].facts),
+            vec!["Damage".to_string()]
+        );
     }
 }

@@ -4,6 +4,7 @@ All notable changes to GW2 Build Optimizer are documented here.
 
 ## 1.14.48
 
+- Engine gap E27 closed: Sword of Justice 9168 sources wiki 4 hits via override `hit_count` (PvE 0.8 / WvW 0.45 / PvP 0.72 per hit). `select_alternatives` still abstains on three-value Damage rows; the consume path reads `hit_count` before leftover facts and `unwrap_or(1)`, so a coefficient-only override cannot silently land one hit. Test `sword_of_justice_lands_wiki_hits_per_mode` (was `sword_of_justice_still_abstains_hit_count_not_expressible`). Override entity count 48 -> 51.
 - Internal: every raw `ui.get_window_draw_list()` call site under `crates/addon/src/ui` now goes through the counted `crate::ui::window_draw_list` guard, closing the gap that let the mini radio nesting panic happen in the first place. `mini_radio::draw_list_scan` now scans all 43 files under `crates/addon/src/ui` and `crates/addon/src/radio` (was 4) and gained a second check that fails the build on any raw call outside the guard's own definition. No player-visible change.
 
 ## 1.14.47
