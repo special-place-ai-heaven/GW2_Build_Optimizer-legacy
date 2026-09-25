@@ -115,11 +115,31 @@ fn nothing_outside_fidelity_reads_a_fight_profile() {
 
 /// (profession, spec, mode, observable, max p90 |error|, reason), keyed like
 /// `compare::bands`: spec is the log's elite spec or core profession name.
-/// Ships empty: the baseline run is recorded in the sprint doc first, then
-/// rows are seeded for `skill_share`, `condi_fraction`, boon uptimes and
-/// `cleanse_per_20s` only. WvW DPS stays out until the fight profile is
-/// consumed.
-const EXPECTED_FIDELITY: &[(&str, &str, &str, &str, f64, &str)] = &[];
+///
+/// Seeded from sprint 008 Gate 3b run-3 median |error| on fixture specs that
+/// are n=1 bands (so p90 = that one |error|). Not a fresh cache p90 — do not
+/// replace these with numbers nobody measured. `skill_share` / boon uptimes /
+/// WvW DPS stay out: the documented ranges are too wide to ratchet and the
+/// engine moved since run 3. `kent_fidelity_fixture_budgets_ratchet` fails
+/// if this table is emptied (vacuous well-formed / ignored compare).
+const EXPECTED_FIDELITY: &[(&str, &str, &str, &str, f64, &str)] = &[
+    (
+        "Necromancer",
+        "Reaper",
+        "PvE",
+        "condi_fraction",
+        0.003,
+        "sprint 008 Gate 3b run-3 median |error|; golem fixture Reaper is n=1 so p90=median",
+    ),
+    (
+        "Engineer",
+        "Mechanist",
+        "WvW",
+        "condi_fraction",
+        0.005,
+        "sprint 008 Gate 3b run-3 median |error|; aBtd Joe Wvw Mechanist is n=1 so p90=median",
+    ),
+];
 
 /// Ratchet slack: a budget more than this above the measured p90 is stale.
 const STALE_BY: f64 = 0.05;
@@ -138,6 +158,10 @@ const PROFESSIONS: [&str; 9] = [
 
 #[test]
 fn the_fidelity_budget_table_is_well_formed() {
+    assert!(
+        !EXPECTED_FIDELITY.is_empty(),
+        "EXPECTED_FIDELITY must not ship empty — budget and well-formed tests are otherwise vacuously green"
+    );
     let modes: Vec<String> = fixtures()
         .iter()
         .map(|(_, l, _)| format!("{:?}", l.mode()))
@@ -202,6 +226,53 @@ fn golem_fixture_burst_observables_are_facts_of_the_file() {
     close(o.burst_overlap_share, 1.0);
     close(o.condition_share, 0.0029288346379509602);
     close(o.condition_ramp_s, 11.0);
+    // dpsAll[0] condiDamage / damage; distinct from actor condition_share.
+    close(o.condi_fraction, 11_617.0 / 4_030_026.0);
+}
+
+/// Fail-closed: emptying `EXPECTED_FIDELITY` is a CI lie. Every budgeted
+/// spec+mode is a committed fixture, and log-side `condi_fraction` for those
+/// rows is a fact of the file (not a p90 we did not measure).
+#[test]
+fn kent_fidelity_fixture_budgets_ratchet() {
+    assert!(
+        !EXPECTED_FIDELITY.is_empty(),
+        "EXPECTED_FIDELITY must stay seeded; empty table makes compare/budget tests vacuously green"
+    );
+    let logs = fixtures();
+    for &(_profession, spec, mode, _observable, _budget, _reason) in EXPECTED_FIDELITY {
+        let present = logs.iter().any(|(_, log, _)| {
+            format!("{:?}", log.mode()) == mode && log.squad().any(|p| p.profession == spec)
+        });
+        assert!(
+            present,
+            "EXPECTED_FIDELITY names {spec} · {mode}, which no fixture squad has"
+        );
+    }
+
+    let db = GameDb::empty_for_tests();
+    let close = |a: f64, b: f64| {
+        assert!((a - b).abs() < 1e-9, "{a} != {b}");
+    };
+    let observe = |file: &str, name: &str| {
+        let (_, log, _) = logs
+            .iter()
+            .find(|(n, _, _)| n == file)
+            .unwrap_or_else(|| panic!("{file}"));
+        let p = log
+            .squad()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| panic!("{file} has no {name}"));
+        compare::observe(log, p, &db)
+    };
+    close(
+        observe("1f33-20260720-163045_golem.json", "Aisxka").condi_fraction,
+        11_617.0 / 4_030_026.0,
+    );
+    close(
+        observe("aBtd-20260604-211449_wvw.json", "Joe Wvw").condi_fraction,
+        2_495.0 / 39_478.0,
+    );
 }
 
 fn cached_db() -> GameDb {
