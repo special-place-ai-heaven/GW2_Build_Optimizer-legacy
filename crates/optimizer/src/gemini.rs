@@ -51,6 +51,10 @@ pub enum GeminiError {
     Unavailable(String),
 }
 
+fn http_error(err: impl std::error::Error) -> GeminiError {
+    GeminiError::Http(gw2_core::format_error_chain(&err))
+}
+
 pub struct GeminiClient {
     api_key: String,
     model: String,
@@ -763,7 +767,10 @@ fn read_gemini_stream<R: std::io::Read>(reader: R) -> Result<Content, GeminiErro
         return Err(body_cap_exceeded());
     }
     if let Some(e) = read_error {
-        return Err(GeminiError::Http(format!("Gemini stream read failed: {e}")));
+        return Err(GeminiError::Http(format!(
+            "Gemini stream read failed: {}",
+            gw2_core::format_error_chain(&e)
+        )));
     }
     // Billed whether or not the body held anything usable.
     crate::llm::usage::record(usage);
@@ -985,10 +992,7 @@ impl GeminiClient {
 
     /// Validate the API key using the models list endpoint (no quota consumed).
     pub fn validate_key(&self) -> Result<(), GeminiError> {
-        let resp = self
-            .models_request()
-            .send()
-            .map_err(|e| GeminiError::Http(e.to_string()))?;
+        let resp = self.models_request().send().map_err(http_error)?;
 
         let status = resp.status().as_u16();
         match classify_status(status) {
@@ -1007,10 +1011,7 @@ impl GeminiClient {
     /// List models that support content generation.
     /// Calls `GET /v1beta/models` and filters by `supportedGenerationMethods`.
     pub fn list_models(&self) -> Result<Vec<(String, String)>, GeminiError> {
-        let resp = self
-            .models_request()
-            .send()
-            .map_err(|e| GeminiError::Http(e.to_string()))?;
+        let resp = self.models_request().send().map_err(http_error)?;
 
         let status = resp.status().as_u16();
         match classify_status(status) {
@@ -1225,7 +1226,7 @@ impl GeminiClient {
             let resp = match self.stream_request(request).send() {
                 Ok(r) => r,
                 Err(e) => {
-                    let failure = GeminiError::Http(e.to_string());
+                    let failure = http_error(e);
                     if attempt == MAX_RETRIES - 1 {
                         return Err(failure);
                     }

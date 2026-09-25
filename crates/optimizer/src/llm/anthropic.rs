@@ -22,7 +22,7 @@ use super::openai_compat::{
 };
 use super::rate::{persist_usage, PersistedUsage, RateTracker};
 use super::sse::{slot_index_rejected, MAX_TOOL_CALL_INDEX};
-use super::{KeyValidationResult, LlmClient, LlmError, ToolDefinition};
+use super::{http_error, KeyValidationResult, LlmClient, LlmError, ToolDefinition};
 
 /// Anthropic's conservative default requests-per-minute ceiling.
 const RPM_LIMIT: u32 = 50;
@@ -202,7 +202,7 @@ fn read_anthropic_stream<R: std::io::Read>(
         if is_cancelled() {
             return Err(LlmError::Unavailable(CANCELLED.to_string()));
         }
-        let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
+        let line = line.map_err(http_error)?;
         let line = line.trim();
         // `event:` name lines, comments and blanks carry no payload of their
         // own. Anthropic always frames its JSON with `data:`, unlike
@@ -459,9 +459,9 @@ impl AnthropicClient {
                 Ok(r) => r,
                 Err(e) => {
                     if attempt == MAX_RETRIES - 1 {
-                        return Err(LlmError::Http(e.to_string()));
+                        return Err(http_error(e));
                     }
-                    last_error = Some(LlmError::Http(e.to_string()));
+                    last_error = Some(http_error(e));
                     continue;
                 }
             };
@@ -674,10 +674,7 @@ impl LlmClient for AnthropicClient {
     ///
     /// Same path as [`Self::list_models`]; does not spend a Messages token.
     fn validate_key(&self) -> Result<(), LlmError> {
-        let resp = self
-            .models_request()
-            .send()
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+        let resp = self.models_request().send().map_err(http_error)?;
 
         match resp.status().as_u16() {
             200 => Ok(()),
@@ -798,10 +795,7 @@ impl LlmClient for AnthropicClient {
     }
 
     fn list_models(&self) -> Result<Vec<super::ModelInfo>, LlmError> {
-        let resp = self
-            .models_request()
-            .send()
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+        let resp = self.models_request().send().map_err(http_error)?;
 
         match resp.status().as_u16() {
             200 => {}

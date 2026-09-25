@@ -12,7 +12,7 @@
 
 use std::io::Read;
 
-use super::LlmError;
+use super::{http_error, LlmError};
 
 /// Ceiling for one streamed completion body. `MAX_COMPLETION_TOKENS` is
 /// 32_768; even at a pathological 20 bytes per token plus SSE framing that
@@ -68,7 +68,7 @@ pub(crate) fn json_capped<T: serde::de::DeserializeOwned>(
     reader
         .take(MAX_LLM_METADATA_BODY)
         .read_to_end(&mut buf)
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+        .map_err(http_error)?;
     serde_json::from_slice(&buf).map_err(|e| LlmError::Parse(e.to_string()))
 }
 

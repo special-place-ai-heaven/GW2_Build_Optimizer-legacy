@@ -15,7 +15,7 @@ use super::body::read_body_capped;
 use super::cancel::{sleep_observing, CANCELLED};
 use super::rate::RateTracker;
 use super::sse::{read_stream, StreamedMessage};
-use super::{LlmError, ToolDefinition};
+use super::{http_error, LlmError, ToolDefinition};
 use serde_json::Value;
 
 /// Client-level ceiling. Streams flow continuously (OpenRouter interleaves
@@ -263,7 +263,7 @@ pub(crate) fn http_client() -> Result<reqwest::blocking::Client, LlmError> {
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .build()
-        .map_err(|e| LlmError::Http(e.to_string()))
+        .map_err(http_error)
 }
 
 /// Holds the rate slot taken by `check_and_reserve` and gives it back on drop
@@ -645,15 +645,16 @@ pub(crate) fn send_chat(
             // chat loop runs up to eight of them.
             Err(e) if e.is_timeout() => {
                 return Err(LlmError::Http(format!(
-                    "{e} {DEADLINE_MARKER} {}s)",
+                    "{} {DEADLINE_MARKER} {}s)",
+                    gw2_core::format_error_chain(&e),
                     core.request_timeout.as_secs()
                 )));
             }
             Err(e) => {
                 if attempt == core.max_retries - 1 {
-                    return Err(LlmError::Http(e.to_string()));
+                    return Err(http_error(e));
                 }
-                last_error = Some(LlmError::Http(e.to_string()));
+                last_error = Some(http_error(e));
                 continue;
             }
         };
