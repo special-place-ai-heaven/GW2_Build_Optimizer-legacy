@@ -2919,9 +2919,10 @@ fn place_flow_record(
     // The flow sim keeps the player's boons, so a self-boon gate plays.
     // An `Interval` with no `while` state has no other clock here: it floors
     // the page ICD. Every other gate needs state this sim does not keep.
-    // ponytail: that floor is how WvW trait:2021:1 plays at 15 s instead of
-    // the page's 3 s. Drop the gate when shroud time matches logs (E18);
-    // do not grow a second clock.
+    // ponytail: that floor is how WvW trait:2021:1 plays at 20 s instead of
+    // the page's 3 s. 15 s was calibrated to pre-E18 under-shroud; E22b
+    // recalibrates the ceiling now that shroud matches E18 policy. Do not
+    // grow a second clock.
     let mut self_boons = Vec::new();
     let mut interval_floor_ms = 0u32;
     for gate in &effect.gates {
@@ -4317,8 +4318,8 @@ mod tests {
         assert!(flow_record(&passive, true, None, &none).is_none());
     }
 
-    /// E22: WvW Reaper's Onslaught plays as a gated periodic at the 15 s
-    /// ceiling. PvE stays an ungated in-form pulse.
+    /// E22 / E22b: WvW Reaper's Onslaught plays as a gated periodic at the
+    /// 20 s ceiling. PvE stays an ungated in-form pulse.
     #[test]
     fn kent_e22_wvw_onslaught_places_as_gated_periodic() {
         use crate::data::normalized_effects::effects;
@@ -4336,7 +4337,7 @@ mod tests {
         match flow_record(&record("WvW", "trait:2021:1"), true, None, &none) {
             Some(Ok(FlowRecord::Triggered(t))) => {
                 assert!(matches!(t.on, ProcTrigger::Periodic));
-                assert_eq!(t.icd_ms, 15_000);
+                assert_eq!(t.icd_ms, 20_000);
                 assert_eq!(t.in_form, Some(true));
                 assert_eq!(t.self_boons, vec![("Quickness".to_string(), false)]);
                 assert!(matches!(

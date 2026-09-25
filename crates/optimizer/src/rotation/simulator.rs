@@ -5521,14 +5521,15 @@ mod tests {
         assert!(casts(&sim, 29_421) > 40);
     }
 
-    /// E22. WvW Reaper's Shroud (pool 69% of 20_000 health, 5% drain, 10 s
-    /// recharge) plus the API shape of "Chilled to the Bone!" (Quickness 10 s
-    /// / 30 s) and Grasping Darkness (3 s / 25 s). An ungated 3 s Onslaught
-    /// pulse duration-stacks those grants to the 30 s cap. The product
-    /// Quickness oracle remains ≤0.60; E22b restores that via the Interval
-    /// sim ceiling. This fixture's gated assert is only an interim ceiling
-    /// until then, not a new log band. Lucian Lord's log is not in the repo;
-    /// this row is the stand-in that reproduced 0.988 against his 0.997.
+    /// E22 / E22b. WvW Reaper's Shroud (pool 69% of 20_000 health, 5% drain,
+    /// 10 s recharge) plus the API shape of "Chilled to the Bone!" (Quickness
+    /// 10 s / 30 s) and Grasping Darkness (3 s / 25 s). An ungated 3 s
+    /// Onslaught pulse duration-stacks those grants to the 30 s cap. The WvW
+    /// Interval is a sim ceiling, not a page fact: 15 s was calibrated to
+    /// pre-E18 under-shroud; E22b recalibrates it to 20 s now that shroud
+    /// matches E18 policy, so gated Quickness stays in the log band 0.2-0.6.
+    /// Lucian Lord's log is not in the repo; this row is the stand-in that
+    /// reproduced 0.988 against his 0.997.
     #[test]
     fn kent_e22_wvw_onslaught_quickness_stays_in_log_band() {
         let cap = 13_800.0;
@@ -5713,7 +5714,7 @@ mod tests {
             }
         }
         assert!(absent, "WvW Onslaught skips a pulse while Quickness is up");
-        assert_eq!(floor, 15_000, "WvW sim ceiling");
+        assert_eq!(floor, 20_000, "WvW sim ceiling");
         let pve = crate::data::normalized_effects::effects()
             .effects_for_mode("PvE")
             .iter()
@@ -5755,11 +5756,9 @@ mod tests {
             shroud_dwell.contains(&shroud),
             "shroud fraction moved: {shroud}"
         );
-        // Interim only. The product oracle remains ≤0.60; E22b restores it
-        // via the Interval sim ceiling. 0.65 is not the log band.
         assert!(
-            (0.20..0.65).contains(&after),
-            "Quickness {after} outside the interim fixture band; product oracle remains ≤0.60, E22b restores via Interval sim ceiling"
+            (0.20..0.60).contains(&after),
+            "Quickness {after} outside the log band"
         );
         let (_, skills_only) = uptime(run_form_sim(&skills, 60_000, form));
         assert!(

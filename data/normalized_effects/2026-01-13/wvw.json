@@ -2019,7 +2019,7 @@
         "kind": "Unknown"
       },
       "evidence_level": "Factual",
-      "source": "https://wiki.guildwars2.com/wiki/Reaper%27s_Onslaught (read 2026-09-25: quickness 3 s every 3 s in shroud, no mode split; internal_cooldown and base_duration stay those page numbers. WvW flow ceiling, not a page fact: SelfBoonAbsent so a pulse does not duration-stack onto Quickness already running, and an Interval gate of 15 s. Without them the 3 s pulse banks skill Quickness to the 30 s cap — Lucian-shaped 60 s row 0.988 vs logs 0.2-0.6, after 0.583. Drop the Interval gate once shroud time matches logs (E18))",
+      "source": "https://wiki.guildwars2.com/wiki/Reaper%27s_Onslaught (read 2026-09-25: quickness 3 s every 3 s in shroud, no mode split; internal_cooldown and base_duration stay those page numbers. WvW flow ceiling, not a page fact: SelfBoonAbsent so a pulse does not duration-stack onto Quickness already running, and an Interval gate. 15 s was calibrated to pre-E18 under-shroud; E22b recalibrates that ceiling to 20 s now that shroud matches E18 policy. Without the gate the 3 s pulse banks skill Quickness to the 30 s cap)",
       "status_operation": {
         "operation_type": "AppliesBoon",
         "target_side": "self",
@@ -2041,7 +2041,7 @@
         },
         {
           "Interval": {
-            "every_ms": 15000
+            "every_ms": 20000
           }
         }
       ]
