@@ -1,3 +1,6 @@
+//! GW2 API use on this screen is allowlisted I/O: API-key validate and
+//! `download_game_and_names`. Plated combat and flow are not measured here.
+
 use nexus::imgui::Ui;
 
 use crate::state::{self, AddonState, DownloadState, KeyStatus, Screen, SetupStep};

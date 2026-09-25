@@ -608,7 +608,39 @@ pub(super) fn perf_to_combat_metrics(
     }
 }
 
-/// Compute 3-tier combat metrics (Solo, Party, Full Squad) from stats + modifiers.
+/// Stats pane for one plated build: [`super::optimization::measure_validated`],
+/// which wraps [`gw2_optimizer::engine::measure_plated`]. Optimizer suggestions
+/// read this so the tab and Stats are not two formulas.
+pub(super) fn plated_display(
+    validated: &gw2_optimizer::validation::ValidatedBuild,
+    db: &gw2_optimizer::gamedb::GameDb,
+    profession: &str,
+    weights: &gw2_optimizer::scoring::OptimizationWeights,
+    ctx: &gw2_optimizer::balance::BalanceContext,
+    scenario: &gw2_optimizer::scenario::ScenarioSpec,
+) -> crate::ui::comparison::BuildSuggestion {
+    let mut suggestion = crate::ui::comparison::BuildSuggestion::default();
+    super::optimization::measure_validated(
+        &mut suggestion,
+        validated,
+        db,
+        profession,
+        weights,
+        ctx,
+        scenario,
+    );
+    suggestion
+}
+
+/// Closed-form Solo / Party / Squad metrics for a stat sheet that is not a plate.
+///
+/// The formula is [`gw2_optimizer::engine::combat_tiers`] (the combat half of
+/// [`gw2_optimizer::engine::measure_plated`]). A plated build uses
+/// [`plated_display`] so flow is included.
+///
+/// ponytail: equipped-character resolve and the save preview still pass their
+/// own sheet in. Upgrade path is to price that sheet with
+/// `calculate_validated_stats` when `resolution.rs` is next touched.
 pub(super) fn compute_3tier_combat(
     stats: &gw2_optimizer::stats::StatBlock,
     derived: &gw2_optimizer::stats::DerivedStats,
@@ -620,26 +652,12 @@ pub(super) fn compute_3tier_combat(
     Option<gw2_core::types::CombatMetrics>,
     Option<gw2_core::types::CombatMetrics>,
 ) {
-    // The referee's profiles (`referee::evaluate_inner`), so this line and
-    // the optimizer's tabs read one combat model.
-    let profiles = gw2_optimizer::combat::buff_profiles_for_profession(profession, balance_ctx);
-    let cw = gw2_optimizer::combat::condition_weights_for_profession(profession, balance_ctx);
-    let compute = |profile: &gw2_optimizer::combat::BuffProfile| -> gw2_core::types::CombatMetrics {
-        let perf = gw2_optimizer::combat::calculate_combat_performance(
-            stats,
-            derived,
-            modifiers,
-            profile,
-            &cw,
-            profession,
-            balance_ctx,
-        );
-        perf_to_combat_metrics(&perf)
-    };
+    let [solo, party, squad] =
+        gw2_optimizer::engine::combat_tiers(stats, derived, modifiers, profession, balance_ctx);
     (
-        profiles.first().map(&compute),
-        profiles.get(1).map(&compute),
-        profiles.get(2).map(&compute),
+        Some(perf_to_combat_metrics(&solo)),
+        Some(perf_to_combat_metrics(&party)),
+        Some(perf_to_combat_metrics(&squad)),
     )
 }
 
