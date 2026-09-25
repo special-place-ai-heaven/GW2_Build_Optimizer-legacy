@@ -5503,6 +5503,248 @@ mod tests {
         assert!(casts(&sim, 29_442) > 20);
         assert!(casts(&sim, 29_421) > 40);
     }
+
+    /// E22. WvW Reaper's Shroud (pool 69% of 20_000 health, 5% drain, 10 s
+    /// recharge) plus the API shape of "Chilled to the Bone!" (Quickness 10 s
+    /// / 30 s) and Grasping Darkness (3 s / 25 s). An ungated 3 s Onslaught
+    /// pulse duration-stacks those grants to the 30 s cap. The shipped WvW
+    /// record (`trait:2021:1`) must land self Quickness in the log band
+    /// 0.2–0.6. Lucian Lord's log is not in the repo; this row is the
+    /// stand-in that reproduced 0.988 against his 0.997.
+    #[test]
+    fn kent_e22_wvw_onslaught_quickness_stays_in_log_band() {
+        let cap = 13_800.0;
+        let mut form = FormSpec {
+            name: "Reaper's Shroud".into(),
+            entry_skill_id: 30_792,
+            pool_cap: cap,
+            initial_pool: cap,
+            entry_floor: 0.10 * cap,
+            drain_per_second: 0.05 * cap,
+            recharge_ms: 10_000,
+            gains_in_form: true,
+            exit_keep: 1.0,
+            life_force: true,
+            ..Default::default()
+        };
+        // Weapon life force, fractions of the pool (API Percent "Life Force").
+        form.skill_gains = vec![
+            (29_705, 0.02 * cap, 0.0),
+            (30_163, 0.0, 0.0),
+            (29_740, 0.10 * cap, 0.0),
+            (10_528, 0.12 * cap, 0.0),
+            (55_050, 0.11 * cap, 0.0),
+            (30_278, 0.015 * cap, 0.0),
+        ];
+        let shout = bar_skill(
+            30_105,
+            "\"Chilled to the Bone!\"",
+            SkillSlot::Elite,
+            0,
+            1_250,
+            30_000,
+            vec![
+                SkillEffect::StrikeDamage {
+                    hit_count: 1,
+                    dmg_multiplier: 3.0,
+                },
+                SkillEffect::ApplyBuff {
+                    buff: "Quickness".into(),
+                    stacks: 1,
+                    duration_ms: 10_000,
+                },
+            ],
+        );
+        let skills = vec![
+            bar_skill(
+                29_705,
+                "Dusk Strike",
+                SkillSlot::Weapon1,
+                1,
+                500,
+                0,
+                strike(1, 0.8),
+            ),
+            bar_skill(
+                30_163,
+                "Gravedigger",
+                SkillSlot::Weapon2,
+                1,
+                750,
+                8_000,
+                strike(1, 2.4),
+            ),
+            bar_skill(
+                29_740,
+                "Grasping Darkness",
+                SkillSlot::Weapon5,
+                1,
+                750,
+                25_000,
+                {
+                    let mut e = strike(1, 1.2);
+                    e.push(SkillEffect::ApplyBuff {
+                        buff: "Quickness".into(),
+                        stacks: 1,
+                        duration_ms: 3_000,
+                    });
+                    e
+                },
+            ),
+            bar_skill(
+                10_528,
+                "Ghastly Claws",
+                SkillSlot::Weapon2,
+                2,
+                500,
+                6_000,
+                strike(8, 0.2),
+            ),
+            bar_skill(
+                55_050,
+                "Soul Grasp",
+                SkillSlot::Weapon4,
+                2,
+                500,
+                3_000,
+                strike(1, 0.6),
+            ),
+            bar_skill(
+                29_442,
+                "Life Rend",
+                SkillSlot::Weapon1,
+                crate::rotation::SHROUD_SET,
+                500,
+                0,
+                strike(1, 1.4),
+            ),
+            bar_skill(
+                30_278,
+                "Life Reap",
+                SkillSlot::Weapon1,
+                crate::rotation::SHROUD_SET,
+                500,
+                0,
+                strike(1, 1.6),
+            ),
+            bar_skill(
+                30_504,
+                "Soul Spiral",
+                SkillSlot::Weapon4,
+                crate::rotation::SHROUD_SET,
+                500,
+                30_000,
+                strike(12, 0.7),
+            ),
+            bar_skill(
+                30_557,
+                "Executioner's Scythe",
+                SkillSlot::Weapon5,
+                crate::rotation::SHROUD_SET,
+                1_250,
+                30_000,
+                strike(1, 4.0),
+            ),
+            shout,
+        ];
+        let uptime = |sim: SimState| -> (f64, f64) {
+            let shroud = sim.form_active_ms as f64 / 60_000.0;
+            let up = sim
+                .into_result()
+                .buff_uptime
+                .get("Quickness")
+                .copied()
+                .unwrap_or(0.0);
+            (shroud, up)
+        };
+        let record = crate::data::normalized_effects::effects()
+            .effects_for_mode("WvW")
+            .iter()
+            .find(|e| e.effect_id == "trait:2021:1")
+            .expect("WvW trait:2021:1");
+        let page_icd = match record.internal_cooldown.as_ref() {
+            Some(crate::data::quality::FactualValue::Resolved(seconds)) => {
+                (seconds * 1_000.0).round() as u32
+            }
+            _ => panic!("page ICD missing"),
+        };
+        let page_dur = match record
+            .status_operation
+            .as_ref()
+            .and_then(|op| op.base_duration_ms.as_ref())
+        {
+            Some(crate::data::quality::FactualValue::Resolved(ms)) => *ms,
+            _ => panic!("page duration missing"),
+        };
+        assert_eq!(page_icd, 3_000, "page interval stays 3 s");
+        assert_eq!(page_dur, 3_000, "page duration stays 3 s");
+        let mut floor = 0u32;
+        let mut absent = false;
+        for gate in &record.gates {
+            match gate {
+                crate::data::normalized_effects::Gate::SelfBoonAbsent { boon }
+                    if boon == "Quickness" =>
+                {
+                    absent = true
+                }
+                crate::data::normalized_effects::Gate::Interval {
+                    every_ms,
+                    while_state: None,
+                } => floor = *every_ms,
+                other => panic!("unexpected gate on trait:2021:1: {other:?}"),
+            }
+        }
+        assert!(absent, "WvW Onslaught skips a pulse while Quickness is up");
+        assert_eq!(floor, 15_000, "WvW sim ceiling");
+        let pve = crate::data::normalized_effects::effects()
+            .effects_for_mode("PvE")
+            .iter()
+            .find(|e| e.effect_id == "trait:2021:1")
+            .expect("PvE trait:2021:1");
+        assert!(pve.gates.is_empty(), "PvE Onslaught stays ungated");
+
+        let (shroud, before) = {
+            let mut pulsed = form.clone();
+            pulsed.periodic = vec![(page_icd, quickness(page_dur))];
+            uptime(run_form_sim(&skills, 60_000, pulsed))
+        };
+        assert!(
+            (0.40..0.60).contains(&shroud),
+            "shroud fraction moved: {shroud}"
+        );
+        assert!(
+            before > 0.95,
+            "ungated pulse should bank to ~0.99, was {before}"
+        );
+
+        let after_proc = TriggeredProc {
+            on: ProcTrigger::Periodic,
+            icd_ms: page_icd.max(floor),
+            in_form: Some(true),
+            weapon_set: 0,
+            self_boons: vec![("Quickness".into(), false)],
+            proc_: quickness(page_dur),
+        };
+        let (shroud, after) = uptime(run_sim(
+            &skills,
+            60_000,
+            Some(form.clone()),
+            vec![after_proc],
+        ));
+        assert!(
+            (0.40..0.60).contains(&shroud),
+            "shroud fraction moved: {shroud}"
+        );
+        assert!(
+            (0.20..0.60).contains(&after),
+            "Quickness {after} outside the log band"
+        );
+        let (_, skills_only) = uptime(run_form_sim(&skills, 60_000, form));
+        assert!(
+            after > skills_only,
+            "the trait stopped contributing: after {after} skills {skills_only}"
+        );
+    }
 }
 
 /// Per-condition damage factors (`SimParams::condition_type_mults`).
