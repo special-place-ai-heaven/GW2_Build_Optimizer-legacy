@@ -66,9 +66,19 @@ impl fmt::Display for DataQualityReason {
 
 /// Field of the coverage reason: the WvW timeline's unmodeled sources.
 pub const COVERAGE_FIELD: &str = "wvw_timeline.effects";
+/// PvE/PvP: coverage inventory (`active_normalized_effects`) was not run.
+/// Distinct from [`COVERAGE_FIELD`] so a skipped inventory is not read as
+/// a WvW coverage line (CONN-01-03).
+pub const INVENTORY_FIELD: &str = "coverage.inventory";
+/// Prepare-time records the flow sim could not host.
+pub const UNHOSTED_FIELD: &str = "coverage.unhosted";
+/// Description-fallback Barrier{1000} / Healing{1} (W151).
+pub const HEURISTIC_FIELD: &str = "coverage.heuristic";
 /// English prefix of the coverage explanation; the addon renders the same
 /// line through the `quality.coverage_line` locale key with the detail.
 pub const COVERAGE_PREFIX: &str = "Not simulated: ";
+/// Stable inventory-skip detail; `{mode}` is the scenario's own label.
+pub const INVENTORY_SKIP_PREFIX: &str = "coverage inventory not run for ";
 const COVERAGE_NAMED: usize = 3;
 
 /// Why a source sits on the coverage line (specs/007-trait-triggers, US4).
@@ -166,12 +176,81 @@ pub fn coverage_reason(
     unmodeled: &[String],
 ) -> Option<DataQualityReason> {
     let detail = coverage_detail(unmodeled)?;
-    Some(DataQualityReason {
-        field: COVERAGE_FIELD.into(),
+    Some(reason_on(
+        COVERAGE_FIELD,
+        profession,
+        mode,
+        format!("{COVERAGE_PREFIX}{detail}"),
+    ))
+}
+
+/// PvE/PvP honesty: inventory skipped and/or unhosted flow records, plus
+/// heuristic Barrier/Healing stamps. `wvw_unmodeled = Some` means the
+/// timeline ran inventory — emit the existing WvW line, never the skip.
+/// Bind skip to `inventory_skipped` (mode records existed) so a PvE kit
+/// with nothing to inventory stays Verified.
+pub fn mode_honesty_reasons(
+    profession: &str,
+    mode: &gw2_core::types::GameMode,
+    wvw_unmodeled: Option<&[String]>,
+    unhosted: &[String],
+    inventory_skipped: bool,
+    heuristic: &[String],
+) -> Vec<DataQualityReason> {
+    let mut out = Vec::new();
+    match wvw_unmodeled {
+        Some(names) => out.extend(coverage_reason(profession, mode, names)),
+        None => {
+            if inventory_skipped {
+                out.push(reason_on(
+                    INVENTORY_FIELD,
+                    profession,
+                    mode,
+                    format!("{COVERAGE_PREFIX}{INVENTORY_SKIP_PREFIX}{}", mode.label()),
+                ));
+            }
+            if let Some(detail) = coverage_detail(unhosted) {
+                out.push(reason_on(
+                    UNHOSTED_FIELD,
+                    profession,
+                    mode,
+                    format!("{COVERAGE_PREFIX}{detail}"),
+                ));
+            }
+        }
+    }
+    if let Some(detail) = coverage_detail(heuristic) {
+        out.push(reason_on(
+            HEURISTIC_FIELD,
+            profession,
+            mode,
+            format!("{COVERAGE_PREFIX}{detail}"),
+        ));
+    }
+    out
+}
+
+fn reason_on(
+    field: &str,
+    profession: &str,
+    mode: &gw2_core::types::GameMode,
+    explanation: String,
+) -> DataQualityReason {
+    DataQualityReason {
+        field: field.into(),
         entity: profession.into(),
         modes: vec![mode.label().to_string()],
-        explanation: format!("{COVERAGE_PREFIX}{detail}"),
-    })
+        explanation,
+    }
+}
+
+/// `UnresolvedValue` + detail, the coverage-line form for a heuristic coeff.
+pub fn heuristic_entry(name: &str, kind: &str) -> CoverageEntry {
+    CoverageEntry {
+        name: name.into(),
+        class: ReasonClass::UnresolvedValue,
+        detail: Some(format!("heuristic {kind}")),
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +329,78 @@ mod coverage_tests {
             "Not simulated: Superior Sigil of Fire (on-crit)"
         );
         assert!(coverage_reason("Necromancer", &gw2_core::types::GameMode::WvW, &[]).is_none());
+    }
+
+    #[test]
+    fn mode_honesty_binds_skip_to_due_inventory_not_every_pve_run() {
+        let pve = gw2_core::types::GameMode::PvE;
+        assert!(
+            mode_honesty_reasons("Necromancer", &pve, None, &[], false, &[]).is_empty(),
+            "empty unhosted and inventory not due must not blanket-Provisional PvE"
+        );
+        let skipped = mode_honesty_reasons("Necromancer", &pve, None, &[], true, &[]);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].field, INVENTORY_FIELD);
+        assert_eq!(skipped[0].modes, vec!["PvE".to_string()]);
+        assert_eq!(
+            skipped[0].explanation,
+            "Not simulated: coverage inventory not run for PvE"
+        );
+        let unhosted = mode_honesty_reasons(
+            "Necromancer",
+            &pve,
+            None,
+            &["Path of Corruption OnHit (flow sim: gated)".into()],
+            false,
+            &[],
+        );
+        assert_eq!(unhosted[0].field, UNHOSTED_FIELD);
+        let wvw = mode_honesty_reasons(
+            "Necromancer",
+            &gw2_core::types::GameMode::WvW,
+            Some(&names(1)),
+            &[],
+            true,
+            &[],
+        );
+        assert_eq!(wvw.len(), 1);
+        assert_eq!(wvw[0].field, COVERAGE_FIELD);
+        assert!(
+            !wvw[0].explanation.contains(INVENTORY_SKIP_PREFIX),
+            "WvW inventory ran: skip must not impersonate the coverage line"
+        );
+        let wvw_unhosted = mode_honesty_reasons(
+            "Necromancer",
+            &gw2_core::types::GameMode::WvW,
+            Some(&[]),
+            &["Path of Corruption OnHit (flow sim: gated)".into()],
+            true,
+            &[],
+        );
+        assert!(
+            wvw_unhosted.is_empty(),
+            "unhosted already rides the WvW resource line: {wvw_unhosted:?}"
+        );
+    }
+
+    #[test]
+    fn heuristic_entry_uses_unresolved_value_plus_detail() {
+        let entry = heuristic_entry("Troll Unguent", "Barrier");
+        assert_eq!(entry.class, ReasonClass::UnresolvedValue);
+        assert_eq!(entry.rendered(), "Troll Unguent (heuristic Barrier)");
+        let reasons = mode_honesty_reasons(
+            "Ranger",
+            &gw2_core::types::GameMode::PvE,
+            None,
+            &[],
+            false,
+            &[entry.rendered()],
+        );
+        assert_eq!(reasons[0].field, HEURISTIC_FIELD);
+        assert_eq!(
+            reasons[0].explanation,
+            "Not simulated: Troll Unguent (heuristic Barrier)"
+        );
     }
 }
 

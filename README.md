@@ -129,7 +129,7 @@ The line under the chips repeats your intent as mode · scale · role. The actio
 - **Stats** shows attributes, damage, modifiers, boons, conditions and the simulated rotation with its skill usage. It also compares Solo, Party and Full Squad buff levels.
 - **Viability report** gives a VIABLE or NON-VIABLE verdict with the reasons, such as too few stunbreaks or too little cleansing in WvW and PvP.
 - **Versus reference** gives a meter against the closest published build as a percentage, from on-par to far below. When no reference exists for your role, the meter compares against another role and is labelled "Different role: not a like-for-like comparison".
-- **Not simulated** names every trait, skill or effect the simulator could not play for this build, marked Provisional.
+- **Not simulated** names every trait, skill or effect the simulator could not play for this build, marked Provisional. In WvW that list comes from the timed-effect inventory. In PvE and PvP the inventory is not run; the line says so when the build has mode records that would have been inventoried, and it names description-fallback Barrier or Healing as heuristic. The PvE/PvP line is not the WvW coverage list.
 
 **Run feed.** While a run is working, its steps appear live: each search tier, fallbacks with their reason, each AI request with its tokens, quota waits, validation and the final measurement. A pill at the right of the results tabs shows duration, model, tokens and estimated cost. Its tooltip splits AI wait time from compute time. After the run, the steps stay available as a collapsible **Run log**. Hover any number in the feed for an explanation of what it counts.
 
@@ -242,7 +242,7 @@ flowchart LR
 
 - **Stat sheet.** Attributes come from the real items, stat prefixes, runes, sigils, relic, infusions, food and utility, traits and profession, using the GW2 attribute formulas.
 - **Flow simulation.** The build's rotation plays for 60 seconds against a training dummy set up for the scenario. The dummy is not a real opponent. The simulation includes auto-attack chains, weapon swaps, forms such as Necromancer shroud and Druid Celestial Avatar, boons and conditions with their durations and stack limits, and damage modifiers.
-- **Trigger records.** Traits, sigils, relics and some skills fire effect records from `data/normalized_effects`. Each record cites the GW2 Wiki page it was taken from. Coverage is uneven: the WvW file holds far more records than PvE or PvP.
+- **Trigger records.** Traits, sigils, relics and some skills fire effect records from `data/normalized_effects`. Each record cites the GW2 Wiki page it was taken from. Coverage is uneven: the WvW file holds far more records than PvE or PvP, and only WvW runs the timed-effect inventory. A PvE or PvP result does not claim the same coverage as WvW.
 - **Viability gates.** In WvW and PvP, a build must clear floors such as stunbreak count, stability or other cover against control, condition cleanse rate and effective health. In WvW it must also recover after the exchange and pay its resource costs. Failing one of these marks the build non-viable, and it ranks below every viable build. Other WvW checks, such as finishing a protected attack sequence, are reported as concerns and do not veto a build.
 
 **What it does not model yet.**
@@ -250,7 +250,7 @@ flowchart LR
 - Pets as damage or boon sources, and some elite transforms and kits: Photon Forge, Tempest overloads and Lich Form.
 - Allies. The simulation is self-only. Party and squad boons are fixed buff levels on the Stats view, not other players.
 - Misses, evades, disruption and target movement. The simulated build hits its target the whole time.
-- Traits whose effect has no record or needs a mechanic the simulator lacks. These are named on the Not simulated line of each result.
+- Traits whose effect has no record or needs a mechanic the simulator lacks. These are named on the Not simulated line of each result. Skills whose barrier or heal amount was guessed from the description are named there as heuristic; the guessed amount is not a sourced coefficient.
 
 **Accuracy.** Treat every number as an estimate, not a benchmark. The developer compares the simulator with arcdps combat logs parsed by Elite Insights, using the `log_compare` example in this repository. In the latest measurements the simulated damage is lower than the logged damage, at roughly half to four-fifths of it. Use the ranking and the reference comparison to choose between builds, then confirm in game.
 

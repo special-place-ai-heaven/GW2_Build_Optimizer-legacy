@@ -428,6 +428,9 @@ pub struct SimulationResult {
     pub has_cover_answer: bool,
     /// Counterplay-aware WvW execution report. Present only for WvW scenarios.
     pub wvw: Option<WvwCombatReport>,
+    /// Prepare-time coverage honesty (unhosted / skipped inventory / heuristic
+    /// Barrier-Healing). Empty on hand-built test rotations.
+    pub honesty: CoverageHonesty,
     /// Measurement capture, one entry per second `[k, k+1)` of the window:
     /// (strike, condition) damage landed in it. Nothing schedules on it.
     pub damage_per_second: Vec<(f64, f64)>,
@@ -435,6 +438,18 @@ pub struct SimulationResult {
     /// `damage_per_second`. Only names that were ever active, as
     /// `buff_uptime`.
     pub buff_presence_per_second: HashMap<String, Vec<bool>>,
+}
+
+/// Prepare-time gaps the PvE/PvP merge sites read when `wvw` is `None`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CoverageHonesty {
+    /// Records `trait_procs_for_build` could not host in the flow sim.
+    pub unhosted: Vec<String>,
+    /// Mode-file records were equipped but `active_normalized_effects` did
+    /// not run (PvE/PvP). False when inventory ran or nothing was due.
+    pub inventory_skipped: bool,
+    /// Skills whose Barrier/Healing came from `push_description_effects`.
+    pub heuristic: Vec<String>,
 }
 
 /// Per-skill breakdown in a simulation result.

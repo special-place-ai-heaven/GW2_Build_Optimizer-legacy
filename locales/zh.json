@@ -467,6 +467,7 @@
   "quality.verified_tip": "所有输入数据均有来源依据并经过验证。",
   "quality.provisional_tip": "部分数据为估算或临时值，结果可用但确定性较低。",
   "quality.coverage_line": "未模拟：{detail}",
+  "quality.inventory_skip": "未对 {mode} 运行效果清单",
   "quality.blocked_tip": "缺少关键数据，结果可能不可靠。",
   "label.reasons": "原因：",
   "bench.header": "对比社区标准",

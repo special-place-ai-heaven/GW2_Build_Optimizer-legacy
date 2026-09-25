@@ -2031,6 +2031,7 @@ impl SimState {
             has_interrupt: kit_has_interrupt(&self.skills),
             has_cover_answer: kit_has_cover_answer(&self.skills),
             wvw: None,
+            honesty: Default::default(),
             damage_per_second: self.damage_seconds,
             buff_presence_per_second,
         }

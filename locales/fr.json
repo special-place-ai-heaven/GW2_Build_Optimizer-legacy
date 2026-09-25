@@ -467,6 +467,7 @@
   "quality.verified_tip": "Toutes les données d'entrée sont sourcées et vérifiées.",
   "quality.provisional_tip": "Certaines données sont estimées. Résultats utilisables mais moins certains.",
   "quality.coverage_line": "Non simulé : {detail}",
+  "quality.inventory_skip": "inventaire des effets non exécuté pour {mode}",
   "quality.blocked_tip": "Données critiques manquantes. Résultats peu fiables.",
   "label.reasons": "Raisons :",
   "bench.header": "vs méta communautaire",

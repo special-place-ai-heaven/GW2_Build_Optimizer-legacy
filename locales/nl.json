@@ -467,6 +467,7 @@
   "quality.verified_tip": "Alle invoergegevens zijn brongebaseerd en geverifieerd.",
   "quality.provisional_tip": "Sommige data zijn geschat of voorlopig. Resultaten zijn bruikbaar maar minder zeker.",
   "quality.coverage_line": "Niet gesimuleerd: {detail}",
+  "quality.inventory_skip": "dekkingsinventaris niet uitgevoerd voor {mode}",
   "quality.blocked_tip": "Kritieke data ontbreekt. Resultaten zijn mogelijk onbetrouwbaar.",
   "label.reasons": "Redenen:",
   "bench.header": "vs Community-meta",

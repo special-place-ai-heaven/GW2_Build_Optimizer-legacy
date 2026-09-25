@@ -58,9 +58,10 @@ pub struct BuildSuggestion {
     pub quality_reasons: Vec<String>,
     /// The referee's coverage detail — the source names after
     /// "Not simulated: " — drawn beside the quality marker through the
-    /// `quality.coverage_line` locale key. `None` when every equipped source
-    /// with a record was executed (which is not a claim that every mechanic
-    /// is modeled). One line, one source of truth (specs/004, FR-010).
+    /// `quality.coverage_line` locale key. WvW uses `wvw_timeline.effects`;
+    /// PvE/PvP use inventory-skip / unhosted / heuristic fields so the line
+    /// is not the WvW inventory in another mode. `None` when nothing was
+    /// skipped. One line, one source of truth (specs/004, FR-010).
     pub coverage_note: Option<String>,
     /// Where this build was published, when it came from a community site
     /// rather than from Choya. Empty for anything we cooked ourselves.
@@ -1239,6 +1240,20 @@ fn render_rotation_breakdown(ui: &Ui, rotation: &RotationBreakdown, db: Option<&
 
 // Trust UI helpers
 
+/// Translate inventory-skip clauses; names and heuristic suffixes stay as
+/// the referee wrote them (item names are not localized).
+fn localize_coverage_detail(note: &str) -> String {
+    const SKIP: &str = "coverage inventory not run for ";
+    note.split("; ")
+        .map(|part| {
+            part.strip_prefix(SKIP)
+                .map(|mode| tf("quality.inventory_skip", &[("mode", mode)]))
+                .unwrap_or_else(|| part.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn render_data_quality_badge(ui: &Ui, suggestion: &BuildSuggestion) {
     use gw2_optimizer::data::DataQuality;
     let (label, col, tooltip_header) = match suggestion.data_quality {
@@ -1276,7 +1291,10 @@ fn render_data_quality_badge(ui: &Ui, suggestion: &BuildSuggestion) {
         ui.same_line();
         ui.text_colored(
             crate::ui::theme::pal().muted,
-            tf("quality.coverage_line", &[("detail", note)]),
+            tf(
+                "quality.coverage_line",
+                &[("detail", &localize_coverage_detail(note))],
+            ),
         );
     }
 }

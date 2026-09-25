@@ -1005,6 +1005,7 @@ mod tests {
             damage_per_second: Vec::new(),
             buff_presence_per_second: Default::default(),
             wvw: None,
+            honesty: Default::default(),
         }
     }
 

@@ -1594,15 +1594,26 @@ fn evaluate_inner(
         }));
     }
 
-    if let Some(fight) = rotation.as_ref().and_then(|result| result.wvw.as_ref()) {
-        if let Some(reason) = crate::data::quality::coverage_reason(
+    let honesty = rotation.as_ref().map(|result| {
+        crate::data::quality::mode_honesty_reasons(
             profession_name,
             &ctx.game_mode,
-            &fight.unmodeled_sources,
-        ) {
+            result
+                .wvw
+                .as_ref()
+                .map(|fight| fight.unmodeled_sources.as_slice()),
+            &result.honesty.unhosted,
+            result.honesty.inventory_skipped,
+            &result.honesty.heuristic,
+        )
+    });
+    if let Some(reasons) = honesty {
+        if !reasons.is_empty() {
             quality = quality.merge(&DataQuality::Provisional);
-            quality_reasons.push(reason);
+            quality_reasons.extend(reasons);
         }
+    }
+    if let Some(fight) = rotation.as_ref().and_then(|result| result.wvw.as_ref()) {
         if !fight.resource_model_complete {
             quality = quality.merge(&DataQuality::Provisional);
             quality_reasons.push(DataQualityReason {
@@ -1715,6 +1726,7 @@ pub(crate) mod tests {
             has_cover_answer: true,
             damage_per_second: Vec::new(),
             buff_presence_per_second: HashMap::new(),
+            honesty: Default::default(),
             wvw: Some(WvwCombatReport {
                 duration_ms: 5_000,
                 target_health: Some(18_000.0),
@@ -4722,6 +4734,142 @@ coverage: {:?}",
         assert!(
             rotation.total_dps > 0.0,
             "gate-sim DPS in the 2 s PvE Solo window (CONN-01-05, re-recorded in Sprint 2)"
+        );
+        assert_eq!(report.quality, DataQuality::Provisional);
+        assert!(
+            report.quality_reasons.iter().any(|r| {
+                r.field == crate::data::quality::INVENTORY_FIELD
+                    && r.explanation.contains("coverage inventory not run for PvE")
+            }),
+            "PvE with mode records and no timeline must carry the inventory-skip reason: {:?}",
+            report.quality_reasons
+        );
+        assert!(
+            !report
+                .quality_reasons
+                .iter()
+                .any(|r| r.field == crate::data::quality::COVERAGE_FIELD),
+            "PvE must not reuse the WvW coverage field: {:?}",
+            report.quality_reasons
+        );
+    }
+
+    #[test]
+    fn reaper_pvp_comparison_marks_skipped_inventory() {
+        use crate::rotation::reaper_fixture as fx;
+        let db = fx::db();
+        let build = fx::build();
+        let ctx = BalanceContext::new(GameMode::PvP);
+        let scenario = ScenarioSpec::from_balance_context(&ctx);
+        let report = super::evaluate_validated_build_with(
+            &build,
+            &db,
+            "Necromancer",
+            &OptimizationWeights::default(),
+            &ctx,
+            &scenario,
+            &fx::opener(),
+        );
+        let rotation = report
+            .rotation
+            .as_ref()
+            .expect("PvP runs the gate simulation");
+        assert!(rotation.wvw.is_none(), "PvP never runs the timeline");
+        assert_eq!(report.quality, DataQuality::Provisional);
+        assert!(
+            report.quality_reasons.iter().any(|r| {
+                r.field == crate::data::quality::INVENTORY_FIELD
+                    && r.explanation.contains("coverage inventory not run for PvP")
+            }),
+            "{:?}",
+            report.quality_reasons
+        );
+    }
+
+    #[test]
+    fn reaper_pve_without_mode_records_is_not_blanket_provisional() {
+        use crate::rotation::reaper_fixture as fx;
+        let db = fx::db();
+        let mut build = fx::build();
+        build.set_sigil_seats([None, None, None, None]);
+        let (ctx, scenario) = fx::pve_scenario();
+        let report = super::evaluate_validated_build_with(
+            &build,
+            &db,
+            "Necromancer",
+            &OptimizationWeights::default(),
+            &ctx,
+            &scenario,
+            &fx::opener(),
+        );
+        assert!(
+            report.rotation.as_ref().is_some_and(|r| r.wvw.is_none()),
+            "still PvE"
+        );
+        assert!(
+            !report.quality_reasons.iter().any(|r| {
+                r.field == crate::data::quality::INVENTORY_FIELD
+                    || r.field == crate::data::quality::UNHOSTED_FIELD
+            }),
+            "no mode records and no unhosted must not emit a skip reason: {:?}",
+            report.quality_reasons
+        );
+    }
+
+    #[test]
+    fn heuristic_barrier_and_healing_survive_into_pve_quality() {
+        use crate::rotation::reaper_fixture as fx;
+        let mut db = fx::db();
+        db.skills
+            .get_mut(&fx::WELL_OF_DARKNESS)
+            .unwrap()
+            .description = Some("Grant barrier to nearby allies.".into());
+        db.skills
+            .get_mut(&fx::YOU_ARE_ALL_WEAKLINGS)
+            .unwrap()
+            .description = Some("heals you when the shout lands.".into());
+        let build = fx::build();
+        let (ctx, scenario) = fx::pve_scenario();
+        let report = super::evaluate_validated_build_with(
+            &build,
+            &db,
+            "Necromancer",
+            &OptimizationWeights::default(),
+            &ctx,
+            &scenario,
+            &fx::opener(),
+        );
+        let heuristic = report
+            .quality_reasons
+            .iter()
+            .find(|r| r.field == crate::data::quality::HEURISTIC_FIELD)
+            .expect("heuristic stamps must reach the scored result");
+        assert!(
+            heuristic
+                .explanation
+                .contains("Well of Darkness (heuristic Barrier)"),
+            "{heuristic}"
+        );
+        assert!(
+            heuristic.explanation.contains("You Are All Weaklings")
+                && heuristic.explanation.contains("heuristic Healing"),
+            "{heuristic}"
+        );
+        assert_eq!(report.quality, DataQuality::Provisional);
+        let synergy = crate::engine::synergy_result_from_validated(
+            build,
+            &db,
+            "Necromancer",
+            &ctx,
+            Some(&scenario),
+        );
+        assert!(
+            synergy.quality_reasons.iter().any(|r| {
+                r.field == crate::data::quality::HEURISTIC_FIELD
+                    && r.explanation.contains("heuristic Barrier")
+            }),
+            "Optimize packaging must carry the same stamp: {:?}",
+            synergy.quality_reasons
         );
     }
 

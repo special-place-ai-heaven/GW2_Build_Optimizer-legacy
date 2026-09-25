@@ -1341,22 +1341,74 @@ fn push_description_effects(effects: &mut Vec<SkillEffect>, description: &str) {
             duration_ms: 0,
         });
     }
-    if d.contains("barrier")
+    if description_invents_barrier(&d, effects) {
+        // The public skill endpoint commonly omits barrier coefficients.
+        // Amount stays the invented 1000; prepare stamps coverage.heuristic (W151).
+        effects.push(SkillEffect::Barrier { amount: 1_000.0 });
+    }
+    if description_invents_healing(&d, effects) {
+        effects.push(SkillEffect::Healing { hit_count: 1 });
+    }
+}
+
+fn description_invents_barrier(d: &str, effects: &[SkillEffect]) -> bool {
+    d.contains("barrier")
         && !effects
             .iter()
             .any(|effect| matches!(effect, SkillEffect::Barrier { .. }))
-    {
-        // The public skill endpoint commonly omits barrier coefficients.
-        // Heuristic Barrier/Healing are simulated at full value with no report flag.
-        effects.push(SkillEffect::Barrier { amount: 1_000.0 });
-    }
-    if (d.contains("heal yourself") || d.contains("heals you"))
+}
+
+fn description_invents_healing(d: &str, effects: &[SkillEffect]) -> bool {
+    (d.contains("heal yourself") || d.contains("heals you"))
         && !effects
             .iter()
             .any(|effect| matches!(effect, SkillEffect::Healing { .. }))
-    {
-        effects.push(SkillEffect::Healing { hit_count: 1 });
+}
+
+/// Skills whose Barrier{1000} or text-fallback Healing{1} came from
+/// [`push_description_effects`]. Reconstructs from the same predicates
+/// plus the heal-fact guard so a `Fact::Heal { hit_count: 1 }` is not
+/// flagged. // ponytail: Barrier{1000} is only invented here; a sourced
+/// 1000-point fact would need a Fact arm first.
+pub(crate) fn heuristic_coverage_stamps(
+    skills: &[RotationSkill],
+    db: &GameDb,
+    equipped_traits: &[u32],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for skill in skills {
+        let Some(api) = db.skills.get(&skill.skill_id) else {
+            continue;
+        };
+        let desc = api.description.as_deref().unwrap_or("");
+        if desc.is_empty() {
+            continue;
+        }
+        let d = desc.to_lowercase();
+        let facts = active_skill_facts(api, equipped_traits, db);
+        let facts_have_heal = facts
+            .iter()
+            .any(|f| matches!(f, Fact::Heal { .. } | Fact::HealingAdjust { .. }));
+        if d.contains("barrier")
+            && skill.effects.iter().any(|effect| {
+                matches!(effect, SkillEffect::Barrier { amount } if (*amount - 1_000.0).abs() < 1e-9)
+            })
+        {
+            out.push(crate::data::quality::heuristic_entry(&skill.name, "Barrier").rendered());
+        }
+        if !facts_have_heal
+            && (d.contains("heal yourself") || d.contains("heals you"))
+            && skill
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, SkillEffect::Healing { hit_count: 1 }))
+        {
+            out.push(crate::data::quality::heuristic_entry(&skill.name, "Healing").rendered());
+        }
     }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn describes_corrupt(d: &str) -> bool {
@@ -1625,6 +1677,78 @@ mod tests {
             }
             _ => panic!("Expected ApplyBuff"),
         }
+    }
+
+    #[test]
+    fn description_fallback_barrier_and_heal_keep_invented_amounts() {
+        let effects = extract_effects(&[], Some("Grant barrier and heals you."));
+        assert!(
+            effects.iter().any(
+                |e| matches!(e, SkillEffect::Barrier { amount } if (*amount - 1_000.0).abs() < 1e-9)
+            ),
+            "{effects:?}"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, SkillEffect::Healing { hit_count: 1 })),
+            "{effects:?}"
+        );
+        let no_double = extract_effects(
+            &[Fact::Heal {
+                text: None,
+                icon: None,
+                hit_count: Some(3),
+            }],
+            Some("heals you"),
+        );
+        assert_eq!(
+            no_double
+                .iter()
+                .filter(|e| matches!(e, SkillEffect::Healing { .. }))
+                .count(),
+            1,
+            "fact heal wins; description must not add a second Healing: {no_double:?}"
+        );
+    }
+
+    #[test]
+    fn heuristic_coverage_stamps_barrier_and_text_heal_not_fact_heal() {
+        let mut barrier = make_test_skill(1, "Troll Unguent", "Heal", vec![]);
+        barrier.description = Some("Grant barrier to yourself.".into());
+        let mut text_heal = make_test_skill(2, "Mending", "Heal", vec![]);
+        text_heal.description = Some("heals you for a small amount.".into());
+        let mut fact_heal = make_test_skill(
+            3,
+            "Signet of Vampirism",
+            "Heal",
+            vec![Fact::Heal {
+                text: None,
+                icon: None,
+                hit_count: Some(1),
+            }],
+        );
+        fact_heal.description = Some("heals you.".into());
+        let mut db = empty_db();
+        for skill in [barrier, text_heal, fact_heal] {
+            db.skills.insert(skill.id, skill);
+        }
+        let skills = build_rotation_skills(&[1, 2, 3], &db);
+        let stamps = heuristic_coverage_stamps(&skills, &db, &[]);
+        assert!(
+            stamps
+                .iter()
+                .any(|s| s == "Troll Unguent (heuristic Barrier)"),
+            "{stamps:?}"
+        );
+        assert!(
+            stamps.iter().any(|s| s == "Mending (heuristic Healing)"),
+            "{stamps:?}"
+        );
+        assert!(
+            !stamps.iter().any(|s| s.contains("Signet of Vampirism")),
+            "Fact::Heal must not be stamped heuristic: {stamps:?}"
+        );
     }
 
     #[test]
