@@ -106,22 +106,9 @@ fn host_resolves_reserved(url: &str) -> bool {
 
 /// Full per-hop screen: syntax plus DNS. Used for the original URL and every
 /// redirect target, so a favicon cannot bounce the client into the LAN.
-fn hop_ok(url: &str) -> bool {
+/// Radio streams reuse this same predicate (SEC-RADIO).
+pub(crate) fn hop_ok(url: &str) -> bool {
     url_ok(url) && !host_resolves_reserved(url)
-}
-
-/// At most 2 redirects, each hop re-screened. `stop()` surfaces the raw 3xx,
-/// which the status check in `download` then rejects.
-fn redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(|attempt| {
-        if attempt.previous().len() > 2 {
-            attempt.error("too many redirects")
-        } else if !hop_ok(attempt.url().as_str()) {
-            attempt.stop()
-        } else {
-            attempt.follow()
-        }
-    })
 }
 
 fn hash16(url: &str) -> u64 {
@@ -308,7 +295,7 @@ fn download(url: &str, dir: &Path, token: &CancellationToken, version: &str) -> 
     }
     let client = reqwest::blocking::Client::builder()
         .timeout(TIMEOUT)
-        .redirect(redirect_policy())
+        .redirect(crate::news_art::screened_redirect_policy(2, hop_ok))
         .build()
         .ok()?;
     let mut headers = HeaderMap::new();
@@ -358,6 +345,28 @@ mod tests {
         assert!(!url_ok("https://[::1]/x.png"));
         assert!(!url_ok("https://[fe80::1]/x.png"));
         assert!(!url_ok("https://[fd00::1]/x.png"));
+    }
+
+    #[test]
+    fn hop_ok_rejects_reserved_redirect_targets() {
+        for url in [
+            "http://127.0.0.1/x.png",
+            "http://10.0.0.1/x.png",
+            "http://192.168.1.5/x.png",
+            "http://172.16.0.1/x.png",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[fe80::1]/x.png",
+            "https://127.0.0.1/x.png",
+        ] {
+            assert!(!hop_ok(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn redirect_to_reserved_is_stopped_before_connect() {
+        crate::news_art::assert_policy_stops_reserved_redirects(
+            crate::news_art::screened_redirect_policy(2, hop_ok),
+        );
     }
 
     #[test]

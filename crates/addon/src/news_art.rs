@@ -142,6 +142,32 @@ pub(crate) fn url_host_is_reserved(url: &reqwest::Url) -> bool {
     }
 }
 
+/// At most `max` redirects (`previous().len() > max`, same cut as radio logos).
+/// Each hop is re-screened; a rejected hop `stop()`s so the 3xx is returned
+/// and the next host is never dialed.
+pub(crate) fn screened_redirect_policy(
+    max: usize,
+    hop_ok: fn(&str) -> bool,
+) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() > max {
+            attempt.error("too many redirects")
+        } else if !hop_ok(attempt.url().as_str()) {
+            attempt.stop()
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
+/// Worker-only: allowlist plus DNS, for the original URL and every redirect hop.
+fn hop_ok(url: &str) -> bool {
+    url_ok(url)
+        && reqwest::Url::parse(url)
+            .ok()
+            .is_some_and(|u| !url_host_is_reserved(&u))
+}
+
 /// Loopback/private/link-local/unspecified/ULA - addresses no community-
 /// submitted URL (news image or radio stream) has any business dialing.
 pub(crate) fn ip_is_reserved(ip: std::net::IpAddr) -> bool {
@@ -338,12 +364,12 @@ pub fn download(
     token: &CancellationToken,
     version: &str,
 ) -> Option<(PathBuf, f32)> {
-    if token.is_cancelled() || !url_ok(url) {
+    if token.is_cancelled() || !hop_ok(url) {
         return None;
     }
     let client = reqwest::blocking::Client::builder()
         .timeout(TIMEOUT)
-        .redirect(reqwest::redirect::Policy::limited(2))
+        .redirect(screened_redirect_policy(2, hop_ok))
         .build()
         .ok()?;
     let mut headers = HeaderMap::new();
@@ -487,6 +513,113 @@ pub(crate) fn slots_test_guard() -> std::sync::MutexGuard<'static, ()> {
     SLOTS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Origin is a loopback 302 (reqwest screens `attempt.url()`, the *next* hop).
+/// A reserved Location must `stop()`: no connect, no body, still a 3xx from origin.
+#[cfg(test)]
+pub(crate) fn assert_policy_stops_reserved_redirects(policy: reqwest::redirect::Policy) {
+    use std::io::{BufRead, Read, Write};
+    use std::net::{Shutdown, TcpListener};
+    use std::time::{Duration, Instant};
+
+    fn drain_headers(stream: &std::net::TcpStream) {
+        let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone"));
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            if line.trim_end_matches(['\r', '\n']).is_empty() {
+                break;
+            }
+        }
+    }
+
+    fn serve_302(location: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind origin");
+        let port = listener.local_addr().expect("addr").port();
+        let loc = location.to_string();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let _ = stream.set_nodelay(true);
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            drain_headers(&stream);
+            let body = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {loc}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+            let mut sink = Vec::new();
+            let _ = (&stream).take(64 * 1024).read_to_end(&mut sink);
+            let _ = stream.shutdown(Shutdown::Both);
+        });
+        format!("http://127.0.0.1:{port}/ok")
+    }
+
+    let probe = TcpListener::bind("127.0.0.1:0").expect("bind probe");
+    let probe_port = probe.local_addr().expect("probe addr").port();
+    let client = reqwest::blocking::Client::builder()
+        .redirect(policy)
+        .timeout(Duration::from_secs(2))
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("client");
+
+    let locations = [
+        format!("http://127.0.0.1:{probe_port}/steal"),
+        format!("https://127.0.0.1:{probe_port}/steal"),
+        "http://10.0.0.1/".to_string(),
+        "https://10.0.0.1/".to_string(),
+        "http://192.168.0.1/".to_string(),
+        "http://172.16.0.1/".to_string(),
+        "http://169.254.169.254/latest/meta-data".to_string(),
+        "https://169.254.169.254/latest/meta-data".to_string(),
+        "http://[fe80::1]/".to_string(),
+    ];
+    for loc in &locations {
+        let origin = serve_302(loc);
+        let t0 = Instant::now();
+        let resp = client
+            .get(&origin)
+            .send()
+            .unwrap_or_else(|e| panic!("origin GET for {loc}: {e}"));
+        assert!(
+            t0.elapsed() < Duration::from_millis(1500),
+            "redirect to {loc} was dialed (elapsed {:?})",
+            t0.elapsed()
+        );
+        assert!(
+            resp.status().is_redirection(),
+            "expected 3xx stop for {loc}, got {}",
+            resp.status()
+        );
+        assert_eq!(
+            resp.url().host_str(),
+            Some("127.0.0.1"),
+            "client must not adopt reserved hop {loc}"
+        );
+        let bytes = resp.bytes().expect("origin body");
+        assert!(
+            bytes.is_empty(),
+            "reserved hop body must not be read for {loc}"
+        );
+    }
+
+    probe.set_nonblocking(true).expect("probe nonblocking");
+    match probe.accept() {
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock
+                    | std::io::ErrorKind::Interrupted
+                    | std::io::ErrorKind::TimedOut
+            ) => {}
+        Ok(_) => panic!("loopback probe accepted a follow to 127.0.0.1"),
+        Err(e) => panic!("probe accept: {e}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,6 +755,27 @@ mod tests {
         assert!(!url_ok("https://[fd00::1]/x.jpg"));
         assert!(!url_ok("https://evil.example/x.jpg"));
         assert!(!url_ok("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn hop_ok_rejects_reserved_redirect_targets() {
+        for url in [
+            "https://127.0.0.1/x.jpg",
+            "https://10.0.0.1/x.jpg",
+            "https://192.168.1.8/x.jpg",
+            "https://172.16.0.1/x.jpg",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[fe80::1]/x.jpg",
+            "http://127.0.0.1/x.jpg",
+            "http://10.0.0.1/x.jpg",
+        ] {
+            assert!(!hop_ok(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn redirect_to_reserved_is_stopped_before_connect() {
+        assert_policy_stops_reserved_redirects(screened_redirect_policy(2, hop_ok));
     }
 
     /// The hosts the live feeds ACTUALLY serve stills from, captured

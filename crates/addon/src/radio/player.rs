@@ -1338,8 +1338,9 @@ fn open_stream(
         // playback mid-song.
         .connect_timeout(CONNECT_TIMEOUT)
         // Icecast mounts redirect occasionally (http->https, CDN hops); ten
-        // hops (reqwest's default) is a tunnel, three is a stream.
-        .redirect(reqwest::redirect::Policy::limited(3))
+        // hops (reqwest's default) is a tunnel, three is a stream. Each hop
+        // is re-screened so a CDN 302 cannot bounce us into the LAN (SEC-RADIO).
+        .redirect(stream_redirect_policy())
         .build()
         .map_err(|e| SessionEnd::Failed(short_msg("http client", &e.to_string())))?;
 
@@ -1420,6 +1421,11 @@ fn open_stream(
 /// false: the connect will fail with its own honest error.
 fn stream_host_reserved(url: &reqwest::Url) -> bool {
     crate::news_art::url_host_is_reserved(url)
+}
+
+/// Same hop screen as radio logos, with a 3-hop cap for Icecast CDN bounces.
+fn stream_redirect_policy() -> reqwest::redirect::Policy {
+    crate::news_art::screened_redirect_policy(3, super::logos::hop_ok)
 }
 
 /// Stop-flag exit path: halt the decode thread (which cancels its download),
@@ -1760,6 +1766,11 @@ mod tests {
         }
         let public = reqwest::Url::parse("https://[2606:4700:4700::1111]/stream").unwrap();
         assert!(!stream_host_reserved(&public));
+    }
+
+    #[test]
+    fn redirect_to_reserved_is_stopped_before_connect() {
+        crate::news_art::assert_policy_stops_reserved_redirects(stream_redirect_policy());
     }
 
     /// Regression for the v1.8.0 in-game crash: `tokio::time::timeout` grabs
