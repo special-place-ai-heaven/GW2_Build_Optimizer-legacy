@@ -2916,20 +2916,25 @@ fn place_flow_record(
     use crate::data::quality::FactualValue;
     use rotation::simulator::{ProcTrigger, TriggeredProc};
 
-    // The flow sim keeps the player's boons, so a self-boon gate plays;
-    // every other gate needs state it does not keep.
-    let self_boons: Option<Vec<(String, bool)>> = effect
-        .gates
-        .iter()
-        .map(|gate| match gate {
-            Gate::SelfBoon { boon } => Some((boon.clone(), true)),
-            Gate::SelfBoonAbsent { boon } => Some((boon.clone(), false)),
-            _ => None,
-        })
-        .collect();
-    let Some(self_boons) = self_boons else {
-        return Err("gated or scaled".into());
-    };
+    // The flow sim keeps the player's boons, so a self-boon gate plays.
+    // An `Interval` with no `while` state has no other clock here: it floors
+    // the page ICD. Every other gate needs state this sim does not keep.
+    // ponytail: that floor is how WvW trait:2021:1 plays at 15 s instead of
+    // the page's 3 s. Drop the gate when shroud time matches logs (E18);
+    // do not grow a second clock.
+    let mut self_boons = Vec::new();
+    let mut interval_floor_ms = 0u32;
+    for gate in &effect.gates {
+        match gate {
+            Gate::SelfBoon { boon } => self_boons.push((boon.clone(), true)),
+            Gate::SelfBoonAbsent { boon } => self_boons.push((boon.clone(), false)),
+            Gate::Interval {
+                every_ms,
+                while_state: None,
+            } => interval_floor_ms = interval_floor_ms.max(*every_ms),
+            _ => return Err("gated or scaled".into()),
+        }
+    }
     if effect.scale.is_some() || effect.scale_by.is_some() {
         return Err("gated or scaled".into());
     }
@@ -2963,6 +2968,7 @@ fn place_flow_record(
         None => 0,
         Some(_) => return Err("unresolved cooldown".into()),
     };
+    let icd_ms = icd_ms.max(interval_floor_ms);
     if effect.trigger_rule == TriggerRule::Conditional {
         return match record_modifier(effect) {
             Some(Ok(modifier)) => Ok(FlowRecord::WhileIn(modifier)),
@@ -2975,7 +2981,9 @@ fn place_flow_record(
         (TriggerRule::OnShroudEnter, _) => return Ok(FlowRecord::OnEnter(proc_)),
         (TriggerRule::OnShroudExit, _) => return Ok(FlowRecord::OnExit(proc_)),
         (TriggerRule::Periodic, _) if icd_ms == 0 => return Err("no interval".into()),
-        (TriggerRule::Periodic, _) if in_shroud == Some(true) => {
+        // InForm cannot honor a self-boon gate, so a gated in-shroud
+        // periodic plays as a triggered pulse (WvW Reaper's Onslaught).
+        (TriggerRule::Periodic, _) if in_shroud == Some(true) && self_boons.is_empty() => {
             return Ok(FlowRecord::InForm(icd_ms, proc_))
         }
         (TriggerRule::Periodic, _) => ProcTrigger::Periodic,
@@ -4220,6 +4228,47 @@ mod tests {
             TriggerRule::Passive,
         );
         assert!(flow_record(&passive, true, None, &none).is_none());
+    }
+
+    /// E22: WvW Reaper's Onslaught plays as a gated periodic at the 15 s
+    /// ceiling. PvE stays an ungated in-form pulse.
+    #[test]
+    fn kent_e22_wvw_onslaught_places_as_gated_periodic() {
+        use crate::data::normalized_effects::effects;
+        use rotation::simulator::{FormProc, ProcTrigger};
+
+        let record = |mode: &str, id: &str| {
+            effects()
+                .effects_for_mode(mode)
+                .iter()
+                .find(|e| e.effect_id == id)
+                .unwrap_or_else(|| panic!("{mode} {id}"))
+                .clone()
+        };
+        let none = std::collections::HashSet::new();
+        match flow_record(&record("WvW", "trait:2021:1"), true, None, &none) {
+            Some(Ok(FlowRecord::Triggered(t))) => {
+                assert!(matches!(t.on, ProcTrigger::Periodic));
+                assert_eq!(t.icd_ms, 15_000);
+                assert_eq!(t.in_form, Some(true));
+                assert_eq!(t.self_boons, vec![("Quickness".to_string(), false)]);
+                assert!(matches!(
+                    t.proc_,
+                    FormProc::Buff { ref name, duration_ms: 3_000, .. } if name == "Quickness"
+                ));
+            }
+            _ => panic!("WvW Onslaught should be a gated periodic"),
+        }
+        assert!(matches!(
+            flow_record(&record("PvE", "trait:2021:1"), true, None, &none),
+            Some(Ok(FlowRecord::InForm(
+                3_000,
+                FormProc::Buff {
+                    duration_ms: 3_000,
+                    ..
+                }
+            )))
+        ));
     }
 
     /// Doctrine 6: a pressed entry that brings a bar but has no pool

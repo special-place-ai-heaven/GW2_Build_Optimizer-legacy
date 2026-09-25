@@ -5,6 +5,8 @@ All notable changes to GW2 Build Optimizer are documented here.
 ## Unreleased
 
 - E28: effect coverage no longer counts a record Executable from schema shape alone. Rushing Justice's flames (PvE `ProcEffect` `skill:62668`, `skill:62603`, `skill:62648`) abstain because the flow sim and the timeline have no impacts/interval consumer for that field. The abstain reason names the missing consumer. A coefficient `ProcEffect` that names an inner `StrikeDamagePct` (Sigil of Fire) still counts Executable. Pin `rushing_justice_flames_abstain_without_impacts_interval_consumer`.
+- E22: WvW Reaper's Onslaught (`trait:2021:1`) no longer duration-stacks a 3 s Quickness pulse onto Quickness the player already has, and the WvW pulse is floored at 15 s. The page numbers stay 3 s every 3 s. On a 60 s WvW shroud row shaped like the Lucian Lord over-production (Chilled to the Bone 10 s / 30 s, Grasping Darkness 3 s / 25 s), self Quickness goes from 0.988 to 0.583 (log band 0.2-0.6). PvE Onslaught is unchanged. The 15 s gate is a sim ceiling until shroud time matches logs.
+
 - E20a: automatic food and utility selection can now pick a consumable whose only effect is a stat conversion. Superior Sharpening Stone (item 9443) grants Power equal to 3% of Precision and 6% of Ferocity and has no flat bonus; the picker was skipping it. It is chosen when that conversion scores higher than a flat-only alternative. Equipping a stone that is already on the build is unchanged. E20b stays banked: those conversions still apply after trait conversions, with no wiki or log oracle for applying them earlier.
 
 ## 1.14.48
