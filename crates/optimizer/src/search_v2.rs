@@ -1172,13 +1172,11 @@ fn mutable_gear_slot(
 /// Operator 1 — swap the whole build to one gear prefix.
 ///
 /// For every prefix in the canonical pool, produce a clone of the current
-/// build with every unlocked worn slot set to that prefix. "Worn" is
-/// [`ValidatedBuild::fill_unlocked_gear_slots`]'s definition, which is wider
-/// than [`mutable_gear_slot`]'s: a weapon set 2 that holds weapons counts as
-/// worn there, so a whole-build fill does restamp those two cells. That costs
-/// no extra evaluation — this operator emits one neighbour per prefix either
-/// way — but it does leave a set-2 prefix in the saved slot map that nothing
-/// scored.
+/// build with every unlocked worn stat-bearing slot set to that prefix. The
+/// target set is [`ValidatedBuild::fill_unlocked_gear_slots`]: a subset of
+/// [`crate::search::STAT_SLOTS`], the same slots [`mutable_gear_slot`] will
+/// move. Weapon set 2 is not in that set, so a whole-build fill does not
+/// write or restamp those cells.
 ///
 /// The mutation is its own no-op test: `fill_unlocked_gear_slots` reports
 /// whether it changed anything, so the neighbour is kept only when it does.
@@ -3012,6 +3010,97 @@ mod tests {
             neighbors[0].gear_slots.get(GearSlot::WeaponSet1Off),
             None,
             "a greatsword's off-hand stays empty under a whole-build fill"
+        );
+    }
+
+    /// SEARCH-WS2: the whole-build prefix operator must not restamp weapon set 2.
+    ///
+    /// `mutable_gear_slot` already refuses those cells. The fill this operator
+    /// uses used to be wider: a set that holds weapons counted as worn, so the
+    /// saved slot map picked up a prefix nothing scored.
+    #[test]
+    fn swap_gear_prefix_does_not_restamp_weapon_set_2() {
+        let mut db = empty_db();
+        for (id, name) in [(1, "Berserker's"), (2, "Cavalier's")] {
+            db.itemstats.insert(
+                id,
+                gw2_api::models::ItemStat {
+                    id,
+                    name: name.into(),
+                    attributes: Vec::new(),
+                },
+            );
+        }
+
+        let carried = PrefixRef {
+            itemstat_id: 99,
+            name: "Carried".into(),
+        };
+        let mut validated = ValidatedBuild {
+            weapons: crate::validation::ValidatedWeapons {
+                set1: ValidatedWeaponSet {
+                    main_hand: Some("Sword".into()),
+                    off_hand: Some("Focus".into()),
+                },
+                set2: ValidatedWeaponSet {
+                    main_hand: Some("Scepter".into()),
+                    off_hand: Some("Torch".into()),
+                },
+            },
+            ..ValidatedBuild::default()
+        };
+        validated.fill_worn_gear_slots(PrefixRef {
+            itemstat_id: 1,
+            name: "Berserker's".into(),
+        });
+        validated
+            .gear_slots
+            .set(GearSlot::WeaponSet2Main, carried.clone());
+        validated
+            .gear_slots
+            .set(GearSlot::WeaponSet2Off, carried.clone());
+        let before_main = validated.gear_slots.get(GearSlot::WeaponSet2Main).cloned();
+        let before_off = validated.gear_slots.get(GearSlot::WeaponSet2Off).cloned();
+        let candidate = make_candidate(validated);
+
+        let itemstats = prioritized_itemstats(&db, &OptimizationWeights::default());
+        let neighbors = swap_gear_prefix(&candidate, &itemstats, &HashMap::new());
+        assert!(
+            !neighbors.is_empty(),
+            "the pool has a prefix the build is not already wearing"
+        );
+        for neighbor in &neighbors {
+            assert_eq!(
+                neighbor.gear_slots.get(GearSlot::WeaponSet2Main).cloned(),
+                before_main,
+                "whole-build fill restamped set-2 main"
+            );
+            assert_eq!(
+                neighbor.gear_slots.get(GearSlot::WeaponSet2Off).cloned(),
+                before_off,
+                "whole-build fill restamped set-2 off"
+            );
+        }
+        assert!(neighbors.iter().any(|build| {
+            build.gear_slots.prefix_id(GearSlot::WeaponSet1Main) == Some(2)
+                && build.gear_slots.prefix_id(GearSlot::Helm) == Some(2)
+        }));
+        // Dead neighbours stay dead: set 2 is still not a movable slot.
+        assert!(
+            !mutable_gear_slot(
+                &candidate.validated,
+                GearSlot::WeaponSet2Main,
+                &HashMap::new()
+            ),
+            "mutable_gear_slot must keep excluding weapon set 2 main"
+        );
+        assert!(
+            !mutable_gear_slot(
+                &candidate.validated,
+                GearSlot::WeaponSet2Off,
+                &HashMap::new()
+            ),
+            "mutable_gear_slot must keep excluding weapon set 2 off"
         );
     }
 

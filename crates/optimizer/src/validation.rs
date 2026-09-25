@@ -184,16 +184,15 @@ impl ValidatedBuild {
         }
     }
 
-    /// Fill one prefix into every slot the build actually wears.
+    /// Fill one prefix into every stat-bearing slot the build actually wears.
     ///
-    /// Weapon slots are wearable only when that hand holds a weapon: a
-    /// two-hander has no off-hand, weapon set 2 is carried rather than worn,
-    /// and a half-built draft has whatever it has. Writing a prefix into those
-    /// cells anyway is not harmless bookkeeping — it churns
-    /// [`ValidatedBuild::gear_identity`], so two builds with identical combat
-    /// stats dedup as different candidates and each spends beam budget; it puts
-    /// a stat prefix on an empty off-hand in the gear sheet; and it is the
-    /// shape the Improve baseline is compared against.
+    /// The target set is [`crate::search::STAT_SLOTS`]: armour, trinkets, and
+    /// weapon set 1. An empty set-1 hand is cleared, so a two-hander does not
+    /// keep a prefix on a hand that holds nothing. Weapon set 2 is not in that
+    /// set. Those two cells are left exactly as they were — not written, not
+    /// cleared, not restamped — even when the hands hold weapons. A set-2
+    /// prefix changes [`ValidatedBuild::gear_identity`] and spends a beam
+    /// slot without changing a stat.
     ///
     /// Armour and trinkets are always wearable — every level-80 character has
     /// six of each — so a *missing piece* on someone's live loadout is a
@@ -202,7 +201,7 @@ impl ValidatedBuild {
     /// Call **after** the build's weapons are set. A build with no weapons at
     /// all wears no weapons, and gets no weapon prefixes.
     pub fn fill_worn_gear_slots(&mut self, prefix: PrefixRef) {
-        for slot in GearSlot::ALL {
+        for &slot in &crate::search::STAT_SLOTS {
             if !self.wears(slot) {
                 self.gear_slots.clear(slot);
                 continue;
@@ -214,7 +213,9 @@ impl ValidatedBuild {
     /// Does this build wear the given slot?
     ///
     /// True for all armour and trinkets; for a weapon slot, true exactly when
-    /// that hand of that set holds a weapon.
+    /// that hand of that set holds a weapon. Prefix fill does not use this as
+    /// its target set: weapon set 2 can be held and still sit outside
+    /// [`crate::search::STAT_SLOTS`].
     pub fn wears(&self, slot: GearSlot) -> bool {
         let held = |hand: &Option<String>| hand.as_deref().is_some_and(|w| !w.trim().is_empty());
         match slot {
@@ -295,15 +296,15 @@ impl ValidatedBuild {
             .collect::<Vec<u32>>()
     }
 
-    /// Fill every unlocked **worn** slot with one prefix; slots present in
-    /// `gear_locks` keep their current value. Returns true when any slot value
-    /// actually changed, so callers can skip no-op proposals without cloning
-    /// first.
+    /// Fill every unlocked worn stat-bearing slot with one prefix; slots
+    /// present in `gear_locks` keep their current value. Returns true when any
+    /// slot value actually changed, so callers can skip no-op proposals
+    /// without cloning first.
     ///
-    /// Skips slots the build does not wear, for the reasons in
-    /// [`ValidatedBuild::fill_worn_gear_slots`]. A search operator that fills a
-    /// two-hander's off-hand and both of set 2 spends four evaluations per
-    /// prefix on cells that cannot change a single stat.
+    /// Same target set as [`ValidatedBuild::fill_worn_gear_slots`]: a subset of
+    /// [`crate::search::STAT_SLOTS`]. Weapon set 2 is never written or cleared.
+    /// An empty set-1 hand is cleared. A locked slot is never touched, even
+    /// when the hand is empty.
     pub fn fill_unlocked_gear_slots(
         &mut self,
         prefix: PrefixRef,
@@ -312,7 +313,12 @@ impl ValidatedBuild {
         let worn: [bool; 16] = std::array::from_fn(|idx| self.wears(GearSlot::ALL[idx]));
         let mut changed = false;
         for (idx, cell) in self.gear_slots.map.iter_mut().enumerate() {
-            if gear_locks.contains_key(&GearSlot::ALL[idx]) {
+            let slot = GearSlot::ALL[idx];
+            // Set 2 is outside the stat-bearing set. Leave the cell alone.
+            if !crate::search::STAT_SLOTS.contains(&slot) {
+                continue;
+            }
+            if gear_locks.contains_key(&slot) {
                 continue;
             }
             if !worn[idx] {
@@ -1308,9 +1314,10 @@ fn validate_gear_prefix(response: &GeminiBuildResponse, db: &GameDb, result: &mu
             response.stat_prefix, itemstat.name
         ));
     }
-    // Worn slots only: `validate_weapons` has already run, so the build knows
-    // whether it is holding a Greatsword (no off-hand) or a sword/focus, and a
-    // prefix on a hand that holds nothing is not a gear choice.
+    // Stat-bearing worn slots only (`STAT_SLOTS`). `validate_weapons` has
+    // already run, so the build knows whether it is holding a Greatsword (no
+    // off-hand) or a sword/focus. Weapon set 2 is outside that set and is left
+    // unchanged, even when those hands hold weapons.
     result.fill_worn_gear_slots(PrefixRef {
         itemstat_id: itemstat.id,
         name: itemstat.name.clone(),
@@ -1319,9 +1326,10 @@ fn validate_gear_prefix(response: &GeminiBuildResponse, db: &GameDb, result: &mu
 
 /// Per-slot plate gear map (spec §12.3): Choya proposes, the referee disposes.
 ///
-/// Runs AFTER [`validate_gear_prefix`] so every slot already holds the
-/// weight-profile prefix — that fill is the fallback for entries that cannot
-/// resolve. Each plate entry is applied with strict validation:
+/// Runs AFTER [`validate_gear_prefix`] so every stat-bearing slot already
+/// holds the weight-profile prefix — that fill is the fallback for entries
+/// that cannot resolve. Weapon set 2 is not part of the fill; a plate entry
+/// may still name it. Each plate entry is applied with strict validation:
 /// - the slot name must match a known `GearSlot` kebab name (case-insensitive),
 ///   else the entry is rejected with a warning;
 /// - the prefix name resolves via `db.itemstat_by_name`; unknown names keep
@@ -1996,7 +2004,8 @@ mod tests {
             .count();
         assert_eq!(populated, 13);
 
-        // Dual wield on both sets: every hand is worn, so every slot fills.
+        // Dual wield on both sets: set 1 fills, set 2 does not. Holding a
+        // weapon in set 2 does not put those cells in the stat-bearing set.
         let mut dual = ValidatedBuild {
             weapons: ValidatedWeapons {
                 set1: ValidatedWeaponSet {
@@ -2011,13 +2020,21 @@ mod tests {
             ..ValidatedBuild::default()
         };
         dual.fill_worn_gear_slots(prefix.clone());
+        assert!(dual.prefix_for(GearSlot::WeaponSet1Main).is_some());
+        assert!(dual.prefix_for(GearSlot::WeaponSet1Off).is_some());
+        for set2 in [GearSlot::WeaponSet2Main, GearSlot::WeaponSet2Off] {
+            assert!(
+                dual.prefix_for(set2).is_none(),
+                "{set2:?} holds a weapon but prefix fill must not write it"
+            );
+        }
         assert_eq!(
             GearSlot::ALL
                 .iter()
                 .filter(|slot| dual.prefix_for(**slot).is_some())
                 .count(),
-            16,
-            "a fully armed build must still fill every slot"
+            14,
+            "armour, trinkets, and set 1 — not set 2"
         );
 
         // A blank string is an empty hand, not a weapon called "".
@@ -2711,9 +2728,11 @@ mod tests {
         }
     }
 
-    /// A build holding a one-handed weapon in every hand of both sets, so all
-    /// sixteen slots are worn. `validate_weapons` runs before the gear
-    /// validators in `validate_gemini_build`, so this is the state they see.
+    /// A build holding a one-handed weapon in every hand of both sets.
+    /// `wears` is true for all sixteen slots. Prefix fill still only writes
+    /// [`crate::search::STAT_SLOTS`]; set 2 stays empty unless a plate names it.
+    /// `validate_weapons` runs before the gear validators in
+    /// `validate_gemini_build`, so this is the state they see.
     fn dual_wielding_both_sets() -> ValidatedBuild {
         let hand = |name: &str| Some(name.to_string());
         ValidatedBuild {
@@ -2819,17 +2838,144 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_gear_prefix_populates_every_slot() {
+    fn test_validate_gear_prefix_populates_stat_slots_not_set_2() {
         let db = empty_db_with_itemstats(vec![(101, "Berserker's")]);
         let result = run_validate_gear_prefix("Berserker's", &db);
-        // Every hand of both sets holds a weapon here, so every slot is worn.
-        for slot in GearSlot::ALL {
+        // Both sets hold weapons. Only the fourteen stat-bearing slots fill.
+        for slot in crate::search::STAT_SLOTS {
             let p = result
                 .prefix_for(slot)
                 .unwrap_or_else(|| panic!("slot {:?} must be populated", slot));
             assert_eq!(p.itemstat_id, 101);
             assert_eq!(p.name, "Berserker's");
         }
+        for slot in [GearSlot::WeaponSet2Main, GearSlot::WeaponSet2Off] {
+            assert!(
+                result.prefix_for(slot).is_none(),
+                "{slot:?} must stay empty; prefix validation does not write set 2"
+            );
+        }
+    }
+
+    /// SEARCH-WS2: a prefix already on weapon set 2 survives fill and
+    /// `validate_gear_prefix`. Hands being non-empty is not a reason to restamp.
+    #[test]
+    fn prefix_fill_leaves_weapon_set_2_unchanged() {
+        let profile = PrefixRef {
+            itemstat_id: 161,
+            name: "Berserker's".into(),
+        };
+        let carried = PrefixRef {
+            itemstat_id: 999,
+            name: "Carried".into(),
+        };
+        let mut build = dual_wielding_both_sets();
+        build
+            .gear_slots
+            .set(GearSlot::WeaponSet2Main, carried.clone());
+        build
+            .gear_slots
+            .set(GearSlot::WeaponSet2Off, carried.clone());
+
+        build.fill_worn_gear_slots(profile.clone());
+        assert_eq!(
+            build.prefix_for(GearSlot::WeaponSet2Main),
+            Some(&carried),
+            "fill_worn restamped set-2 main"
+        );
+        assert_eq!(
+            build.prefix_for(GearSlot::WeaponSet2Off),
+            Some(&carried),
+            "fill_worn restamped set-2 off"
+        );
+        assert_eq!(
+            build
+                .prefix_for(GearSlot::WeaponSet1Main)
+                .map(|p| p.itemstat_id),
+            Some(161)
+        );
+        assert_eq!(
+            build.prefix_for(GearSlot::Helm).map(|p| p.itemstat_id),
+            Some(161)
+        );
+
+        let swapped = PrefixRef {
+            itemstat_id: 202,
+            name: "Viper's".into(),
+        };
+        assert!(build.fill_unlocked_gear_slots(swapped, &HashMap::new()));
+        assert_eq!(build.prefix_for(GearSlot::WeaponSet2Main), Some(&carried));
+        assert_eq!(build.prefix_for(GearSlot::WeaponSet2Off), Some(&carried));
+        assert_eq!(
+            build.prefix_for(GearSlot::Helm).map(|p| p.itemstat_id),
+            Some(202),
+            "the unlocked fill must still restamp stat-bearing slots"
+        );
+
+        // Empty set-2 hands with a stale prefix: still not a fill target, so
+        // the cell is not cleared the way an empty set-1 off-hand is.
+        let mut stale_set2 = ValidatedBuild {
+            weapons: ValidatedWeapons {
+                set1: ValidatedWeaponSet {
+                    main_hand: Some("Greatsword".into()),
+                    off_hand: None,
+                },
+                set2: ValidatedWeaponSet::default(),
+            },
+            ..ValidatedBuild::default()
+        };
+        stale_set2
+            .gear_slots
+            .set(GearSlot::WeaponSet2Main, carried.clone());
+        stale_set2
+            .gear_slots
+            .set(GearSlot::WeaponSet2Off, carried.clone());
+        stale_set2
+            .gear_slots
+            .set(GearSlot::WeaponSet1Off, profile.clone());
+        stale_set2.fill_worn_gear_slots(profile);
+        assert_eq!(
+            stale_set2.prefix_for(GearSlot::WeaponSet2Main),
+            Some(&carried)
+        );
+        assert_eq!(
+            stale_set2.prefix_for(GearSlot::WeaponSet2Off),
+            Some(&carried)
+        );
+        assert!(
+            stale_set2.prefix_for(GearSlot::WeaponSet1Off).is_none(),
+            "an empty set-1 off-hand is still cleared"
+        );
+
+        let db = empty_db_with_itemstats(vec![(101, "Berserker's")]);
+        let mut response = GeminiBuildResponse::default();
+        response.stat_prefix = "Berserker's".into();
+        let mut validated = dual_wielding_both_sets();
+        validated
+            .gear_slots
+            .set(GearSlot::WeaponSet2Main, carried.clone());
+        validated
+            .gear_slots
+            .set(GearSlot::WeaponSet2Off, carried.clone());
+        validate_gear_prefix(&response, &db, &mut validated);
+        assert_eq!(
+            validated.prefix_for(GearSlot::WeaponSet2Main),
+            Some(&carried)
+        );
+        assert_eq!(
+            validated.prefix_for(GearSlot::WeaponSet2Off),
+            Some(&carried)
+        );
+        assert_eq!(
+            validated.prefix_for(GearSlot::Helm).map(|p| p.itemstat_id),
+            Some(101)
+        );
+        assert_eq!(
+            validated
+                .prefix_for(GearSlot::WeaponSet1Off)
+                .map(|p| p.itemstat_id),
+            Some(101)
+        );
     }
 
     // validate_gear_slot_map() — per-slot plate policy (spec §12.3)
