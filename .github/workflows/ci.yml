@@ -13,6 +13,23 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # PR head, not the synthetic merge commit, so base...HEAD is the PR commits.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: check commit identity
+        shell: bash
+        env:
+          CHECK_COMMIT_IDENTITY_SELFTEST: "1"
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            range="${{ github.event.pull_request.base.sha }}...HEAD"
+          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            range="HEAD"
+          else
+            range="${{ github.event.before }}...${{ github.event.after }}"
+          fi
+          bash .github/scripts/check-commit-identity.sh "$range"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
