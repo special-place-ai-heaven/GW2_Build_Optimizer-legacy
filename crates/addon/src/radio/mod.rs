@@ -89,7 +89,7 @@ pub enum RadioSort {
 }
 
 /// Per-session UI state for the Radio tab, hanging off `AddonState`.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct RadioUiState {
     pub status: RadioStatus,
     /// Station currently loaded (connecting/playing/stalled), if any.
@@ -126,4 +126,38 @@ pub struct RadioUiState {
     /// Mini radio: when the anchor was last flipped (`theme::elapsed_ms`),
     /// for the padlock's confirmation flash.
     pub mini_anchor_flash: Option<u64>,
+}
+
+impl RadioUiState {
+    pub(crate) fn merge_paint(&mut self, base: &Self, paint: &Self) {
+        crate::state::keep_worker(&mut self.status, &base.status, &paint.status);
+        crate::state::keep_worker(&mut self.current, &base.current, &paint.current);
+        crate::state::take_ui(&mut self.auto_kicked, &base.auto_kicked, &paint.auto_kicked);
+        // `now_playing` is an `Arc` shared with the snapshot.
+        crate::state::take_ui(&mut self.search_text, &base.search_text, &paint.search_text);
+        crate::state::keep_worker(&mut self.results, &base.results, &paint.results);
+        crate::state::merge_busy(&mut self.searching, base.searching, paint.searching);
+        crate::state::merge_message(&mut self.last_error, &base.last_error, &paint.last_error);
+        crate::state::take_ui(
+            &mut self.selected_genre,
+            &base.selected_genre,
+            &paint.selected_genre,
+        );
+        crate::state::take_ui(&mut self.sort, &base.sort, &paint.sort);
+        crate::state::take_ui(&mut self.mini_snap, &base.mini_snap, &paint.mini_snap);
+        crate::state::take_ui(&mut self.mini_live_w, &base.mini_live_w, &paint.mini_live_w);
+        crate::state::take_ui(&mut self.mini_press, &base.mini_press, &paint.mini_press);
+        crate::state::take_ui(
+            &mut self.mini_display,
+            &base.mini_display,
+            &paint.mini_display,
+        );
+        crate::state::take_ui(&mut self.mini_fade, &base.mini_fade, &paint.mini_fade);
+        crate::state::take_ui(&mut self.mini_hover, &base.mini_hover, &paint.mini_hover);
+        crate::state::take_ui(
+            &mut self.mini_anchor_flash,
+            &base.mini_anchor_flash,
+            &paint.mini_anchor_flash,
+        );
+    }
 }

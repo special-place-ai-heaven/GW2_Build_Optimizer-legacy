@@ -355,6 +355,39 @@ pub struct FeedbackState {
 }
 
 impl FeedbackState {
+    /// Fold one frame of About-tab edits. Messages and taxonomy stay with
+    /// `self` when a worker published them; the open draft is the player's.
+    pub(crate) fn merge_paint(&mut self, base: &Self, paint: &Self) {
+        self.draft = paint.draft.clone();
+        self.view = paint.view;
+        self.view_chosen = paint.view_chosen;
+        self.expanded = paint.expanded.clone();
+        self.dirty = paint.dirty;
+        self.was_open = paint.was_open;
+        self.snapshot = paint.snapshot.clone();
+        crate::state::merge_busy(
+            &mut self.taxonomy_fetching,
+            base.taxonomy_fetching,
+            paint.taxonomy_fetching,
+        );
+        crate::state::merge_busy(&mut self.refreshing, base.refreshing, paint.refreshing);
+        crate::state::merge_busy(
+            &mut self.account_looking_up,
+            base.account_looking_up,
+            paint.account_looking_up,
+        );
+        crate::state::merge_busy(
+            &mut self.refresh_requested,
+            base.refresh_requested,
+            paint.refresh_requested,
+        );
+        crate::state::merge_busy_opt(&mut self.sending, &base.sending, &paint.sending);
+        if self.messages.len() == base.messages.len() && paint.messages.len() != base.messages.len()
+        {
+            self.messages = paint.messages.clone();
+        }
+    }
+
     /// Open a fresh draft over a frozen copy of the current taxonomy.
     pub fn open_draft(&mut self) {
         self.draft = Some(Draft::new(self.taxonomy.clone()));

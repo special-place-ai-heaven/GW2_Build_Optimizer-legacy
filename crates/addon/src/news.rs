@@ -30,7 +30,7 @@ pub struct NewsItem {
     pub image_url: Option<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct NewsState {
     feeds: [Option<Vec<NewsItem>>; 5],
     pub loading: bool,
@@ -48,7 +48,38 @@ pub struct NewsState {
     pub still_zoom: f32,
 }
 
+fn news_feeds_same(a: &[Option<Vec<NewsItem>>; 5], b: &[Option<Vec<NewsItem>>; 5]) -> bool {
+    a.iter()
+        .zip(b.iter())
+        .all(|(left, right)| match (left, right) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(p, q)| p.url == q.url && p.title == q.title)
+            }
+            _ => false,
+        })
+}
+
 impl NewsState {
+    pub(crate) fn merge_paint(&mut self, base: &Self, paint: &Self) {
+        crate::state::take_ui(&mut self.search, &base.search, &paint.search);
+        crate::state::take_ui(&mut self.filter, &base.filter, &paint.filter);
+        crate::state::take_ui(&mut self.expanded, &base.expanded, &paint.expanded);
+        crate::state::take_ui(&mut self.still_zoom, &base.still_zoom, &paint.still_zoom);
+        crate::state::merge_busy(&mut self.loading, base.loading, paint.loading);
+        crate::state::merge_busy(&mut self.art_loading, base.art_loading, paint.art_loading);
+        if news_feeds_same(&self.feeds, &base.feeds) {
+            self.feeds = paint.feeds.clone();
+            self.fetched_at = paint.fetched_at;
+            self.failed_at = paint.failed_at;
+            self.official_lang = paint.official_lang.clone();
+        }
+    }
+
     pub fn items(&self, src: NewsSource) -> &[NewsItem] {
         self.feeds[src.index()].as_deref().unwrap_or(&[])
     }

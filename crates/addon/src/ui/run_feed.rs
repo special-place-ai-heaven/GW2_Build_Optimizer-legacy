@@ -4,10 +4,11 @@
 //! generation pill at the right end of the results tab strip, and the
 //! collapsible run log under it.
 //!
-//! Everything here runs on the render thread, which already holds STATE
-//! (`ui/mod.rs` locks it around the whole frame). `with_state` from here
-//! would lock a non-re-entrant mutex twice and hang the game, so callers
-//! pass what these functions need (the cost currency) as arguments; the
+//! Everything here runs on the render thread. The window body paints a
+//! snapshot and does not hold STATE across layout (`ui/mod.rs`), but these
+//! functions still must not call `with_state`: the mutex is not re-entrant,
+//! and a caller that does hold it would deadlock. Callers pass what these
+//! functions need (the cost currency) as arguments; the
 //! `render_paths_never_take_the_state_lock` test holds that line.
 
 use std::time::Instant;
@@ -23,7 +24,7 @@ use gw2_core::i18n::{t, tf};
 use crate::ui::{cost_format::format_cost, theme};
 
 /// The feed of the run in flight (or the last one), mirrored from its worker.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LiveFeed {
     /// Which run owns this feed; a worker only writes to its own.
     pub run_id: u64,
@@ -388,14 +389,14 @@ mod tests {
         assert_eq!(format_tokens(1_300_000), "1.3M");
     }
 
-    /// The rule: code the render thread runs never calls `with_state`. The
-    /// frame already holds STATE (`ui/mod.rs`), the mutex is not re-entrant,
-    /// and a second lock hangs the game. The cost pill once read the currency
-    /// that way. This pins the files the generation pill and the Generations
-    /// tab draw through: all of run_feed.rs and cost_format.rs, and every
-    /// `render_*` / `draw_*` function of comparison.rs and the tab. Workers
-    /// (closures handed to `spawn_worker*`, guards they own) stay outside the
-    /// pinned functions.
+    /// The rule: code the render thread paints never calls `with_state`.
+    /// STATE is not re-entrant, so a second lock from a `render_*` / `draw_*`
+    /// path hangs the game whether or not the window body is currently inside
+    /// `with_state`. The cost pill once read the currency that way. This pins
+    /// the files the generation pill and the Generations tab draw through:
+    /// all of run_feed.rs and cost_format.rs, and every `render_*` / `draw_*`
+    /// function of comparison.rs and the tab. Workers (closures handed to
+    /// `spawn_worker*`, guards they own) stay outside the pinned functions.
     #[test]
     fn render_paths_never_take_the_state_lock() {
         fn production(src: &str) -> &str {
@@ -421,7 +422,7 @@ mod tests {
         for (file, src) in [
             ("run_feed.rs", include_str!("run_feed.rs")),
             ("cost_format.rs", include_str!("cost_format.rs")),
-            // The mini radio window body: `ui::render_mini_radio` holds STATE.
+            // The mini radio window body paints a snapshot and must not lock STATE.
             ("mini_radio.rs", include_str!("mini_radio.rs")),
             // Choya's sprites, quip bubble and quip driver draw from it.
             ("radio/art.rs", include_str!("../radio/art.rs")),
@@ -454,6 +455,71 @@ mod tests {
             }
             assert!(pinned >= 2, "{file}: no render functions found to pin");
         }
+    }
+
+    /// The main and mini window bodies snapshot STATE, draw, then commit.
+    /// Layout itself (`paint_*_screen`) must not take the lock.
+    #[test]
+    fn window_body_releases_state_before_layout() {
+        fn body(src: &str, at: usize) -> &str {
+            let open = src[at..].find('{').expect("fn body") + at;
+            let mut depth = 0usize;
+            for (i, c) in src[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return &src[at..=open + i];
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            panic!("unclosed fn at byte {at}");
+        }
+        let src = include_str!("mod.rs");
+        for (paint, screen, layout) in [
+            (
+                "fn paint_main_window",
+                "fn paint_main_screen",
+                "main_view::render_main",
+            ),
+            (
+                "fn paint_mini_window",
+                "fn paint_mini_screen",
+                "mini_radio::render_window",
+            ),
+        ] {
+            let paint_body = body(
+                src,
+                src.find(paint).unwrap_or_else(|| panic!("missing {paint}")),
+            );
+            let take = paint_body.find("PaintCapture::take").expect("capture");
+            let screen_call = paint_body
+                .find(screen.trim_start_matches("fn "))
+                .expect("screen call");
+            let commit = paint_body.find(".commit(").expect("commit");
+            assert!(take < screen_call && screen_call < commit, "{paint} shape");
+            let screen_body = body(
+                src,
+                src.find(screen)
+                    .unwrap_or_else(|| panic!("missing {screen}")),
+            );
+            assert!(
+                screen_body.contains(layout),
+                "{screen} does not draw {layout}"
+            );
+            assert!(
+                !screen_body.contains("with_state("),
+                "{screen} holds STATE across layout"
+            );
+        }
+        // The ImGui build closures only call the paint functions.
+        assert!(src.contains(".build(ui, || {\n                paint_main_window(ui);"));
+        assert!(
+            src.contains(".build(ui, || {\n                paint_mini_window(ui, fade, leaving);")
+        );
     }
 
     #[test]

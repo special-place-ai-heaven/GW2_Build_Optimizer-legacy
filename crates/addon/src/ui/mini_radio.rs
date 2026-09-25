@@ -4,9 +4,10 @@
 //! song title scrolling over it. Right end: the dancing Choya standing on the
 //! strip and rising out over its top edge, with her quips.
 //!
-//! Drawn by `ui::render_mini_radio`, which owns the window and the STATE
-//! lock; everything here takes `&mut AddonState` from it and never locks
-//! STATE itself (pinned by `run_feed::render_paths_never_take_the_state_lock`).
+//! Drawn by `ui::render_mini_radio`, which owns the window. The body paints
+//! a snapshot of STATE and does not hold the mutex; everything here takes
+//! `&mut AddonState` from that snapshot and never locks STATE itself
+//! (pinned by `run_feed::render_paths_never_take_the_state_lock`).
 //! Every animation runs on the wall clock (`art::tick`, `theme::elapsed_ms`).
 
 use nexus::imgui::{ColorEdit, DrawListMut, Slider, Ui, WindowFlags};
