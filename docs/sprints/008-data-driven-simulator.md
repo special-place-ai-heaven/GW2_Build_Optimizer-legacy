@@ -457,6 +457,14 @@ Increment log:
   the post-trait snapshot in `fold_into_validated_stats`). No wiki/log
   oracle for the reorder. E19, E18, and E28 untouched.
 
+- 2026-09-25, E28: `effect_coverage` verdicts are engine-true.
+  `unexecutable_reason` abstains a `ProcEffect` with no inner payload,
+  naming the missing impacts/interval consumer. Rushing Justice flames
+  `skill:62668/62603/62648:0` no longer tally Executable. A coefficient
+  `ProcEffect` with inner `StrikeDamagePct` (Sigil of Fire) still does.
+  Pin `rushing_justice_flames_abstain_without_impacts_interval_consumer`.
+  No impacts/interval consumer implemented.
+
 Engine gaps the review measured (counted Executable, never run). The next
 engine increment (single-writer) closes these before more professions are
 authored, or the executable column overstates:
@@ -491,7 +499,7 @@ authored, or the executable column overstates:
 | E25 | CLOSED 2026-09-24: the "vs meta" meter used uncapped direction alignment | `benchmark.rs:681` |
 | E26 | CLOSED 2026-09-24: stale lock label. The Improve results lock pill now shows the lock the run actually used (`ComparisonState.run_locked_spec`, set from the run's start snapshot, cleared on every list reset and on Choya pushes) instead of the live locks, so a result produced without a lock is never labelled "Locked" | engine/search tiers |
 | E27 | CLOSED: wiki-cited per-mode overrides for Impossible Odds, Phantom's Onslaught, Splinter Weapon, and Sword of Justice 9168 (`hit_count` 4 + `damage_coefficient:above_50`). Test `sword_of_justice_lands_wiki_hits_per_mode`. | `builder.rs` damage-alternative resolution, `balance_overrides` format |
-| E28 | `effect_coverage` counts a record executable by schema shape alone; Rushing Justice's flames `ProcEffect` records count executable but the flow sim has no impacts/interval consumer for them, an instrument overstatement | `effect_coverage` |
+| E28 | CLOSED 2026-09-25: `effect_coverage` abstains a `ProcEffect` with no inner payload. Rushing Justice flames `skill:62668/62603/62648:0` no longer tally Executable; the reason names the missing impacts/interval consumer. Pin `rushing_justice_flames_abstain_without_impacts_interval_consumer`. No impacts/interval consumer. | `effect_coverage`, `unexecutable_reason` |
 
 Format gaps the builders named (each is a coverage block today): on-weapon-swap,
 on-struck, on-ally-healed, on-kill, on-combo / on-aura, first-strike-after-

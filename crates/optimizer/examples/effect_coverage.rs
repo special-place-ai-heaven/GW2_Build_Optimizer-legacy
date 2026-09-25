@@ -1,8 +1,12 @@
-//! Print the Gate 1 table: how much of the game has an effect record.
+//! Print the Gate 1 table: how much of the game has an effect record the
+//! named engine can run.
 //!
 //! `docs/sprints/008-data-driven-simulator.md` Gate 1 is a set of counts.
 //! This is the instrument that prints them, so "done" is a number rather
-//! than a report. The computation lives in the library
+//! than a report. Verdicts are engine-true: Executable is a record the
+//! engine can run, not one whose schema shape looks runnable. A `ProcEffect`
+//! that needs an impacts/interval consumer the flow sim lacks is Abstaining.
+//! The computation lives in the library
 //! (`gw2_optimizer::data::effect_coverage`), which is what the addon and the
 //! tests read too — this example only formats it.
 //!
