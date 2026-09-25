@@ -550,10 +550,28 @@ struct ScheduledStrike {
     dmg_multiplier: f64,
 }
 
+/// Flow `run` does not tick dodge. Flip to `false` only when `run` calls
+/// `dodge_action.try_dodge`. Deleting this without wiring fails
+/// `kent_flow_e0_dodge_emits_or_abstains`.
+#[cfg(test)]
+const FLOW_E0_DODGE_UNWIRED: bool = true;
+#[cfg(test)]
+const FLOW_E0_DODGE_UNWIRED_WHY: &str =
+    "OnDodge is WvW-timeline-only; SimState holds Endurance/Dodge for a follow-up tick";
+
+/// Flow `run` does not spawn or consume clones. Flip to `false` only when
+/// `run` calls `spawn_clone`. Deleting this without wiring fails
+/// `kent_flow_e4_illusion_not_dead`.
+#[cfg(test)]
+const FLOW_E4_ILLUSION_UNWIRED: bool = true;
+#[cfg(test)]
+const FLOW_E4_ILLUSION_UNWIRED_WHY: &str =
+    "IllusionState is constructed but never spawn_clone/consume; clone bus is WvW-timeline-only";
+
 struct SimState {
     /// E0: shared TriggerBus + Endurance/Dodge types with wvw_timeline.
     /// OnDisableFoe is wired here (E1 landed-disable emit). Live try_dodge / OnDodge
-    /// remains WvW-only today; flow dodge tick hookup is follow-up.
+    /// remains WvW-only today; see `FLOW_E0_DODGE_UNWIRED`.
     trigger_bus: super::trigger_bus::TriggerBus,
     #[allow(dead_code)]
     endurance: super::trigger_bus::EndurancePool,
@@ -564,6 +582,7 @@ struct SimState {
     /// One attune swap per flow-sim run (first-swap setup). After this, attunes never beat filler.
     attunement_swapped: bool,
     /// E4: shared IllusionState with wvw_timeline (sole clone-count writer).
+    /// Unread in `run`; see `FLOW_E4_ILLUSION_UNWIRED`.
     #[allow(dead_code)]
     illusion: super::illusion::IllusionState,
 
@@ -4158,6 +4177,87 @@ mod tests {
             super::super::attunement::AttunementState::new();
         let _also_illusion: super::super::illusion::IllusionState =
             super::super::illusion::IllusionState::new();
+    }
+
+    fn run_flow_auto() -> SimState {
+        let skills = vec![auto_attack()];
+        let mut sim = SimState::new(
+            &skills,
+            5_000,
+            TargetState::from_seed(EnemyDummy::open()),
+            SimParams::basic(2_000.0, 0.0, 1_000.0),
+        );
+        sim.run();
+        sim
+    }
+
+    /// E0 Kent: flow either emits OnDodge from `run`, or the named abstain
+    /// stays in place. Deleting the abstain without wiring `try_dodge` fails.
+    #[test]
+    fn kent_flow_e0_dodge_emits_or_abstains() {
+        use super::super::trigger_bus::{BusEvent, DODGE_COST};
+
+        let sim = run_flow_auto();
+        let dodges = sim.trigger_bus.count(BusEvent::OnDodge);
+        if FLOW_E0_DODGE_UNWIRED {
+            assert!(
+                !FLOW_E0_DODGE_UNWIRED_WHY.trim().is_empty(),
+                "dodge abstain needs a reason"
+            );
+            assert_eq!(
+                dodges, 0,
+                "{}: flow run emitted OnDodge; set FLOW_E0_DODGE_UNWIRED=false if wired",
+                FLOW_E0_DODGE_UNWIRED_WHY
+            );
+            assert_eq!(
+                sim.dodge_action.dodges, 0,
+                "unwired flow must not increment DodgeAction"
+            );
+            assert!(
+                sim.endurance.can_dodge(DODGE_COST),
+                "unwired flow must not spend endurance"
+            );
+        } else {
+            assert!(
+                dodges >= 1,
+                "FLOW_E0_DODGE_UNWIRED is false: run must emit OnDodge (wire try_dodge)"
+            );
+            assert!(sim.dodge_action.dodges >= 1);
+        }
+    }
+
+    /// E4 Kent: flow either uses IllusionState, or the named abstain stays.
+    /// Deleting the abstain without calling spawn_clone fails; dropping the
+    /// field without wiring fails compile (this test reads it).
+    #[test]
+    fn kent_flow_e4_illusion_not_dead() {
+        use super::super::illusion::CLONE_CAP;
+        use super::super::trigger_bus::BusEvent;
+
+        let sim = run_flow_auto();
+        let spawned = sim.trigger_bus.count(BusEvent::OnCloneCreated);
+        if FLOW_E4_ILLUSION_UNWIRED {
+            assert!(
+                !FLOW_E4_ILLUSION_UNWIRED_WHY.trim().is_empty(),
+                "illusion abstain needs a reason"
+            );
+            assert_eq!(
+                sim.illusion.count, 0,
+                "{}: flow run spawned clones; set FLOW_E4_ILLUSION_UNWIRED=false if wired",
+                FLOW_E4_ILLUSION_UNWIRED_WHY
+            );
+            assert_eq!(
+                spawned, 0,
+                "{}: flow run emitted OnCloneCreated; set FLOW_E4_ILLUSION_UNWIRED=false if wired",
+                FLOW_E4_ILLUSION_UNWIRED_WHY
+            );
+            assert_eq!(sim.illusion.cap, CLONE_CAP);
+        } else {
+            assert!(
+                spawned >= 1 || sim.illusion.count >= 1,
+                "FLOW_E4_ILLUSION_UNWIRED is false: run must spawn_clone or raise count"
+            );
+        }
     }
 
     /// E1 Kent: flow CrowdControl that lands emits OnDisableFoe; Stability does not.
