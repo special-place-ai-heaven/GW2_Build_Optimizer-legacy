@@ -3192,7 +3192,7 @@ mod fact_selection_tests {
             let damage_gaps: Vec<String> = unresolved_alternative_names(
                 std::slice::from_ref(&skill),
                 &db,
-                &BalanceContext::new(mode),
+                &BalanceContext::new(mode.clone()),
             )
             .into_iter()
             .filter(|n| n.contains("Damage"))
