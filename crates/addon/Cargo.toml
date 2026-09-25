@@ -12,6 +12,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gw2-core = { path = "../core" }
+# WAVE5-MEASURE allowlist: addon→gw2-api is I/O, not plated combat or flow.
+# Kept for setup key validate, character/build fetch, DataCache refresh,
+# and download_game_and_names. Do not drop this dependency.
 gw2-api = { path = "../gw2api" }
 gw2-optimizer = { path = "../optimizer" }
 # "mumble": combat detection for radio ducking (gw2_mumble is already in the

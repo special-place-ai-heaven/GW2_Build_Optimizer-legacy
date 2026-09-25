@@ -72,16 +72,16 @@ pub(super) fn rotation_breakdown(
     }
 }
 
-/// The rotation block every tab draws: the referee's own 60 s flow run
-/// (`engine::simulate_validated_flow`), the run the score's realized axes
-/// and the fidelity instruments read. New Build, Improve, Choya, the
+/// The rotation block every tab draws: the 60 s flow run inside
+/// [`gw2_optimizer::engine::measure_plated`], the run the score's realized
+/// axes and the fidelity instruments read. New Build, Improve, Choya, the
 /// reference tabs and Saves all come through here, so one validated build
 /// in one scenario shows one Simulated DPS and one Skill Usage list.
 ///
 /// The stunbreak, stability and cleanse lines are drawn beside the
 /// viability verdict, which the gate simulation decides, so they come from
-/// that run (`engine::simulate_validated_rotation`, the referee's
-/// `report.rotation`), not from the flow.
+/// that run (the façade's gate, the referee's `report.rotation`), not from
+/// the flow.
 pub(crate) fn flow_rotation(
     validated: &gw2_optimizer::validation::ValidatedBuild,
     db: &gw2_optimizer::gamedb::GameDb,
@@ -90,20 +90,60 @@ pub(crate) fn flow_rotation(
     ctx: &BalanceContext,
     scenario: &gw2_optimizer::scenario::ScenarioSpec,
 ) -> Option<gw2_core::types::RotationBreakdown> {
-    let flow = gw2_optimizer::engine::simulate_validated_flow(
+    // Rotation slice of the one plated measure. Callers that also need the
+    // stat sheet and combat tiers use `measure_plated` directly.
+    rotation_from_plated(&gw2_optimizer::engine::measure_plated(
         validated,
         db,
         profession_name,
         weights,
         ctx,
         scenario,
-    )?;
-    let mut shown = rotation_breakdown(&flow);
-    let (stats, _) =
-        gw2_optimizer::engine::calculate_validated_stats(validated, db, profession_name, ctx);
-    if let Some(gate) =
-        gw2_optimizer::engine::simulate_validated_rotation(validated, db, &stats, Some(scenario))
-    {
+    ))
+}
+
+/// Display numbers from [`gw2_optimizer::engine::measure_plated`].
+fn plated_numbers(
+    profession: &str,
+    measured: &gw2_optimizer::engine::PlatedMeasure,
+) -> (
+    gw2_core::types::StatBlock,
+    gw2_core::types::CombatMetrics,
+    gw2_core::types::CombatMetrics,
+    gw2_core::types::CombatMetrics,
+    Option<gw2_core::types::RotationBreakdown>,
+) {
+    let derived = gw2_optimizer::stats::compute_derived(&measured.stats, profession);
+    let stats = gw2_core::types::StatBlock {
+        power: measured.stats.power.round() as i32,
+        precision: measured.stats.precision.round() as i32,
+        toughness: measured.stats.toughness.round() as i32,
+        vitality: measured.stats.vitality.round() as i32,
+        condition_damage: measured.stats.condition_damage.round() as i32,
+        expertise: measured.stats.expertise.round() as i32,
+        concentration: measured.stats.concentration.round() as i32,
+        ferocity: measured.stats.ferocity.round() as i32,
+        healing_power: measured.stats.healing_power.round() as i32,
+        crit_chance: derived.crit_chance,
+        crit_damage: derived.crit_damage,
+        health: derived.health.round() as i32,
+        armor: derived.armor.round() as i32,
+    };
+    (
+        stats,
+        perf_to_combat_metrics(&measured.combat_solo),
+        perf_to_combat_metrics(&measured.combat_party),
+        perf_to_combat_metrics(&measured.combat_squad),
+        rotation_from_plated(measured),
+    )
+}
+
+fn rotation_from_plated(
+    measured: &gw2_optimizer::engine::PlatedMeasure,
+) -> Option<gw2_core::types::RotationBreakdown> {
+    let flow = measured.flow.as_ref()?;
+    let mut shown = rotation_breakdown(flow);
+    if let Some(gate) = measured.gate.as_ref() {
         shown.stunbreak_count = gate.stunbreak_count;
         shown.has_stability = gate.has_stability;
         shown.stability_uptime = gate.stability_uptime;
@@ -254,29 +294,15 @@ pub(super) fn synergy_result_to_suggestion(
 
     let sigils: Vec<String> = v.sigils.iter().map(|s| s.name.clone()).collect();
 
-    // Convert stats from optimizer StatBlock (f64) to core StatBlock (i32)
-    let derived = gw2_optimizer::stats::compute_derived(&result.stats, profession_name);
-    let estimated_stats = Some(gw2_core::types::StatBlock {
-        power: result.stats.power.round() as i32,
-        precision: result.stats.precision.round() as i32,
-        toughness: result.stats.toughness.round() as i32,
-        vitality: result.stats.vitality.round() as i32,
-        condition_damage: result.stats.condition_damage.round() as i32,
-        expertise: result.stats.expertise.round() as i32,
-        concentration: result.stats.concentration.round() as i32,
-        ferocity: result.stats.ferocity.round() as i32,
-        healing_power: result.stats.healing_power.round() as i32,
-        crit_chance: derived.crit_chance,
-        crit_damage: derived.crit_damage,
-        health: derived.health.round() as i32,
-        armor: derived.armor.round() as i32,
-    });
-
-    let combat_solo = Some(perf_to_combat_metrics(&result.combat_solo));
-    let combat_party = Some(perf_to_combat_metrics(&result.combat_party));
-    let combat_squad = Some(perf_to_combat_metrics(&result.combat_squad));
-
-    let rotation = flow_rotation(v, db, profession_name, weights, ctx, scenario);
+    // Stats' plated path, which is `measure_validated` → `measure_plated`.
+    // The synergy result still carries its own sheet for ranking; the tab
+    // shows this one.
+    let displayed = super::stats::plated_display(v, db, profession_name, weights, ctx, scenario);
+    let estimated_stats = displayed.estimated_stats;
+    let combat_solo = displayed.combat_solo;
+    let combat_party = displayed.combat_party;
+    let combat_squad = displayed.combat_squad;
+    let rotation = displayed.rotation;
 
     let changes_made: Vec<String> = v
         .changes
@@ -634,9 +660,9 @@ fn leftover_plate_quality(empty_kit: bool) -> gw2_optimizer::data::DataQuality {
 }
 
 /// Measure a tab known only by its strings (a save): validated the way a
-/// Choya plate is, then the engine's stat sheet ([`attach_chat_stats`]) and
-/// flow run ([`flow_rotation`]) like every other tab, in the scenario the
-/// player has selected now. A plate the validator rejects is left as saved.
+/// Choya plate is, then [`measure_validated`] (the plated combat and flow
+/// measure) like every other tab, in the scenario the player has selected
+/// now. A plate the validator rejects is left as saved.
 pub(super) fn simulate_suggestion_rotation(
     suggestion: &mut crate::ui::comparison::BuildSuggestion,
     db: &gw2_optimizer::gamedb::GameDb,
@@ -678,10 +704,10 @@ pub(super) fn simulate_suggestion_rotation(
     );
 }
 
-/// A tab's measured half from its validated build: the engine's stat sheet
-/// ([`attach_chat_stats`]) and flow run ([`flow_rotation`]). Choya plates,
-/// the legacy Improve enrichment and Saves; the optimizer's own tabs get the
-/// same two from `synergy_result_to_suggestion`.
+/// A tab's measured half from its validated build: [`gw2_optimizer::engine::measure_plated`].
+/// Choya plates, the legacy Improve enrichment, Saves, and Generations open.
+/// Optimizer suggestions fill the same numbers in `synergy_result_to_suggestion`.
+/// Stats uses [`super::stats::plated_display`], which calls this.
 pub(super) fn measure_validated(
     suggestion: &mut crate::ui::comparison::BuildSuggestion,
     validated: &gw2_optimizer::validation::ValidatedBuild,
@@ -691,14 +717,41 @@ pub(super) fn measure_validated(
     ctx: &BalanceContext,
     scenario: &gw2_optimizer::scenario::ScenarioSpec,
 ) {
-    attach_chat_stats(
-        suggestion,
+    note_validated_quality(suggestion, validated, db, profession_name, ctx);
+    let measured = gw2_optimizer::engine::measure_plated(
+        validated,
         db,
         profession_name,
-        &ctx.game_mode,
-        Some(validated),
+        weights,
+        ctx,
+        scenario,
     );
-    suggestion.rotation = flow_rotation(validated, db, profession_name, weights, ctx, scenario);
+    let (stats, solo, party, squad, rotation) = plated_numbers(profession_name, &measured);
+    suggestion.estimated_stats = Some(stats);
+    suggestion.combat_solo = Some(solo);
+    suggestion.combat_party = Some(party);
+    suggestion.combat_squad = Some(squad);
+    suggestion.rotation = rotation;
+}
+
+fn note_validated_quality(
+    suggestion: &mut crate::ui::comparison::BuildSuggestion,
+    validated: &gw2_optimizer::validation::ValidatedBuild,
+    db: &gw2_optimizer::gamedb::GameDb,
+    profession: &str,
+    ctx: &BalanceContext,
+) {
+    for warning in &validated.warnings {
+        if !suggestion.quality_reasons.iter().any(|r| r == warning) {
+            suggestion.quality_reasons.push(warning.clone());
+        }
+    }
+    for reason in gw2_optimizer::engine::gear_quality_reasons(validated, db, profession, ctx) {
+        let text = reason.to_string();
+        if !suggestion.quality_reasons.iter().any(|r| r == &text) {
+            suggestion.quality_reasons.push(text);
+        }
+    }
 }
 
 /// Parse weapon sets from suggestion.weapons strings.
@@ -2828,6 +2881,127 @@ pub(super) mod tests {
                 "{mode:?}: damage skills deal damage"
             );
             assert_eq!(measured(&optimized), measured(&chat), "{mode:?}");
+        }
+    }
+
+    /// Stats reads a plated build through [`super::super::stats::plated_display`]
+    /// (`measure_validated` → `measure_plated`), and the closed-form helper
+    /// matches that measure on the same sheet.
+    #[test]
+    fn stats_tab_matches_measure_validated_on_a_plated_build() {
+        fn fn_body<'a>(src: &'a str, name: &str) -> &'a str {
+            let needle = format!("fn {name}(");
+            let start = src
+                .find(&needle)
+                .unwrap_or_else(|| panic!("{name} missing"));
+            let after = &src[start..];
+            let rest = &after[1..];
+            let end = [
+                "\nfn ",
+                "\npub(super) fn ",
+                "\npub(crate) fn ",
+                "\npub fn ",
+                "\n#[cfg",
+            ]
+            .iter()
+            .filter_map(|marker| rest.find(marker))
+            .min()
+            .unwrap_or(rest.len());
+            &after[..end + 1]
+        }
+
+        let stats_src = include_str!("stats.rs");
+        let display = fn_body(stats_src, "plated_display");
+        assert!(
+            display.contains("measure_validated"),
+            "Stats plated path must call measure_validated"
+        );
+        assert!(
+            !display.contains("calculate_combat_performance"),
+            "Stats must not own a combat formula"
+        );
+        let tiers = fn_body(stats_src, "compute_3tier_combat");
+        assert!(
+            tiers.contains("combat_tiers"),
+            "closed-form tiers must use the façade's combat half"
+        );
+        assert!(
+            !tiers.contains("calculate_combat_performance"),
+            "compute_3tier_combat must not call calculate_combat_performance"
+        );
+
+        let opt_src = include_str!("optimization.rs");
+        let authority = fn_body(opt_src, "measure_validated");
+        assert!(
+            authority.contains("measure_plated"),
+            "measure_validated must wrap measure_plated"
+        );
+        assert!(!authority.contains("calculate_combat_performance"));
+        assert!(
+            !authority.contains("simulate_validated_flow"),
+            "flow stays inside measure_plated"
+        );
+
+        let (db, v) = hand_built_thief();
+        let weights = gw2_optimizer::scoring::OptimizationWeights::default();
+        for mode in [
+            gw2_core::types::GameMode::WvW,
+            gw2_core::types::GameMode::PvE,
+        ] {
+            let ctx = gw2_optimizer::balance::BalanceContext::new(mode.clone());
+            let scenario = gw2_optimizer::scenario::ScenarioSpec::for_request(
+                &ctx,
+                gw2_optimizer::scenario::CombatTier::Solo,
+                None,
+                &weights,
+            );
+            let mut via_authority = BuildSuggestion::default();
+            super::measure_validated(
+                &mut via_authority,
+                &v,
+                &db,
+                "Thief",
+                &weights,
+                &ctx,
+                &scenario,
+            );
+            let via_stats =
+                super::super::stats::plated_display(&v, &db, "Thief", &weights, &ctx, &scenario);
+            let snap = |s: &BuildSuggestion| {
+                serde_json::to_string(&(
+                    &s.estimated_stats,
+                    &s.combat_solo,
+                    &s.combat_party,
+                    &s.combat_squad,
+                    &s.rotation,
+                ))
+                .expect("serializable")
+            };
+            assert_eq!(snap(&via_stats), snap(&via_authority), "{mode:?}");
+
+            let measured =
+                gw2_optimizer::engine::measure_plated(&v, &db, "Thief", &weights, &ctx, &scenario);
+            let derived = gw2_optimizer::stats::compute_derived(&measured.stats, "Thief");
+            let (solo, party, squad) = super::super::stats::compute_3tier_combat(
+                &measured.stats,
+                &derived,
+                &measured.modifiers,
+                "Thief",
+                &ctx,
+            );
+            assert_eq!(via_authority.combat_solo, solo, "{mode:?} solo");
+            assert_eq!(via_authority.combat_party, party, "{mode:?} party");
+            assert_eq!(via_authority.combat_squad, squad, "{mode:?} squad");
+            let flow = measured.flow.as_ref().expect("the plate has a bar");
+            let shown = via_authority.rotation.as_ref().expect("rotation");
+            assert_eq!(
+                shown.simulated_dps,
+                flow.total_dps.round() as i32,
+                "{mode:?}"
+            );
+            assert!(shown.simulated_dps > 0, "{mode:?}");
+            let est = via_authority.estimated_stats.as_ref().expect("stats");
+            assert_eq!(est.power, measured.stats.power.round() as i32, "{mode:?}");
         }
     }
 

@@ -1,3 +1,7 @@
+//! GW2 API use here is allowlisted I/O: the character list, build and
+//! equipment tab fetch, and the DataCache copies of those payloads.
+//! Not a measure path.
+
 use super::resolution::resolve_selected_build_inner;
 use crate::state::AddonState;
 

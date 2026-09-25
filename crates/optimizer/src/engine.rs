@@ -1795,6 +1795,81 @@ pub fn simulate_flow(
     rotation::simulator::simulate_with(&prepared.skills, FLOW_WINDOW_MS, &params, enemy)
 }
 
+/// Closed-form Solo / Party / Squad combat for one stat sheet.
+///
+/// The combat half of [`measure_plated`]. Call sites that only have a sheet
+/// (not a plate) use this so they do not grow a second
+/// [`combat::calculate_combat_performance`] loop.
+pub fn combat_tiers(
+    stats: &stats::StatBlock,
+    derived: &stats::DerivedStats,
+    modifiers: &DamageModifiers,
+    profession: &str,
+    ctx: &BalanceContext,
+) -> [CombatPerformance; 3] {
+    let profiles = combat::buff_profiles_for_profession(profession, ctx);
+    let condition_weights = combat::condition_weights_for_profession(profession, ctx);
+    let tier = |index: usize| {
+        combat::calculate_combat_performance(
+            stats,
+            derived,
+            modifiers,
+            &profiles[index],
+            &condition_weights,
+            profession,
+            ctx,
+        )
+    };
+    // `buff_profiles_for_profession` always returns three profiles.
+    [tier(0), tier(1), tier(2)]
+}
+
+/// Plated-build combat and flow, once.
+///
+/// Stat sheet, three closed-form tiers, the 60 s flow run, and the gate
+/// run's control lines. Optimizer suggestions, Generations open, Saves, and
+/// Stats read this (the addon wrapper is `measure_validated`).
+#[derive(Debug, Clone)]
+pub struct PlatedMeasure {
+    pub stats: stats::StatBlock,
+    pub modifiers: DamageModifiers,
+    pub combat_solo: CombatPerformance,
+    pub combat_party: CombatPerformance,
+    pub combat_squad: CombatPerformance,
+    /// `None` when the bar resolved to no skills.
+    pub flow: Option<rotation::SimulationResult>,
+    /// Gate-window run. Stunbreak, stability, and cleanse on the displayed
+    /// rotation come from here, beside the viability verdict.
+    pub gate: Option<rotation::SimulationResult>,
+}
+
+/// Measure one validated plate. Display paths call this instead of rolling
+/// their own combat or flow.
+pub fn measure_plated(
+    validated: &ValidatedBuild,
+    db: &GameDb,
+    profession_name: &str,
+    weights: &OptimizationWeights,
+    ctx: &BalanceContext,
+    scenario: &crate::scenario::ScenarioSpec,
+) -> PlatedMeasure {
+    let (stats, modifiers) = calculate_validated_stats(validated, db, profession_name, ctx);
+    let derived = stats::compute_derived(&stats, profession_name);
+    let [combat_solo, combat_party, combat_squad] =
+        combat_tiers(&stats, &derived, &modifiers, profession_name, ctx);
+    let flow = simulate_validated_flow(validated, db, profession_name, weights, ctx, scenario);
+    let gate = simulate_validated_rotation(validated, db, &stats, Some(scenario));
+    PlatedMeasure {
+        stats,
+        modifiers,
+        combat_solo,
+        combat_party,
+        combat_squad,
+        flow,
+        gate,
+    }
+}
+
 /// The flow run the referee scores a validated build on, for display: the
 /// stat sheet from [`calculate_validated_stats`], then
 /// [`prepare_validated_rotation`] -> [`simulate_flow`], exactly as
@@ -3266,35 +3341,8 @@ pub fn synergy_result_from_validated(
 ) -> SynergyResult {
     let (full_stats, modifiers) = calculate_validated_stats(&validated, db, profession_name, ctx);
     let derived = stats::compute_derived(&full_stats, profession_name);
-    let buff_profiles = combat::buff_profiles_for_profession(profession_name, ctx);
-    let cw = combat::condition_weights_for_profession(profession_name, ctx);
-    let combat_solo = combat::calculate_combat_performance(
-        &full_stats,
-        &derived,
-        &modifiers,
-        &buff_profiles[0],
-        &cw,
-        profession_name,
-        ctx,
-    );
-    let combat_party = combat::calculate_combat_performance(
-        &full_stats,
-        &derived,
-        &modifiers,
-        &buff_profiles[1],
-        &cw,
-        profession_name,
-        ctx,
-    );
-    let combat_squad = combat::calculate_combat_performance(
-        &full_stats,
-        &derived,
-        &modifiers,
-        &buff_profiles[2],
-        &cw,
-        profession_name,
-        ctx,
-    );
+    let [combat_solo, combat_party, combat_squad] =
+        combat_tiers(&full_stats, &derived, &modifiers, profession_name, ctx);
     let rotation = simulate_validated_rotation(&validated, db, &full_stats, scenario);
     let (mut data_quality, mut quality_reasons) = quality_from_modifiers(
         &modifiers,
