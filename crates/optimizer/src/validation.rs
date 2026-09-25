@@ -1080,9 +1080,6 @@ fn legend_ids_from_plate(response: &GeminiBuildResponse, db: &GameDb) -> Vec<Str
 }
 
 fn fill_revenant_legends(response: &GeminiBuildResponse, result: &mut ValidatedBuild, db: &GameDb) {
-    if db.legends.is_empty() {
-        return;
-    }
     let spec_ids: Vec<u32> = result.specializations.iter().map(|s| s.spec_id).collect();
     let explicit: Vec<String> = legend_ids_from_plate(response, db)
         .into_iter()
@@ -4066,5 +4063,18 @@ mod tests {
             "rest-pad must not claim inferred from heal: {:?}",
             result.warnings
         );
+    }
+
+    /// Hollow `/v2/legends` must not plate a Revenant as success-with-empty-bars.
+    #[test]
+    fn revenant_fill_hollow_legends_does_not_succeed() {
+        let db = GameDb::empty_for_tests();
+        let mut result = ValidatedBuild::default();
+        result.skills.heal = Some((10, "Heal One".into()));
+        fill_revenant_legends(&GeminiBuildResponse::default(), &mut result, &db);
+        assert!(result.legends.is_empty(), "{:?}", result.legends);
+        assert_eq!(result.skills.heal.as_ref().map(|h| h.0), Some(10));
+        assert!(result.skills.elite.is_none());
+        assert!(result.skills.utilities.iter().all(|u| u.is_none()));
     }
 }
