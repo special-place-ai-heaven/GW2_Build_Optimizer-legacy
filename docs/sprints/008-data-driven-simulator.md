@@ -452,10 +452,7 @@ Increment log:
   utilities. `has_static_effect` is true when the tooltip has a standing
   conversion, so Superior Sharpening Stone (9443) can win over a weaker
   flat utility on a fixture sheet. Pin
-  `conversion_only_utility_selected_when_it_beats_flat`. E20b banked:
-  conversion order vs `stats::apply_trait_conversions` is unchanged (still
-  the post-trait snapshot in `fold_into_validated_stats`). No wiki/log
-  oracle for the reorder. E19 and E28 untouched. E18 closed 2026-09-25.
+  `conversion_only_utility_selected_when_it_beats_flat`. E19 and E28 untouched. E18 closed 2026-09-25.
 
 - 2026-09-25, E28: `effect_coverage` verdicts are engine-true.
   `unexecutable_reason` abstains a `ProcEffect` with no inner payload,
@@ -464,6 +461,20 @@ Increment log:
   `ProcEffect` with inner `StrikeDamagePct` (Sigil of Fire) still does.
   Pin `rushing_justice_flames_abstain_without_impacts_interval_consumer`.
   No impacts/interval consumer implemented.
+
+- 2026-09-25, E20b: consumable `StatConversion` reads the same pre-conversion
+  sheet as `stats::apply_trait_conversions`. Oracle
+  <https://wiki.guildwars2.com/wiki/Gain_X_Based_on_Y> (read 2026-09-25):
+  "All conversions are done before other conversions are taken into account
+  so the value gained from them is not factored in to any other conversions."
+  That page also lists flat food and flat utility bonuses among the sources
+  conversions are based on (gear, rune flats, trait flats, stacking sigils).
+  `calculate_validated_stats` adds food/utility flats, snapshots, then applies
+  trait conversions and the stone from that snapshot. Superior Sharpening
+  Stone (9443) therefore does not gain Power from Ferocity a trait conversion
+  just added, and the trait conversion does see the food's flat Power.
+  Pin `conversion_reads_pre_trait_sheet_per_gain_x_based_on_y`. Infusions stay
+  outside the snapshot: the page names gear, not infusions.
 
 Engine gaps the review measured (counted Executable, never run). The next
 engine increment (single-writer) closes these before more professions are
@@ -490,7 +501,7 @@ authored, or the executable column overstates:
 | E18 | CLOSED 2026-09-25: weapon choice. A Weapon1 auto is filler: it does not keep the set, block shroud, or justify leaving shroud. While the form still has a cast (its auto included) the scheduler stays; weapon skills run when the form is down. Pin `weapon1_auto_is_filler_so_it_does_not_block_shroud_or_the_other_set`. Fixture Reaper Dusk Strike share 0.168 -> 0.065 (golem log 0), `skill_share` TVD 0.648 -> 0.589, bound 0.648 | `rotation/simulator.rs` scheduler |
 | E19 | CLOSED 2026-09-23: consumables: the item download filters out type Consumable, so stated food/utility (Superior Sharpening Stone, +100 Power/+70 Ferocity food) cannot resolve and abstain; the stat sheet already has a food/utility path (`consumables.rs`) | `gw2api download.rs` filter, `consumables.rs` |
 | E20a | CLOSED 2026-09-25: optimizer food/utility selection includes StatConversion-only consumables. Pin `conversion_only_utility_selected_when_it_beats_flat`. | `consumables.rs` |
-| E20b | BANKED: StatConversion still applies after trait conversions (post-trait snapshot in `fold_into_validated_stats`). No wiki/log oracle for ordering vs `stats::apply_trait_conversions`. | `consumables.rs` |
+| E20b | CLOSED 2026-09-25: StatConversion reads the pre-conversion sheet (food and utility flats in, trait-conversion output out) per wiki [Gain X Based on Y](https://wiki.guildwars2.com/wiki/Gain_X_Based_on_Y) (read 2026-09-25). Pin `conversion_reads_pre_trait_sheet_per_gain_x_based_on_y`. | `consumables.rs`, `engine.rs` |
 | E21 | WvW timeline runs boons side by side (`apply_buff` pushes a parallel `TimedBuff`), so duration-stacking records add nothing there (the "Feel My Wrath!" self record, any overlapping Quickness/Fury grant) | `wvw_timeline.rs apply_buff` |
 | E22 | CLOSED: WvW `trait:2021:1` Reaper's Onslaught (in-shroud Quickness 3 s / 3 s) duration-stacked onto skill Quickness up to the 30 s cap. Lucian-shaped 60 s row 0.988 -> 0.583 (log band 0.2-0.6; log_compare Lucian Lord 0.997 was not re-run, no log in the repo). Page numbers stay. WvW record gains `SelfBoonAbsent` Quickness and an Interval gate of 15 s (sim ceiling, not a page fact; recalibrated in E22b). PvE `trait:2021:1` stays an ungated in-form pulse. Pins `kent_e22_wvw_onslaught_quickness_stays_in_log_band`, `kent_e22_wvw_onslaught_places_as_gated_periodic`. | `wvw.json` `trait:2021:1`, `engine.rs` `place_flow_record` |
 | E22b | CLOSED 2026-09-25: WvW `trait:2021:1` Interval sim ceiling 15 s -> 20 s. 15 s was calibrated to pre-E18 under-shroud; post-E18 dwell put gated Quickness at 0.633. At 20 s the Lucian-shaped row measures 0.583, inside (0.20..0.60), above skills-only 0.433. Page ICD/duration stay 3 s / 3 s. SelfBoonAbsent stays. PvE stays ungated. Shroud stays in (0.60..0.75) (measured 0.638). Pin `kent_e22_wvw_onslaught_quickness_stays_in_log_band`. | `wvw.json` `trait:2021:1` Interval |

@@ -330,8 +330,8 @@ pub fn fold_static_modifiers(mods: &mut DamageModifiers, item: &Item) {
 ///
 /// Conversion-only utilities (Superior Sharpening Stone) have neither a flat
 /// nor a percent, but they still move the sheet. They stay eligible for
-/// [`assign_best_consumables`] (E20a). Apply order vs trait conversions is
-/// unchanged (E20b, banked).
+/// [`assign_best_consumables`] (E20a). The conversion reads the pre-conversion
+/// sheet, same as trait conversions (E20b).
 pub fn has_static_effect(item: &Item) -> bool {
     if !static_stat_bonus(item).is_zero()
         || detail_lines(item).any(|line| parse_conversion(line).is_some())
@@ -569,31 +569,61 @@ fn cheap_key(
     )
 }
 
+fn equipped_consumable_items<'a>(validated: &'a ValidatedBuild, db: &'a GameDb) -> Vec<&'a Item> {
+    validated
+        .food
+        .as_ref()
+        .and_then(|v| db.items.get(&v.id))
+        .into_iter()
+        .chain(validated.utility.as_ref().and_then(|v| db.items.get(&v.id)))
+        .collect()
+}
+
+/// Standing flats and static percents. Call before trait conversions so the
+/// shared pre-conversion sheet includes food and utility flats.
+pub(crate) fn fold_standing_flats(
+    stats: &mut StatBlock,
+    mods: &mut DamageModifiers,
+    validated: &ValidatedBuild,
+    db: &GameDb,
+) {
+    for item in equipped_consumable_items(validated, db) {
+        *stats += &static_stat_bonus(item);
+        fold_static_modifiers(mods, item);
+    }
+}
+
+/// Stat conversions from `base`, which must be the pre-conversion sheet
+/// (flats in, no trait-conversion output).
+pub(crate) fn fold_stat_conversions(
+    stats: &mut StatBlock,
+    validated: &ValidatedBuild,
+    db: &GameDb,
+    base: &StatBlock,
+) {
+    for c in equipped_consumable_items(validated, db)
+        .iter()
+        .flat_map(|item| conversions(item))
+    {
+        stats.add(c.target, base.get(c.source) * c.fraction);
+    }
+}
+
 /// Apply standing consumable stats + static percents onto the validated sheet.
+///
+/// Conversions read `stats` after the flats in this call are added. Trait
+/// conversions belong on that same sheet and must already have been excluded
+/// from it; [`crate::engine::calculate_validated_stats`] snapshots before
+/// `apply_trait_conversions`.
 pub fn fold_into_validated_stats(
     stats: &mut StatBlock,
     mods: &mut DamageModifiers,
     validated: &ValidatedBuild,
     db: &GameDb,
 ) {
-    let items: Vec<&Item> = validated
-        .food
-        .as_ref()
-        .and_then(|v| db.items.get(&v.id))
-        .into_iter()
-        .chain(validated.utility.as_ref().and_then(|v| db.items.get(&v.id)))
-        .collect();
-    for item in &items {
-        *stats += &static_stat_bonus(item);
-        fold_static_modifiers(mods, item);
-    }
-    // ponytail: converts from the sheet after trait conversions, not the
-    // pre-conversion sheet; split the snapshot if a build converts into a
-    // stone's source stat.
+    fold_standing_flats(stats, mods, validated, db);
     let snapshot = stats.clone();
-    for c in items.iter().flat_map(|item| conversions(item)) {
-        stats.add(c.target, snapshot.get(c.source) * c.fraction);
-    }
+    fold_stat_conversions(stats, validated, db, &snapshot);
 }
 
 /// Test helper: infix-attribute consumable with explicit `game_types`.
@@ -1051,6 +1081,77 @@ mod tests {
             "{stats:?}"
         );
         assert_eq!(stats.ferocity, 270.0);
+    }
+
+    /// E20b. Oracle: https://wiki.guildwars2.com/wiki/Gain_X_Based_on_Y
+    /// (read 2026-09-25): "All conversions are done before other conversions
+    /// are taken into account so the value gained from them is not factored
+    /// in to any other conversions." The same page lists flat food and
+    /// utility bonuses as conversion sources.
+    ///
+    /// Soup is +100 Power / +70 Ferocity. The fixture trait adds 10% of Power
+    /// as Ferocity (`round(1100 * 0.10) = 110`). Stone 9443 adds 3% Precision
+    /// and 6% Ferocity as Power from the pre-conversion sheet (ferocity 70),
+    /// not from the post-trait ferocity (180).
+    #[test]
+    fn conversion_reads_pre_trait_sheet_per_gain_x_based_on_y() {
+        use gw2_api::models::{Fact, Trait};
+
+        let mut db = db_with(vec![api_item(SOUP), api_item(STONE)]);
+        db.traits.insert(
+            9001,
+            Trait {
+                id: 9001,
+                name: "Power to Ferocity".into(),
+                icon: None,
+                description: None,
+                specialization: 1,
+                tier: 1,
+                order: 0,
+                slot: "Major".into(),
+                facts: vec![Fact::BuffConversion {
+                    text: None,
+                    icon: None,
+                    source: Some("Power".into()),
+                    percent: Some(10.0),
+                    target: Some("Ferocity".into()),
+                }],
+                traited_facts: vec![],
+                fact_parse_drops: 0,
+                skills: vec![],
+            },
+        );
+        let validated = ValidatedBuild {
+            specializations: vec![crate::validation::ValidatedSpec {
+                spec_id: 1,
+                name: "fixture".into(),
+                elite: false,
+                trait_ids: vec![9001],
+                trait_names: vec!["Power to Ferocity".into()],
+                all_trait_ids: vec![9001],
+            }],
+            food: Some(ValidatedItem {
+                id: 41569,
+                name: "soup".into(),
+            }),
+            utility: Some(ValidatedItem {
+                id: 9443,
+                name: "stone".into(),
+            }),
+            ..ValidatedBuild::default()
+        };
+        let (stats, _) = engine::calculate_validated_stats(&validated, &db, "Warrior", &pve_ctx());
+        let pre_trait_power = 1100.0 + 0.03 * 1000.0 + 0.06 * 70.0;
+        let post_trait_power = 1100.0 + 0.03 * 1000.0 + 0.06 * 180.0;
+        assert!(
+            (stats.power - pre_trait_power).abs() < 1e-9,
+            "power {} must be the pre-conversion reading {pre_trait_power}, not the post-trait reading {post_trait_power}",
+            stats.power
+        );
+        assert_eq!(
+            stats.ferocity, 180.0,
+            "trait conversion must see the food's flat power"
+        );
     }
 
     /// E20a: a StatConversion-only utility is picker-eligible and wins when

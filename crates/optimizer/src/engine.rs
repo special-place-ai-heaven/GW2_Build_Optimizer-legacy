@@ -1273,11 +1273,13 @@ pub fn calculate_validated_stats(
         .flat_map(|s| s.all_trait_ids.iter().copied())
         .collect();
 
-    // Trait stats
+    // Trait flats, then food/utility flats, then every conversion from that
+    // one sheet. Wiki Gain X Based on Y (read 2026-09-25): conversion output
+    // is not an input to any other conversion, and flat food/utility bonuses
+    // are part of the base.
     let trait_stats =
         stats::calculate_trait_stats_for_mode(&all_trait_ids, &db.traits, &ctx.game_mode);
     full_stats += &trait_stats;
-    stats::apply_trait_conversions(&mut full_stats, &all_trait_ids, &db.traits);
 
     // Extract damage modifiers from traits + rune + sigils + relic
     let relic_id = validated.relic.as_ref().map(|r| r.id);
@@ -1291,7 +1293,12 @@ pub fn calculate_validated_stats(
         ctx,
     );
     combat::scope_skill_damage(&mut modifiers, &db.traits, &db.skills);
-    crate::consumables::fold_into_validated_stats(&mut full_stats, &mut modifiers, validated, db);
+    crate::consumables::fold_standing_flats(&mut full_stats, &mut modifiers, validated, db);
+    let conversion_base = full_stats.clone();
+    stats::apply_trait_conversions(&mut full_stats, &all_trait_ids, &db.traits);
+    crate::consumables::fold_stat_conversions(&mut full_stats, validated, db, &conversion_base);
+    // ponytail: infusions stay outside `conversion_base`. The wiki list names
+    // gear, not infusions; move them into the snapshot if a sheet shows they convert.
     crate::infusions::fold_into_validated_stats(&mut full_stats, validated, db);
 
     (full_stats, modifiers)
