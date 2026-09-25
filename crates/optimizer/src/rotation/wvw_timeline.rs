@@ -9456,6 +9456,56 @@ mod reaper_experiments {
         );
     }
 
+    /// WAVE3-FID-DEDUP: inventory key is (source_type, source_id), not name.
+    #[test]
+    fn coverage_inventory_keeps_same_name_different_trait_ids() {
+        use crate::data::normalized_effects::{
+            CoverageBlock, CoverageClass, EffectCategory, TriggerRule,
+        };
+        use crate::data::quality::ReasonClass;
+        let p = prepared();
+        let db = fx::db();
+        let mut build = fx::build();
+        build.specializations[0].all_trait_ids.extend([221, 968]);
+        let classify = |id: u32, mechanic: &str| {
+            let mut classified = fx::path_of_corruption();
+            classified.effect_id = format!("test:zephyr:{id}");
+            classified.source_id = id;
+            classified.source_name = "Zephyr's Speed".into();
+            classified.category = EffectCategory::FlatStat;
+            classified.value = FactualValue::Unknown;
+            classified.trigger_rule = TriggerRule::Passive;
+            classified.status_operation = None;
+            classified.internal_cooldown = None;
+            classified.coverage = Some(CoverageBlock {
+                class: CoverageClass::NeedsMechanic,
+                mechanic: Some(mechanic.into()),
+            });
+            classified
+        };
+        let records = vec![classify(221, "movement"), classify(968, "pet swap")];
+        let consumed = HashSet::new();
+        let (_, coverage, _) =
+            engine::active_normalized_effects(&build, &p.skills, &db, &records, &consumed);
+        let zephyrs: Vec<_> = coverage
+            .iter()
+            .filter(|e| e.name == "Zephyr's Speed")
+            .collect();
+        assert_eq!(
+            zephyrs.iter().map(|e| e.source_id).collect::<Vec<_>>(),
+            vec![221, 968],
+            "221 vs 968 must both survive name collision: {zephyrs:?}"
+        );
+        assert_eq!(
+            zephyrs[0].class,
+            ReasonClass::NeedsMechanic("movement".into())
+        );
+        assert_eq!(
+            zephyrs[1].class,
+            ReasonClass::NeedsMechanic("pet swap".into())
+        );
+    }
+
     /// Nothing skipped: empty coverage, empty line, no coverage reason.
     #[test]
     fn nothing_skipped_is_verified() {

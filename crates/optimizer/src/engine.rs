@@ -1941,6 +1941,8 @@ pub(crate) fn active_normalized_effects<'e>(
                     }
                 },
                 detail: None,
+                source_type: source_type_tag(&effect.source_type),
+                source_id: effect.source_id,
             })
         })
         .collect();
@@ -1957,10 +1959,11 @@ pub(crate) fn active_normalized_effects<'e>(
             name: name_of(*tag, *id),
             class: ReasonClass::NoRecord,
             detail: None,
+            source_type: *tag,
+            source_id: *id,
         });
     }
-    coverage.sort_by(|a, b| a.name.cmp(&b.name));
-    coverage.dedup_by(|a, b| a.name == b.name);
+    crate::data::quality::dedup_inventory(&mut coverage);
     (active, coverage, sigil_sets)
 }
 
