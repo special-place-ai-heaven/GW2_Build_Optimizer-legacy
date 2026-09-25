@@ -303,8 +303,8 @@ mod tests {
         );
         assert_eq!(
             o.entity_count(),
-            51,
-            "eleven sourced skills and six sourced traits per mode"
+            54,
+            "twelve sourced skills and six sourced traits per mode"
         );
 
         assert!(matches!(
@@ -325,6 +325,15 @@ mod tests {
             ),
             Some(OverrideResult::Value { value: 0.8, .. })
         ));
+        for mode in ["PvE", "PvP", "WvW"] {
+            assert!(
+                matches!(
+                    o.lookup("2026-07-15", mode, "Skill", 9081, "hit_count"),
+                    Some(OverrideResult::Value { value: 2.0, .. })
+                ),
+                "{mode} Whirling Wrath hit_count"
+            );
+        }
     }
 
     #[test]
