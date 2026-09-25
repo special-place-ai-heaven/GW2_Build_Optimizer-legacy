@@ -2412,6 +2412,7 @@ pub(crate) fn wvw_resource_rules(
     gaps.extend(rotation::builder::unresolved_alternative_names(
         rotation_skills,
         db,
+        ctx,
     ));
     let form = match form_for_build(validated, rotation_skills, db, &ctx.game_mode, max_health) {
         Err(name) => {

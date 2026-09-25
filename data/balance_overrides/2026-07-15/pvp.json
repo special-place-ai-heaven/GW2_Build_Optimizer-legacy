@@ -145,6 +145,15 @@
       "overrides": {
         "damage_coefficient:above_50": { "value": 0.5, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Splinter_Weapon (facts show three unlabelled Damage rows 0.4/0.25/0.5; version history only mentions PvE and WvW coefficient changes, leaving 0.5 as the untouched PvP/original baseline)" }
       }
+    },
+    {
+      "source_type": "Skill",
+      "source_id": 9168,
+      "name": "Sword of Justice",
+      "overrides": {
+        "damage_coefficient:above_50": { "value": 0.72, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Sword_of_Justice (facts show three unlabelled Damage rows 0.8/0.72/0.45 at hit_count 4; wiki PvP coefficient 0.72 per hit)" },
+        "hit_count": { "value": 4, "evidence_level": "Factual", "source": "https://wiki.guildwars2.com/wiki/Sword_of_Justice (4 hits per cast; data/formulas/hit_timing.json Sword of Justice hits:4)" }
+      }
     }
   ]
 }

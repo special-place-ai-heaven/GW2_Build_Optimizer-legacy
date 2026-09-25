@@ -62,7 +62,8 @@ pub struct OverrideEntity {
     pub source_id: u32,
     /// Human-readable name for logging/debugging.
     pub name: String,
-    /// Per-field overrides. Keys are field names (e.g., "coefficient", "base_damage").
+    /// Per-field overrides. Keys are field names (e.g., "coefficient",
+    /// "hit_count", "damage_coefficient:above_50").
     pub overrides: HashMap<String, OverrideEntry>,
 }
 
@@ -302,13 +303,27 @@ mod tests {
         );
         assert_eq!(
             o.entity_count(),
-            48,
-            "ten sourced skills and six sourced traits per mode"
+            51,
+            "eleven sourced skills and six sourced traits per mode"
         );
 
         assert!(matches!(
             o.lookup("2026-07-15", "WvW", "Skill", 13113, "initiative_cost"),
             Some(OverrideResult::Value { value: 7.0, .. })
+        ));
+        assert!(matches!(
+            o.lookup("2026-07-15", "PvE", "Skill", 9168, "hit_count"),
+            Some(OverrideResult::Value { value: 4.0, .. })
+        ));
+        assert!(matches!(
+            o.lookup(
+                "2026-07-15",
+                "PvE",
+                "Skill",
+                9168,
+                "damage_coefficient:above_50"
+            ),
+            Some(OverrideResult::Value { value: 0.8, .. })
         ));
     }
 
