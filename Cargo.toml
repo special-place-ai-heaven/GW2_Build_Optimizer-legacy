@@ -16,7 +16,22 @@ license = "MIT"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+# rustls, NOT the platform TLS stack. On Windows the default (`default-tls`)
+# resolves to schannel, and Wine's schannel -- which is what actually runs when
+# the addon is loaded into GW2 under Proton/Linux -- fails the handshake with
+# CERT_E_REVOCATION_FAILURE (0x800B010E) because it cannot complete a
+# certificate revocation check. The user only ever sees reqwest's generic
+# "error sending request for url (...)" wrapper. rustls carries its own crypto
+# and its own Mozilla root set (webpki-roots), so the addon no longer depends on
+# the host OS TLS stack at all. `charset`/`http2` are re-added explicitly
+# because `default-features = false` also drops them.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "charset",
+    "http2",
+    "rustls-tls",
+] }
 thiserror = "2"
 urlencoding = "2"
 chrono = { version = "0.4", features = ["serde"] }
@@ -34,7 +49,10 @@ uuid = { version = "1", features = ["v4"] }
 # jumps to reqwest 0.13 while the workspace is on 0.12, and 0.22.9 resolves to
 # the SINGLE shared reqwest. Do NOT bump without re-checking `cargo tree -i reqwest`.
 rodio = { version = "0.22.2", default-features = false, features = ["playback", "mp3", "mp4"] }
-stream-download = { version = "0.22.9", default-features = false, features = ["reqwest-native-tls"] }
+# `reqwest-rustls` (not `reqwest-native-tls`) for the same reason as reqwest
+# above: native-tls would drag schannel back in and re-break the radio stream
+# under Proton. It selects the SAME reqwest build (0.22.9 -> reqwest 0.12).
+stream-download = { version = "0.22.9", default-features = false, features = ["reqwest-rustls"] }
 icy-metadata = { version = "0.6", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 # News still processing (crates/addon/src/news_art.rs): decode -> downscale ->
