@@ -419,14 +419,16 @@ fn damage_groups(facts: &[Fact]) -> Vec<StrikeGroup<'_>> {
 /// sources and for traited cleanses whose trait the build does not run).
 ///
 /// NormalizedEffects path: scan `ne_effects` for entries with `category == RemovesCondition`
-/// whose `source_id` matches a skill's `skill_id`. When found, add a
-/// `RemovesCondition` effect carrying the `conditions_removed` count from
-/// `status_operation.amount_value` (floored to u32, minimum 1).
+/// whose `source_id` matches a skill's `skill_id`. When a Resolved
+/// `status_operation.amount_value` is present, add a `RemovesCondition`
+/// effect carrying that count (floored to u32, minimum 1). Unknown or
+/// missing amount abstains: no invented `conditions_removed: 1`.
 ///
 /// Fallback path: if no NormalizedEffects entry is found for a skill, check
 /// the skill's API description (from `db.skills`) for condition-cleanse language:
 /// ("remov" AND "condit") OR ("cure" AND "condit"). If matched, add
 /// `RemovesCondition { conditions_removed: 1 }` as a heuristic estimate.
+/// An unresolved NE row blocks this fallback for that skill.
 ///
 /// Idempotent per-call: skips any skill that already carries a `RemovesCondition` effect.
 pub fn enrich_with_cleanse(
@@ -437,21 +439,26 @@ pub fn enrich_with_cleanse(
 ) {
     use crate::data::quality::FactualValue;
 
-    // Build a fast lookup: source_id → max conditions_removed from NormalizedEffects.
-    // A skill may appear as multiple RemovesCondition entries; take the largest amount.
-    let mut ne_cleanse: HashMap<u32, u32> = HashMap::new();
+    // source_id → max Resolved conditions_removed. `None` means a
+    // RemovesCondition row exists but no Resolved amount: abstain, do not
+    // invent 1, and do not fall through to the description heuristic.
+    let mut ne_cleanse: HashMap<u32, Option<u32>> = HashMap::new();
     for effect in ne_effects {
-        if effect.category == EffectCategory::RemovesCondition {
-            let count = match &effect.status_operation {
-                Some(op) => match op.amount_value {
-                    FactualValue::Resolved(v) => (v.floor() as u32).max(1),
-                    FactualValue::Unknown => 1,
-                },
-                None => 1,
-            };
-            let entry = ne_cleanse.entry(effect.source_id).or_insert(0);
-            *entry = (*entry).max(count);
+        if effect.category != EffectCategory::RemovesCondition {
+            continue;
         }
+        let resolved = match effect.status_operation.as_ref().map(|op| &op.amount_value) {
+            Some(FactualValue::Resolved(v)) => Some((v.floor() as u32).max(1)),
+            _ => None,
+        };
+        ne_cleanse
+            .entry(effect.source_id)
+            .and_modify(|prev| {
+                if let Some(count) = resolved {
+                    *prev = Some((*prev).unwrap_or_default().max(count));
+                }
+            })
+            .or_insert(resolved);
     }
 
     for skill in skills.iter_mut() {
@@ -480,24 +487,30 @@ pub fn enrich_with_cleanse(
             continue; // read by a cataloguer and judged not to cleanse
         }
 
-        if let Some(&count) = ne_cleanse.get(&skill.skill_id) {
-            // NormalizedEffects data matched by source_id.
-            skill.effects.push(SkillEffect::RemovesCondition {
-                conditions_removed: count,
-            });
-        } else {
-            // Fallback: description text heuristic.
-            let description = db
-                .skills
-                .get(&skill.skill_id)
-                .and_then(|s| s.description.as_deref())
-                .unwrap_or("")
-                .to_lowercase();
-
-            if text_describes_condition_cleanse(&description) {
+        match ne_cleanse.get(&skill.skill_id).copied() {
+            Some(Some(count)) => {
                 skill.effects.push(SkillEffect::RemovesCondition {
-                    conditions_removed: 1, // HEURISTIC: assume 1 condition removed
+                    conditions_removed: count,
                 });
+            }
+            Some(None) => {
+                // Unresolved NE amount: abstain. The description heuristic
+                // would invent conditions_removed: 1.
+            }
+            None => {
+                // Fallback: description text heuristic.
+                let description = db
+                    .skills
+                    .get(&skill.skill_id)
+                    .and_then(|s| s.description.as_deref())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                if text_describes_condition_cleanse(&description) {
+                    skill.effects.push(SkillEffect::RemovesCondition {
+                        conditions_removed: 1, // HEURISTIC: assume 1 condition removed
+                    });
+                }
             }
         }
     }
@@ -2276,6 +2289,13 @@ mod tests {
         }
     }
 
+    fn removed(s: &RotationSkill) -> Option<u32> {
+        s.effects.iter().find_map(|e| match e {
+            SkillEffect::RemovesCondition { conditions_removed } => Some(*conditions_removed),
+            _ => None,
+        })
+    }
+
     /// Build a minimal rotation skill for cleanse tests.
     fn cleanse_test_skill(id: u32) -> RotationSkill {
         RotationSkill {
@@ -2322,6 +2342,73 @@ mod tests {
             vec![3],
             "should detect 3 conditions removed from NE data"
         );
+    }
+
+    /// Resolved amounts keep floor-then-minimum-1. 2.9 floors to 2; 0.4 floors
+    /// to 0 and the Resolved minimum lifts it to 1.
+    #[test]
+    fn test_enrich_with_cleanse_ne_resolved_floor() {
+        let mut skills = vec![cleanse_test_skill(990_004)];
+        enrich_with_cleanse(&mut skills, &[cleanse_ne(990_004, 2.9)], &empty_db(), &[]);
+        assert_eq!(removed(&skills[0]), Some(2), "Resolved 2.9 floors to 2");
+
+        let mut low = vec![cleanse_test_skill(990_005)];
+        enrich_with_cleanse(&mut low, &[cleanse_ne(990_005, 0.4)], &empty_db(), &[]);
+        assert_eq!(
+            removed(&low[0]),
+            Some(1),
+            "Resolved sub-1 still floors to 1"
+        );
+    }
+
+    /// NE Unknown (or no status operation) must not become conditions_removed: 1,
+    /// even when the description would otherwise hit the cleanse heuristic.
+    #[test]
+    fn test_enrich_with_cleanse_ne_unknown_abstains() {
+        let mut db = empty_db();
+        for id in [990_002, 990_003] {
+            let mut skill_entry = make_test_skill(id, "Mending", "Heal", vec![]);
+            skill_entry.description = Some("Cure conditions affecting you.".to_string());
+            db.skills.insert(id, skill_entry);
+        }
+
+        let mut unknown = cleanse_ne(990_002, 3.0);
+        unknown.value = FactualValue::Unknown;
+        unknown
+            .status_operation
+            .as_mut()
+            .expect("fixture op")
+            .amount_value = FactualValue::Unknown;
+        let mut skills = vec![cleanse_test_skill(990_002)];
+        enrich_with_cleanse(&mut skills, &[unknown], &db, &[]);
+        assert_eq!(
+            removed(&skills[0]),
+            None,
+            "Unknown NE amount must not invent conditions_removed: {:?}",
+            skills[0].effects
+        );
+
+        let mut missing = cleanse_ne(990_003, 3.0);
+        missing.status_operation = None;
+        let mut skills = vec![cleanse_test_skill(990_003)];
+        enrich_with_cleanse(&mut skills, &[missing], &db, &[]);
+        assert_eq!(
+            removed(&skills[0]),
+            None,
+            "missing NE amount must abstain, not fall through to the description heuristic"
+        );
+
+        // A Resolved sibling still wins; Unknown does not contribute a 1.
+        let known = cleanse_ne(990_006, 2.0);
+        let mut also_unknown = cleanse_ne(990_006, 9.0);
+        also_unknown
+            .status_operation
+            .as_mut()
+            .expect("fixture op")
+            .amount_value = FactualValue::Unknown;
+        let mut skills = vec![cleanse_test_skill(990_006)];
+        enrich_with_cleanse(&mut skills, &[also_unknown, known], &empty_db(), &[]);
+        assert_eq!(removed(&skills[0]), Some(2));
     }
 
     #[test]
@@ -2382,12 +2469,6 @@ mod tests {
     #[test]
     fn registry_decides_before_text_and_honours_required_traits() {
         let db = empty_db();
-        let removed = |s: &RotationSkill| {
-            s.effects.iter().find_map(|e| match e {
-                SkillEffect::RemovesCondition { conditions_removed } => Some(*conditions_removed),
-                _ => None,
-            })
-        };
         let mut skills = vec![cleanse_test_skill(30670), cleanse_test_skill(14422)];
         enrich_with_cleanse(&mut skills, &[], &db, &[]);
         assert_eq!(
