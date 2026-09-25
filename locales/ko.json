@@ -467,6 +467,7 @@
   "quality.verified_tip": "모든 입력 데이터는 출처가 확인되었습니다.",
   "quality.provisional_tip": "일부 데이터는 추정치이거나 잠정적입니다. 결과는 사용 가능하지만 확실성은 낮습니다.",
   "quality.coverage_line": "시뮬레이션되지 않음: {detail}",
+  "quality.inventory_skip": "{mode}에 대한 효과 인벤토리가 실행되지 않음",
   "quality.blocked_tip": "중요 데이터가 없습니다. 결과가 신뢰할 수 없을 수 있습니다.",
   "label.reasons": "이유:",
   "bench.header": "커뮤니티 메타 대비",

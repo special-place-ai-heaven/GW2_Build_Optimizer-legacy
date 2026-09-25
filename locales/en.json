@@ -472,6 +472,7 @@
   "quality.verified_tip": "All input data is source-backed and verified.",
   "quality.provisional_tip": "Some data is estimated or provisional. Results are usable but less certain.",
   "quality.coverage_line": "Not simulated: {detail}",
+  "quality.inventory_skip": "coverage inventory not run for {mode}",
   "quality.blocked_tip": "Critical data is missing. Results may not be reliable.",
   "label.reasons": "Reasons:",
   "bench.header": "vs Community Meta",

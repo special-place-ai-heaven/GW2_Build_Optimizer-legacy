@@ -6634,6 +6634,7 @@ mod tests {
             damage_per_second: Vec::new(),
             buff_presence_per_second: Default::default(),
             wvw: Some(report),
+            honesty: Default::default(),
         };
         let combat = CombatPerformance {
             effective_health: 20_000.0,

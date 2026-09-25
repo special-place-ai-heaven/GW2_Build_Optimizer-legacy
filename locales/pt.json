@@ -467,6 +467,7 @@
   "quality.verified_tip": "Todos os dados de entrada são verificados e baseados em fontes.",
   "quality.provisional_tip": "Alguns dados são estimados ou provisórios. Os resultados são utilizáveis mas menos certos.",
   "quality.coverage_line": "Não simulado: {detail}",
+  "quality.inventory_skip": "inventário de cobertura não executado para {mode}",
   "quality.blocked_tip": "Dados críticos ausentes. Os resultados podem não ser confiáveis.",
   "label.reasons": "Motivos:",
   "bench.header": "vs meta da comunidade",

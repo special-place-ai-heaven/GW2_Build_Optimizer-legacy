@@ -467,6 +467,7 @@
   "quality.verified_tip": "すべての入力データはソースに基づき検証済みです。",
   "quality.provisional_tip": "一部のデータは推定または暫定です。結果は使用できますが確実性は低くなります。",
   "quality.coverage_line": "未シミュレート: {detail}",
+  "quality.inventory_skip": "{mode} の効果インベントリは未実行",
   "quality.blocked_tip": "重要なデータが不足しています。結果は信頼できない可能性があります。",
   "label.reasons": "理由:",
   "bench.header": "コミュニティメタ比較",

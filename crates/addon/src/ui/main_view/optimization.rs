@@ -6,21 +6,34 @@ use gw2_optimizer::balance::BalanceContext;
 /// Convert a SynergyResult from the new pipeline into a BuildSuggestion for display.
 // Display adapter; db, profession, scenario, role, and result are distinct
 // inputs threaded straight through — a params struct adds no clarity here.
-/// The coverage detail of the referee's `wvw_timeline.effects` reason: the
-/// names after `Not simulated: `, ready for the `quality.coverage_line`
-/// locale key. The referee is the one source; every projection reads it.
+/// The coverage detail of the referee's coverage reasons: the names after
+/// `Not simulated: `, ready for the `quality.coverage_line` locale key.
+/// WvW `wvw_timeline.effects` wins so the muted line stays the timeline
+/// inventory. PvE/PvP use inventory-skip / unhosted / heuristic fields and
+/// never that WvW field (no cross-mode identity).
 pub(super) fn coverage_note_from(
     reasons: &[gw2_optimizer::data::DataQualityReason],
 ) -> Option<String> {
-    reasons
+    use gw2_optimizer::data::quality::{
+        COVERAGE_FIELD, COVERAGE_PREFIX, HEURISTIC_FIELD, INVENTORY_FIELD, UNHOSTED_FIELD,
+    };
+    let strip = |r: &gw2_optimizer::data::DataQualityReason| {
+        r.explanation
+            .strip_prefix(COVERAGE_PREFIX)
+            .unwrap_or(&r.explanation)
+            .to_string()
+    };
+    if let Some(r) = reasons.iter().find(|r| r.field == COVERAGE_FIELD) {
+        return Some(strip(r));
+    }
+    let parts: Vec<String> = reasons
         .iter()
-        .find(|r| r.field == gw2_optimizer::data::quality::COVERAGE_FIELD)
-        .map(|r| {
-            r.explanation
-                .strip_prefix(gw2_optimizer::data::quality::COVERAGE_PREFIX)
-                .unwrap_or(&r.explanation)
-                .to_string()
+        .filter(|r| {
+            r.field == INVENTORY_FIELD || r.field == UNHOSTED_FIELD || r.field == HEURISTIC_FIELD
         })
+        .map(strip)
+        .collect();
+    (!parts.is_empty()).then_some(parts.join("; "))
 }
 
 /// The simulator's output in the shape the panels read.
@@ -2596,6 +2609,28 @@ pub(super) mod tests {
         );
         assert_eq!(super::coverage_note_from(&[other]), None);
         assert_eq!(super::coverage_note_from(&[]), None);
+    }
+
+    #[test]
+    fn coverage_note_from_pve_honesty_does_not_use_wvw_field() {
+        use gw2_optimizer::data::quality::{
+            mode_honesty_reasons, HEURISTIC_FIELD, INVENTORY_FIELD,
+        };
+        let pve = gw2_core::types::GameMode::PvE;
+        let reasons = mode_honesty_reasons(
+            "Necromancer",
+            &pve,
+            None,
+            &[],
+            true,
+            &["Well of Darkness (heuristic Barrier)".into()],
+        );
+        assert!(reasons.iter().any(|r| r.field == INVENTORY_FIELD));
+        assert!(reasons.iter().any(|r| r.field == HEURISTIC_FIELD));
+        assert_eq!(
+            super::coverage_note_from(&reasons).as_deref(),
+            Some("coverage inventory not run for PvE; Well of Darkness (heuristic Barrier)")
+        );
     }
 
     /// One validated build in one scenario measures the same on every tab:

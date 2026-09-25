@@ -1186,6 +1186,12 @@ pub struct PreparedRotation {
     /// Each trait's share of the always-on percents in `params` (E1).
     pub trait_standing: Vec<combat::TraitStanding>,
     profession_name: String,
+    /// Flow-sim records prepare could not host.
+    unhosted: Vec<String>,
+    /// Equipped sources have a record in this mode's effect file.
+    inventory_due: bool,
+    /// Description-fallback Barrier/Healing names, already rendered.
+    heuristic_coverage: Vec<String>,
 }
 
 /// Window for the flow simulation. Long enough that a burst-then-nothing kit
@@ -1351,6 +1357,9 @@ pub fn prepare_validated_rotation(
         form.as_ref(),
         &mods.trait_standing,
     );
+    let inventory_due = coverage_inventory_due(validated, &rotation_skills, &mode);
+    let heuristic_coverage =
+        rotation::builder::heuristic_coverage_stamps(&rotation_skills, db, &equipped_traits);
     let params = rotation::simulator::SimParams {
         power,
         condition_damage,
@@ -1392,6 +1401,9 @@ pub fn prepare_validated_rotation(
         skills: rotation_skills,
         params,
         profession_name: profession_name.to_string(),
+        unhosted: procs.unhosted,
+        inventory_due,
+        heuristic_coverage,
     })
 }
 
@@ -1517,6 +1529,9 @@ fn simulate_prepared_with(
         ));
     }
 
+    result.honesty.unhosted = prepared.unhosted.clone();
+    result.honesty.heuristic = prepared.heuristic_coverage.clone();
+    result.honesty.inventory_skipped = prepared.inventory_due && result.wvw.is_none();
     result
 }
 
@@ -2958,6 +2973,20 @@ pub(crate) fn trait_procs_for_build(
     out
 }
 
+/// True when this mode's effect file has a record for an equipped trait,
+/// skill, or sigil — the coverage inventory would have had something to
+/// classify. NoRecord leftovers without a mode record do not count.
+fn coverage_inventory_due(
+    validated: &ValidatedBuild,
+    bar: &[rotation::RotationSkill],
+    mode: &GameMode,
+) -> bool {
+    equipped_trait_records(validated, mode).next().is_some()
+        || equipped_skill_and_sigil_records(validated, bar, mode)
+            .next()
+            .is_some()
+}
+
 /// The records of the skills on `bar` and of the socketed sigils for
 /// `mode`, each with its source's seat ([`sigil_seats`]; 0 for a skill).
 // ponytail: a sigil seat is fixed per set; a swap in the flow sim switches
@@ -3145,15 +3174,26 @@ pub fn synergy_result_from_validated(
         data_quality = data_quality.merge(&data::DataQuality::Provisional);
         quality_reasons.extend(gear_reasons);
     }
-    if let Some(fight) = rotation.as_ref().and_then(|result| result.wvw.as_ref()) {
-        if let Some(reason) = data::quality::coverage_reason(
+    let honesty = rotation.as_ref().map(|result| {
+        data::quality::mode_honesty_reasons(
             profession_name,
             &ctx.game_mode,
-            &fight.unmodeled_sources,
-        ) {
+            result
+                .wvw
+                .as_ref()
+                .map(|fight| fight.unmodeled_sources.as_slice()),
+            &result.honesty.unhosted,
+            result.honesty.inventory_skipped,
+            &result.honesty.heuristic,
+        )
+    });
+    if let Some(reasons) = honesty {
+        if !reasons.is_empty() {
             data_quality = data_quality.merge(&data::DataQuality::Provisional);
-            quality_reasons.push(reason);
+            quality_reasons.extend(reasons);
         }
+    }
+    if let Some(fight) = rotation.as_ref().and_then(|result| result.wvw.as_ref()) {
         if !fight.resource_model_complete {
             data_quality = data_quality.merge(&data::DataQuality::Provisional);
             quality_reasons.push(data::DataQualityReason {
