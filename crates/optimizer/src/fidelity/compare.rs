@@ -551,7 +551,7 @@ fn rel(ours: f64, log: f64, floor: f64) -> f64 {
 
 /// Total variation distance over the union of names: 0 = same
 /// distribution, 1 = disjoint.
-fn tvd(a: &BTreeMap<String, f64>, b: &BTreeMap<String, f64>) -> f64 {
+pub(crate) fn tvd(a: &BTreeMap<String, f64>, b: &BTreeMap<String, f64>) -> f64 {
     let names: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
     0.5 * names
         .into_iter()

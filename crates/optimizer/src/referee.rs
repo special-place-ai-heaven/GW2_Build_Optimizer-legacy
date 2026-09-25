@@ -4685,14 +4685,17 @@ coverage: {:?}",
         // than its greatsword and controls less. Re-pinned 2026-09-24:
         // multi-hit skills land every strike at the full per-strike
         // coefficient (was divided by hit_count), power 0.0266 -> 0.0530.
+        // Re-pinned 2026-09-25 (E18): the flow stays in shroud while its
+        // auto is the cast, so greatsword filler drops. Power 0.0530 ->
+        // 0.0485; the intent score moves with it.
         const PINNED: [f64; 7] = [
-            0.05296084297412295,
+            0.04853111131233386,
             0.0,
             0.0,
             0.0,
             0.4302897574123989,
             0.05444444444444444,
-            0.08385342939517683,
+            0.08314467232929057,
         ];
         for (i, (g, p)) in got.iter().zip(&PINNED).enumerate() {
             assert!(

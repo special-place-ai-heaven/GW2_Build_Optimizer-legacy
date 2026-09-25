@@ -4103,6 +4103,93 @@ mod tests {
         }
     }
 
+    /// E18. Pre-change fixture `skill_share` TVD against the golem log was
+    /// 0.648, with Dusk Strike at 0.168 of damage (log share 0) and Life
+    /// Rend at 0.019. Leaving shroud while its auto was still the cast
+    /// filled the recharge with greatsword autos.
+    const E18_SKILL_SHARE_TVD_BOUND: f64 = 0.648;
+
+    #[test]
+    fn weapon1_auto_is_filler_so_it_does_not_block_shroud_or_the_other_set() {
+        use std::collections::BTreeMap;
+
+        use rotation::reaper_fixture as fx;
+
+        let db = fx::db();
+        let (prepared, scenario) = fixture_prepared(&db, &fx::build());
+        let flow = simulate_flow(&prepared, &OptimizationWeights::default(), Some(&scenario));
+        let share = |name: &str| {
+            flow.skill_usage
+                .iter()
+                .find(|u| u.name == name)
+                .map(|u| u.dps_contribution / flow.total_dps)
+                .unwrap_or(0.0)
+        };
+        let dusk = share("Dusk Strike");
+        let life_rend = share("Life Rend");
+        let ghastly = flow
+            .skill_usage
+            .iter()
+            .find(|u| u.name == "Ghastly Claws")
+            .map(|u| u.cast_count)
+            .unwrap_or(0);
+
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/ei_logs/1f33-20260720-163045_golem.json"
+        ))
+        .expect("golem fixture");
+        let log = crate::fidelity::ei_log::parse(&text).expect("golem fixture parses");
+        let player = log.squad().next().expect("golem player");
+        let observed = crate::fidelity::compare::observe(
+            &log,
+            player,
+            &crate::gamedb::GameDb::empty_for_tests(),
+        );
+        assert_eq!(
+            observed
+                .skill_share
+                .get("Dusk Strike")
+                .copied()
+                .unwrap_or(0.0),
+            0.0,
+            "the golem log casts no greatsword auto"
+        );
+
+        let mut sim_share = BTreeMap::new();
+        for u in &flow.skill_usage {
+            if flow.total_dps > 0.0 {
+                *sim_share.entry(u.name.clone()).or_insert(0.0) +=
+                    u.dps_contribution / flow.total_dps;
+            }
+        }
+        if flow.condition_dps > 0.0 {
+            sim_share.insert(
+                "Conditions".to_string(),
+                flow.condition_dps / flow.total_dps,
+            );
+        }
+        let distance = crate::fidelity::compare::tvd(&observed.skill_share, &sim_share);
+
+        assert!(
+            dusk < life_rend,
+            "shroud filler should outrun the greatsword auto: dusk {dusk}, life rend {life_rend}"
+        );
+        assert!(
+            dusk < 0.10,
+            "Dusk Strike share {dusk} moved away from the log's 0 (was 0.168)"
+        );
+        assert!(
+            ghastly >= 1,
+            "the other set still gets its non-auto: Ghastly Claws x{ghastly}"
+        );
+        assert!(
+            distance <= E18_SKILL_SHARE_TVD_BOUND,
+            "skill_share TVD {distance:.6} regressed past {}",
+            E18_SKILL_SHARE_TVD_BOUND
+        );
+    }
+
     /// Doctrine 5 and 6 for the flow simulation's trait records: placement
     /// reads record fields only, and a trigger class the flow simulation
     /// cannot host abstains with the class named.
