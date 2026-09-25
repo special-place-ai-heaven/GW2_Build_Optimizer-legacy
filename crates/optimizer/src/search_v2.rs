@@ -1991,9 +1991,6 @@ fn retarget_after_elite_swap(
 /// legal ones, pad to 2 (same sort as `fill_revenant_legends`), apply the
 /// active package, and honor the aquatic keep/copy rule.
 fn retarget_revenant_legends_after_swap(build: &mut ValidatedBuild, db: &GameDb) {
-    if db.legends.is_empty() {
-        return;
-    }
     let spec_ids: Vec<u32> = build.specializations.iter().map(|s| s.spec_id).collect();
 
     let mut ids: Vec<String> = build

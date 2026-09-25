@@ -44,7 +44,6 @@ pub struct GameDb {
     pub professions: HashMap<String, Profession>,
     pub legends: HashMap<String, Legend>,
     pub pvp_amulets: HashMap<u32, PvpAmulet>,
-    /// Ranger pets. Empty until the cache has a `pets` download.
     pub pets: HashMap<u32, Pet>,
 
     // Derived indexes for fast lookups
@@ -128,6 +127,15 @@ impl GameDb {
         }
         if items_vec.is_empty() {
             return Err("No items found in cache — game data may not be downloaded".into());
+        }
+        if legends_vec.is_empty() {
+            return Err("No legends found in cache — game data may not be downloaded".into());
+        }
+        if pets_vec.is_empty() {
+            return Err("No pets found in cache — game data may not be downloaded".into());
+        }
+        if pvp_amulets_vec.is_empty() {
+            return Err("No PvP amulets found in cache — game data may not be downloaded".into());
         }
 
         let items: HashMap<u32, Item> = items_vec.into_iter().map(|i| (i.id, i)).collect();
@@ -1066,8 +1074,7 @@ mod tests {
         assert_eq!(db.itemstat_by_name("Berserker's").map(|s| s.id), Some(1));
     }
 
-    #[test]
-    fn load_rejects_empty_skills_traits_or_items() {
+    fn hollow_cache() -> (std::path::PathBuf, gw2_api::cache::DataCache) {
         let dir = std::env::temp_dir().join(format!(
             "gw2bo-hollow-{}-{}",
             std::process::id(),
@@ -1077,44 +1084,103 @@ mod tests {
                 .as_nanos()
         ));
         let cache = gw2_api::cache::DataCache::new(&dir);
-        let prof = gw2_api::models::Profession {
-            id: "Guardian".into(),
-            name: "Guardian".into(),
-            code: Some(1),
-            specializations: vec![],
-            weapons: std::collections::HashMap::new(),
-            training: vec![],
-            skills_by_palette: vec![],
-            icon: None,
-            icon_big: None,
-        };
-        let spec = gw2_api::models::Specialization {
-            id: 1,
-            name: "Zeal".into(),
-            profession: "Guardian".into(),
-            elite: false,
-            minor_traits: vec![],
-            major_traits: vec![],
-            weapon_trait: None,
-            icon: None,
-            background: None,
-            profession_icon: None,
-            profession_icon_big: None,
-        };
-        let stat = gw2_api::models::ItemStat {
-            id: 161,
-            name: "Berserker's".into(),
-            attributes: vec![],
-        };
+        (dir, cache)
+    }
+
+    fn save_json(cache: &gw2_api::cache::DataCache, key: &str, row: serde_json::Value) {
         cache
-            .save("professions", &vec![prof], 1)
-            .expect("save professions");
-        cache
-            .save("specializations", &vec![spec], 1)
-            .expect("save specs");
-        cache
-            .save("itemstats", &vec![stat], 1)
-            .expect("save itemstats");
+            .save(key, &serde_json::json!([row]), 1)
+            .unwrap_or_else(|e| panic!("save {key}: {e}"));
+    }
+
+    /// Professions / specs / itemstats / skills / traits / items / legends /
+    /// pets / pvp_amulets. `skip` is omitted (missing file). `empty` is saved
+    /// as `[]`.
+    fn seed_load_catalogs(cache: &gw2_api::cache::DataCache, skip: &str, empty: &str) {
+        let put = |key: &str, row: serde_json::Value| {
+            if key == skip {
+                return;
+            }
+            if key == empty {
+                cache
+                    .save(key, &Vec::<serde_json::Value>::new(), 1)
+                    .unwrap_or_else(|e| panic!("save empty {key}: {e}"));
+                return;
+            }
+            save_json(cache, key, row);
+        };
+        put(
+            "professions",
+            serde_json::json!({
+                "id": "Guardian",
+                "name": "Guardian",
+                "specializations": [],
+                "weapons": {},
+                "training": [],
+                "skills_by_palette": []
+            }),
+        );
+        put(
+            "specializations",
+            serde_json::json!({
+                "id": 1,
+                "name": "Zeal",
+                "profession": "Guardian",
+                "elite": false,
+                "minor_traits": [],
+                "major_traits": []
+            }),
+        );
+        put(
+            "itemstats",
+            serde_json::json!({"id": 161, "name": "Berserker's", "attributes": []}),
+        );
+        put("skills", serde_json::json!({"id": 1, "name": "Strike"}));
+        put(
+            "traits",
+            serde_json::json!({
+                "id": 1,
+                "name": "Zealot's Speed",
+                "specialization": 1,
+                "tier": 1,
+                "order": 0,
+                "slot": "Major"
+            }),
+        );
+        put(
+            "items",
+            serde_json::json!({
+                "id": 1,
+                "name": "Piece",
+                "type": "Armor",
+                "rarity": "Exotic",
+                "level": 80
+            }),
+        );
+        put(
+            "legends",
+            serde_json::json!({
+                "id": "Legend1",
+                "swap": 1,
+                "heal": 2,
+                "elite": 3,
+                "utilities": []
+            }),
+        );
+        put(
+            "pets",
+            serde_json::json!({"id": 1, "name": "Juvenile Bear"}),
+        );
+        put(
+            "pvp_amulets",
+            serde_json::json!({"id": 1, "name": "Berserker Amulet", "attributes": {}}),
+        );
+    }
+
+    #[test]
+    fn load_rejects_empty_skills_traits_or_items() {
+        let (dir, cache) = hollow_cache();
+        seed_load_catalogs(&cache, "skills", "");
         let err = match GameDb::load(&cache) {
             Ok(_) => panic!("hollow skills must fail"),
             Err(e) => e,
@@ -1123,6 +1189,35 @@ mod tests {
             err.contains("skills"),
             "expected skills fail-closed, got {err}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_rejects_empty_or_missing_legends_pets_or_pvp_amulets() {
+        for catalog in ["legends", "pets", "pvp_amulets"] {
+            let needle = match catalog {
+                "pvp_amulets" => "amulet",
+                other => other,
+            };
+            for empty in ["", catalog] {
+                let skip = if empty.is_empty() { catalog } else { "" };
+                let (dir, cache) = hollow_cache();
+                seed_load_catalogs(&cache, skip, empty);
+                let err = match GameDb::load(&cache) {
+                    Ok(_) => panic!("{catalog} skip={skip:?} empty={empty:?} must fail"),
+                    Err(e) => e,
+                };
+                assert!(
+                    err.to_lowercase().contains(needle)
+                        && err.contains("game data may not be downloaded"),
+                    "{catalog} skip={skip:?} empty={empty:?}: {err}"
+                );
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+        }
+        let (dir, cache) = hollow_cache();
+        seed_load_catalogs(&cache, "", "");
+        GameDb::load(&cache).expect("full seed must load");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
