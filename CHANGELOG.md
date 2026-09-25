@@ -2,6 +2,10 @@
 
 All notable changes to GW2 Build Optimizer are documented here.
 
+## Unreleased
+
+- E20a: automatic food and utility selection can now pick a consumable whose only effect is a stat conversion. Superior Sharpening Stone (item 9443) grants Power equal to 3% of Precision and 6% of Ferocity and has no flat bonus; the picker was skipping it. It is chosen when that conversion scores higher than a flat-only alternative. Equipping a stone that is already on the build is unchanged. E20b stays banked: those conversions still apply after trait conversions, with no wiki or log oracle for applying them earlier.
+
 ## 1.14.48
 
 - Engine gap E23 Whirling Wrath remainder closed by pin `whirling_wrath_lands_sourced_projectile_hits_per_mode`: skill 9081 projectile hits source override `hit_count` 2 in PvE, WvW, and PvP (player golem log ~1.75 single-target projectiles per cast; strike counts are whole, so 1.75 lands as 2). Spin stays 7 x 0.35. Area "Number of Impacts" 7 and `hit_timing.json` hits 14 are not the single-target count. Skills with no `hit_count` override still keep the API one-hit row and the gap line. Override entity count 51 -> 54.
