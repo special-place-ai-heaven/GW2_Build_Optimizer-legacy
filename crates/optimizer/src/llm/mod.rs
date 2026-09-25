@@ -223,6 +223,12 @@ pub enum LlmError {
     Unavailable(String),
 }
 
+/// `reqwest`/`io` transport failure. Their `Display` is only the top
+/// wrapper, so the UI would hide TLS causes unless we walk `source()`.
+pub(crate) fn http_error(err: impl std::error::Error) -> LlmError {
+    LlmError::Http(gw2_core::format_error_chain(&err))
+}
+
 /// Provider-neutral tool/function definition.
 /// Each provider translates this to its own wire format internally.
 /// Uses JSON Schema for parameters (common to Gemini, OpenAI, and Anthropic).
@@ -674,6 +680,56 @@ mod tool_arg_tests {
         assert!(
             coding(13.8).rank() < ModelInfo::default().rank(),
             "scored first"
+        );
+    }
+}
+
+#[cfg(test)]
+mod http_error_chain_tests {
+    use super::http_error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Cause;
+    impl fmt::Display for Cause {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("CERT_E_REVOCATION_FAILURE")
+        }
+    }
+    impl std::error::Error for Cause {}
+
+    #[derive(Debug)]
+    struct Top {
+        source: Cause,
+    }
+    impl fmt::Display for Top {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(
+                "error sending request for url (https://generativelanguage.googleapis.com/)",
+            )
+        }
+    }
+    impl std::error::Error for Top {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.source)
+        }
+    }
+
+    #[test]
+    fn llm_http_display_includes_chained_source() {
+        let err = Top { source: Cause };
+        assert!(
+            !err.to_string().contains("CERT_E_REVOCATION_FAILURE"),
+            "reqwest Display is the top wrapper only"
+        );
+        let shown = http_error(err).to_string();
+        assert!(
+            shown.contains("CERT_E_REVOCATION_FAILURE"),
+            "UI/logs must see the TLS cause, got {shown}"
+        );
+        assert!(
+            shown.starts_with("HTTP error: "),
+            "Display prefix unchanged, got {shown}"
         );
     }
 }

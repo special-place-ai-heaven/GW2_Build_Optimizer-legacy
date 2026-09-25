@@ -17,7 +17,7 @@
 use super::body::{body_cap_exceeded, body_capped, hit_body_cap};
 use super::cancel::CANCELLED;
 use super::openai_compat::{FunctionCallData, Message, ToolCallResponse};
-use super::LlmError;
+use super::{http_error, LlmError};
 use std::io::{BufRead, Read};
 
 use serde::Deserialize;
@@ -295,9 +295,7 @@ pub(crate) fn read_stream<R: std::io::Read>(
     // "succeeds" empty — a silent no-op with no error and no retry.
     if starts_like_json(&mut buffered)? {
         let mut body = String::new();
-        buffered
-            .read_to_string(&mut body)
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+        buffered.read_to_string(&mut body).map_err(http_error)?;
         return Err(envelope_error(&body));
     }
 
@@ -305,7 +303,7 @@ pub(crate) fn read_stream<R: std::io::Read>(
         if is_cancelled() {
             return Err(LlmError::Unavailable(CANCELLED.to_string()));
         }
-        let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
+        let line = line.map_err(http_error)?;
         let Some(payload) = stream_payload(line.trim_end()) else {
             continue;
         };
@@ -351,9 +349,7 @@ pub(crate) fn read_stream<R: std::io::Read>(
 
 /// Whether the body's first non-whitespace byte is `{`, without consuming it.
 fn starts_like_json<R: BufRead>(reader: &mut R) -> Result<bool, LlmError> {
-    let head = reader
-        .fill_buf()
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+    let head = reader.fill_buf().map_err(http_error)?;
     Ok(head
         .iter()
         .find(|byte| !byte.is_ascii_whitespace())

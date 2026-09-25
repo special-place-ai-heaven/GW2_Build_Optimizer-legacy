@@ -15,7 +15,7 @@ use super::openai_compat::{
 };
 use super::rate::{persist_usage, PersistedUsage, RateTracker};
 use super::trim::trim_openai_messages;
-use super::{KeyValidationResult, LlmClient, LlmError, ToolDefinition};
+use super::{http_error, KeyValidationResult, LlmClient, LlmError, ToolDefinition};
 
 /// OpenAI's conservative default requests-per-minute ceiling.
 const RPM_LIMIT: u32 = 60;
@@ -210,7 +210,7 @@ impl LlmClient for OpenAiClient {
             .timeout(METADATA_TIMEOUT)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(http_error)?;
 
         match resp.status().as_u16() {
             200 => Ok(()),
@@ -358,7 +358,7 @@ impl LlmClient for OpenAiClient {
             .timeout(METADATA_TIMEOUT)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(http_error)?;
 
         match resp.status().as_u16() {
             200 => {}

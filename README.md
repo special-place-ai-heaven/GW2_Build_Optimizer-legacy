@@ -300,6 +300,8 @@ Everything lives in `addons\gw2_build_optimizer\` inside your Guild Wars 2 folde
 - "Rate limited" means wait a minute or pick another model.
 - A slow free model can time out. Try a different one.
 
+**HTTPS under Proton or Wine.** The addon uses rustls with Mozilla roots, not Windows schannel. Wine's schannel often fails certificate revocation (`CERT_E_REVOCATION_FAILURE`); that class of failure used to show only as "error sending request for url". If a request still fails, the overlay and Nexus log include the TLS cause.
+
 **A result looks wrong.** Check mode, scale and role, drop locks you do not need, and read the viability reasons and the Not simulated line. Then report it from About with **Message developer**, category Wrong build, and attach your last result.
 
 **Logs.** Warnings and fallbacks go to the Nexus log. The run log of each optimization is kept in the Generations table.

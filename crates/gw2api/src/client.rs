@@ -266,7 +266,7 @@ pub(crate) fn with_cancel_bridge<T, C: Fn() -> bool + Sync>(
 ///   Never a sentinel for HTTP errors.
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
-    #[error("HTTP error: {0}")]
+    #[error("HTTP error: {}", gw2_core::format_error_chain(.0))]
     Http(#[from] reqwest::Error),
     #[error("JSON parse error: {0}")]
     Json(#[from] serde_json::Error),
@@ -822,6 +822,24 @@ impl Gw2Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_display_includes_reqwest_source_chain() {
+        let err = Client::builder()
+            .connect_timeout(Duration::from_millis(200))
+            .build()
+            .unwrap()
+            .get("http://127.0.0.1:1/")
+            .send()
+            .expect_err("nothing listens on port 1");
+        let top = err.to_string();
+        let shown = ApiError::Http(err).to_string();
+        assert!(shown.starts_with("HTTP error: "), "{shown}");
+        assert!(
+            shown.len() > format!("HTTP error: {top}").len(),
+            "Display must include the source chain beyond reqwest's wrapper:\n  top: {top}\n  shown: {shown}"
+        );
+    }
 
     #[test]
     fn build_bulk_ids_query_empty_slice() {
