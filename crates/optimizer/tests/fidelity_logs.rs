@@ -227,7 +227,9 @@ fn golem_fixture_burst_observables_are_facts_of_the_file() {
     close(o.condition_share, 0.0029288346379509602);
     close(o.condition_ramp_s, 11.0);
     // dpsAll[0] condiDamage / damage; distinct from actor condition_share.
-    close(o.condi_fraction, 11_617.0 / 4_030_026.0);
+    let condi = o.condi_fraction;
+    let condi_file = 11_617.0 / 4_030_026.0;
+    assert!((condi - condi_file).abs() < 1e-9, "{condi} != {condi_file}");
 }
 
 /// Fail-closed: emptying `EXPECTED_FIDELITY` is a CI lie. Every budgeted
