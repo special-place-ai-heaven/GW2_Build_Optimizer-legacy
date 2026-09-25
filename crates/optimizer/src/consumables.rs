@@ -326,9 +326,16 @@ pub fn fold_static_modifiers(mods: &mut DamageModifiers, item: &Item) {
     }
 }
 
-/// Does this row contribute a standing stat or a standing percent?
+/// Standing flat, percent, or stat conversion.
+///
+/// Conversion-only utilities (Superior Sharpening Stone) have neither a flat
+/// nor a percent, but they still move the sheet. They stay eligible for
+/// [`assign_best_consumables`] (E20a). Apply order vs trait conversions is
+/// unchanged (E20b, banked).
 pub fn has_static_effect(item: &Item) -> bool {
-    if !static_stat_bonus(item).is_zero() {
+    if !static_stat_bonus(item).is_zero()
+        || detail_lines(item).any(|line| parse_conversion(line).is_some())
+    {
         return true;
     }
     let mut mods = DamageModifiers::default();
@@ -364,9 +371,9 @@ fn locked_item(db: &GameDb, id: u32) -> Option<ValidatedItem> {
 /// Cheap inner argmax: pick legal food x utility (or none) after the kit is
 /// complete, write the ids onto `validated`, honor locks.
 ///
-/// Scoring uses standing stats + static percents only — the same numbers
-/// `calculate_validated_stats` will fold — via closed-form combat / realized
-/// axes. No rotation, no neighbor operator, no search_rank key change.
+/// Scoring uses the standing numbers `calculate_validated_stats` folds
+/// (flats, static percents, stat conversions) via closed-form combat /
+/// realized axes. No rotation, no neighbor operator, no search_rank key change.
 pub fn assign_best_consumables(
     validated: &mut ValidatedBuild,
     db: &GameDb,
@@ -1044,6 +1051,113 @@ mod tests {
             "{stats:?}"
         );
         assert_eq!(stats.ferocity, 270.0);
+    }
+
+    /// E20a: a StatConversion-only utility is picker-eligible and wins when
+    /// the conversion adds more power than a flat alternative on the fixture
+    /// sheet. Fold order is not under test (`stone_converts_on_the_stat_sheet`).
+    #[test]
+    fn conversion_only_utility_selected_when_it_beats_flat() {
+        let stone = api_item(STONE);
+        assert!(
+            static_stat_bonus(&stone).is_zero(),
+            "stone-class item must have no flat bonus"
+        );
+        assert!(
+            has_static_effect(&stone),
+            "conversion-only utility must not be filtered out of the picker"
+        );
+        let flat = test_consumable(
+            9450,
+            "Flat Power Oil",
+            ConsumableKind::Enhancement,
+            &[("Power", 40)],
+            &["Pve"],
+            None,
+        );
+        // Locked feast is the fixture sheet: precision and ferocity the stone
+        // converts. Base precision alone is only +30 power, which would lose
+        // to a larger flat; this sheet makes the conversion the better score.
+        let feast = test_consumable(
+            9451,
+            "Crit Feast",
+            ConsumableKind::Nourishment,
+            &[("Precision", 2000), ("Ferocity", 1500)],
+            &["Pve"],
+            None,
+        );
+        let db = db_with(vec![stone, flat, feast]);
+        let weights = power_weights();
+        let ctx = pve_ctx();
+        let scenario = pve_scenario();
+        let locks = BuildLocks {
+            food: Some(9451),
+            ..Default::default()
+        };
+
+        let mut picked = ValidatedBuild::default();
+        assign_best_consumables(
+            &mut picked,
+            &db,
+            "Warrior",
+            &weights,
+            &ctx,
+            &scenario,
+            &locks,
+        );
+        assert_eq!(picked.food.as_ref().map(|i| i.id), Some(9451));
+        assert_eq!(
+            picked.utility.as_ref().map(|i| i.id),
+            Some(9443),
+            "Superior Sharpening Stone must be selected over the flat oil"
+        );
+
+        let sheet = |utility_id: u32, utility_name: &str| ValidatedBuild {
+            food: Some(ValidatedItem {
+                id: 9451,
+                name: "Crit Feast".into(),
+            }),
+            utility: Some(ValidatedItem {
+                id: utility_id,
+                name: utility_name.into(),
+            }),
+            ..Default::default()
+        };
+        let stone_report = crate::referee::evaluate_validated_build(
+            &sheet(9443, "Superior Sharpening Stone"),
+            &db,
+            "Warrior",
+            &weights,
+            &ctx,
+            &scenario,
+        );
+        let flat_report = crate::referee::evaluate_validated_build(
+            &sheet(9450, "Flat Power Oil"),
+            &db,
+            "Warrior",
+            &weights,
+            &ctx,
+            &scenario,
+        );
+        assert!(
+            stone_report.stats.power > flat_report.stats.power,
+            "stone power {} must beat flat power {}",
+            stone_report.stats.power,
+            flat_report.stats.power
+        );
+        assert!(
+            stone_report.primary_combat.strike_dps_index
+                > flat_report.primary_combat.strike_dps_index,
+            "stone strike index {} must beat flat {}",
+            stone_report.primary_combat.strike_dps_index,
+            flat_report.primary_combat.strike_dps_index
+        );
+        assert!(
+            stone_report.stat_direction_score > flat_report.stat_direction_score,
+            "stone score {} must beat flat score {}",
+            stone_report.stat_direction_score,
+            flat_report.stat_direction_score
+        );
     }
 
     #[test]

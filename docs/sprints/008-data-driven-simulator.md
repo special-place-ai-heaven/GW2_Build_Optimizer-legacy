@@ -448,6 +448,15 @@ Increment log:
   --workspace`: 2261 passed, 0 failed, 42 ignored; clippy clean; locale
   parity script clean.
 
+- 2026-09-25, E20a: `assign_best_consumables` considers StatConversion-only
+  utilities. `has_static_effect` is true when the tooltip has a standing
+  conversion, so Superior Sharpening Stone (9443) can win over a weaker
+  flat utility on a fixture sheet. Pin
+  `conversion_only_utility_selected_when_it_beats_flat`. E20b banked:
+  conversion order vs `stats::apply_trait_conversions` is unchanged (still
+  the post-trait snapshot in `fold_into_validated_stats`). No wiki/log
+  oracle for the reorder. E19, E18, and E28 untouched.
+
 Engine gaps the review measured (counted Executable, never run). The next
 engine increment (single-writer) closes these before more professions are
 authored, or the executable column overstates:
@@ -472,7 +481,8 @@ authored, or the executable column overstates:
 | E17 | HALF CLOSED 2026-09-23 (Fear of Death done, Dhuumfire open): WvW record file: Fear of Death lacks the wiki 5s recharge; Dhuumfire uses the Scourge values (1s burning, 5s recharge) for every Necromancer because the format has no elite-spec gate | `wvw.json`, format |
 | E18 | weapon choice: the flow sim spends casts on greatsword autos where the log's Reaper stays in shroud or uses the other set; the scheduler's weapon/set preference is not measured against logs | `rotation/simulator.rs` scheduler |
 | E19 | CLOSED 2026-09-23: consumables: the item download filters out type Consumable, so stated food/utility (Superior Sharpening Stone, +100 Power/+70 Ferocity food) cannot resolve and abstain; the stat sheet already has a food/utility path (`consumables.rs`) | `gw2api download.rs` filter, `consumables.rs` |
-| E20 | optimizer food/utility selection ignores `StatConversion` consumables; conversions are applied after trait conversions rather than before | `consumables.rs`, `search_v2.rs` |
+| E20a | CLOSED 2026-09-25: optimizer food/utility selection includes StatConversion-only consumables. Pin `conversion_only_utility_selected_when_it_beats_flat`. | `consumables.rs` |
+| E20b | BANKED: StatConversion still applies after trait conversions (post-trait snapshot in `fold_into_validated_stats`). No wiki/log oracle for ordering vs `stats::apply_trait_conversions`. | `consumables.rs` |
 | E21 | WvW timeline runs boons side by side (`apply_buff` pushes a parallel `TimedBuff`), so duration-stacking records add nothing there (the "Feel My Wrath!" self record, any overlapping Quickness/Fury grant) | `wvw_timeline.rs apply_buff` |
 | E22 | WvW Reaper rows over-produce Quickness once it stacks in duration: Lucian Lord 0.785 -> 0.997 vs logs 0.2-0.6; some Necromancer WvW Quickness record fires too often, unidentified | `wvw.json` Necromancer records, flow sim |
 | E18 | weapon choice, still open | `rotation/simulator.rs` scheduler |
