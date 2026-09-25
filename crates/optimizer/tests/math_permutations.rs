@@ -150,6 +150,7 @@ fn extract_trait_percent(text: &str, pct: f64) -> combat::DamageModifiers {
             percent: Some(pct),
         }],
         traited_facts: vec![],
+        fact_parse_drops: 0,
         skills: vec![],
     };
     let mut traits = HashMap::new();

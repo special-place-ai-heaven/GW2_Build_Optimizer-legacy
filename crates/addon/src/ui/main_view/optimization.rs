@@ -1730,6 +1730,7 @@ pub(super) mod tests {
                     slot: "Major".into(),
                     facts: vec![],
                     traited_facts: vec![],
+                    fact_parse_drops: 0,
                     skills: vec![],
                 },
             );

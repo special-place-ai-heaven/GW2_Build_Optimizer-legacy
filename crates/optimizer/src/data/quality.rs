@@ -72,6 +72,8 @@ pub const COVERAGE_FIELD: &str = "wvw_timeline.effects";
 pub const INVENTORY_FIELD: &str = "coverage.inventory";
 /// Prepare-time records the flow sim could not host.
 pub const UNHOSTED_FIELD: &str = "coverage.unhosted";
+/// A skill or trait fact object failed to parse and was omitted.
+pub const FACT_DROP_FIELD: &str = "facts.parse_drop";
 /// Description-fallback Barrier{1000} / Healing{1} (W151).
 pub const HEURISTIC_FIELD: &str = "coverage.heuristic";
 /// English prefix of the coverage explanation; the addon renders the same
@@ -249,6 +251,30 @@ pub fn mode_honesty_reasons(
         ));
     }
     out
+}
+
+/// Merge parse-drop counts into a scored build's quality. `drops` is
+/// `(kind, id, count)` with `kind` of `"skill"` or `"trait"`. Zero counts
+/// are not reasons. The same id is recorded once.
+pub fn append_fact_parse_drops(
+    quality: &mut DataQuality,
+    reasons: &mut Vec<DataQualityReason>,
+    drops: impl IntoIterator<Item = (&'static str, u32, u32)>,
+    mode: &str,
+) {
+    let mut seen = std::collections::HashSet::<(&str, u32)>::new();
+    for (kind, id, n) in drops {
+        if n == 0 || !seen.insert((kind, id)) {
+            continue;
+        }
+        *quality = quality.merge(&DataQuality::Provisional);
+        reasons.push(DataQualityReason {
+            field: FACT_DROP_FIELD.into(),
+            entity: format!("{kind} {id}"),
+            modes: vec![mode.to_string()],
+            explanation: format!("{n} fact(s) failed to parse and were omitted from {kind} {id}"),
+        });
+    }
 }
 
 fn reason_on(

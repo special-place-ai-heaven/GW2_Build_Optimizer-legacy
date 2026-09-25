@@ -92,6 +92,7 @@ fn trait_entry(id: u32, name: &str, facts: Vec<Fact>) -> Trait {
         slot: "Major".into(),
         facts,
         traited_facts: vec![],
+        fact_parse_drops: 0,
         skills: vec![],
     }
 }
