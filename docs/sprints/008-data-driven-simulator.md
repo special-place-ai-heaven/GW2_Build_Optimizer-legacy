@@ -455,7 +455,7 @@ Increment log:
   `conversion_only_utility_selected_when_it_beats_flat`. E20b banked:
   conversion order vs `stats::apply_trait_conversions` is unchanged (still
   the post-trait snapshot in `fold_into_validated_stats`). No wiki/log
-  oracle for the reorder. E19, E18, and E28 untouched.
+  oracle for the reorder. E19 and E28 untouched. E18 closed 2026-09-25.
 
 - 2026-09-25, E28: `effect_coverage` verdicts are engine-true.
   `unexecutable_reason` abstains a `ProcEffect` with no inner payload,
@@ -487,13 +487,12 @@ authored, or the executable column overstates:
 | E15 | CLOSED 2026-09-23: triggered trait records (`OnSkillUse`, `OnConditionApplied`) ride on `FormSpec`, so a build with no form (Scourge, core) fires none of them in the flow sim | `engine::form_for_build`, `simulator.rs fire_triggered` |
 | E16 | CLOSED 2026-09-23: flow sim ignores timed damage modifiers (Dread +20%, Soul Barbs +10%, in-shroud crit damage) and condition-applying procs | flow sim |
 | E17 | HALF CLOSED 2026-09-23 (Fear of Death done, Dhuumfire open): WvW record file: Fear of Death lacks the wiki 5s recharge; Dhuumfire uses the Scourge values (1s burning, 5s recharge) for every Necromancer because the format has no elite-spec gate | `wvw.json`, format |
-| E18 | weapon choice: the flow sim spends casts on greatsword autos where the log's Reaper stays in shroud or uses the other set; the scheduler's weapon/set preference is not measured against logs | `rotation/simulator.rs` scheduler |
+| E18 | CLOSED 2026-09-25: weapon choice. A Weapon1 auto is filler: it does not keep the set, block shroud, or justify leaving shroud. While the form still has a cast (its auto included) the scheduler stays; weapon skills run when the form is down. Pin `weapon1_auto_is_filler_so_it_does_not_block_shroud_or_the_other_set`. Fixture Reaper Dusk Strike share 0.168 -> 0.065 (golem log 0), `skill_share` TVD 0.648 -> 0.589, bound 0.648 | `rotation/simulator.rs` scheduler |
 | E19 | CLOSED 2026-09-23: consumables: the item download filters out type Consumable, so stated food/utility (Superior Sharpening Stone, +100 Power/+70 Ferocity food) cannot resolve and abstain; the stat sheet already has a food/utility path (`consumables.rs`) | `gw2api download.rs` filter, `consumables.rs` |
 | E20a | CLOSED 2026-09-25: optimizer food/utility selection includes StatConversion-only consumables. Pin `conversion_only_utility_selected_when_it_beats_flat`. | `consumables.rs` |
 | E20b | BANKED: StatConversion still applies after trait conversions (post-trait snapshot in `fold_into_validated_stats`). No wiki/log oracle for ordering vs `stats::apply_trait_conversions`. | `consumables.rs` |
 | E21 | WvW timeline runs boons side by side (`apply_buff` pushes a parallel `TimedBuff`), so duration-stacking records add nothing there (the "Feel My Wrath!" self record, any overlapping Quickness/Fury grant) | `wvw_timeline.rs apply_buff` |
 | E22 | CLOSED: WvW `trait:2021:1` Reaper's Onslaught (in-shroud Quickness 3 s / 3 s) duration-stacked onto skill Quickness up to the 30 s cap. Lucian-shaped 60 s row 0.988 -> 0.583 (log band 0.2-0.6; log_compare Lucian Lord 0.997 was not re-run, no log in the repo). Page numbers stay. WvW record gains `SelfBoonAbsent` Quickness and an Interval gate of 15 s (sim ceiling, not a page fact). PvE `trait:2021:1` stays an ungated in-form pulse. Pins `kent_e22_wvw_onslaught_quickness_stays_in_log_band`, `kent_e22_wvw_onslaught_places_as_gated_periodic`. | `wvw.json` `trait:2021:1`, `engine.rs` `place_flow_record` |
-| E18 | weapon choice, still open | `rotation/simulator.rs` scheduler |
 | E23 | multi-hit landing fixed 2026-09-24, Unload's duplicate fact fixed 2026-09-24; Whirling Wrath 9081 single-target projectiles closed by pin `whirling_wrath_lands_sourced_projectile_hits_per_mode` (override `hit_count` 2; log ~1.75 rounded to a whole strike; not area 7, not `hit_timing.json` 14). Spin stays 7 x 0.35. Other Number-of-Impacts rows stay one hit and named | `builder.rs`, `balance_overrides` |
 | E24 | CLOSED 2026-09-24: Effulgent Stance and other skills with mutually exclusive Damage rows landed all rows per cast | `builder.rs:658-667` |
 | E25 | CLOSED 2026-09-24: the "vs meta" meter used uncapped direction alignment | `benchmark.rs:681` |

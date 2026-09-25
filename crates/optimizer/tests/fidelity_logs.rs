@@ -226,6 +226,18 @@ fn golem_fixture_burst_observables_are_facts_of_the_file() {
     close(o.burst_overlap_share, 1.0);
     close(o.condition_share, 0.0029288346379509602);
     close(o.condition_ramp_s, 11.0);
+    // Greatsword autos are absent. Shroud autos are Life Rend + Life Slash
+    // + Life Reap (241416 + 274771 + 314473) / 3_966_424.
+    let gs_auto = ["Dusk Strike", "Fading Twilight", "Chilling Scythe"]
+        .into_iter()
+        .map(|n| o.skill_share.get(n).copied().unwrap_or(0.0))
+        .sum::<f64>();
+    assert_eq!(gs_auto, 0.0, "golem Reaper casts no greatsword auto");
+    let shroud_auto = ["Life Rend", "Life Slash", "Life Reap"]
+        .into_iter()
+        .map(|n| o.skill_share.get(n).copied().unwrap_or(0.0))
+        .sum::<f64>();
+    close(Some(shroud_auto), 830_660.0 / 3_966_424.0);
     // dpsAll[0] condiDamage / damage; distinct from actor condition_share.
     let condi = o.condi_fraction;
     let condi_file = 11_617.0 / 4_030_026.0;
