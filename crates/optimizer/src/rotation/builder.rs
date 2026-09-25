@@ -129,6 +129,9 @@ pub fn apply_skill_strike(
 /// A three-way Damage row that the override format fully sources
 /// (`damage_coefficient:above_50` and `hit_count`) is resolved, not a gap.
 /// Coefficient alone stays named: that path used to collapse to one hit.
+/// A one-hit area-impact row is likewise resolved when `hit_count` is
+/// sourced and there is no coefficient profile (Whirling Wrath 9081).
+/// Other Number-of-Impacts skills stay named.
 pub fn unresolved_alternative_names(
     skills: &[RotationSkill],
     db: &GameDb,
@@ -138,8 +141,12 @@ pub fn unresolved_alternative_names(
         .iter()
         .filter_map(|s| db.skills.get(&s.skill_id))
         .flat_map(|skill| {
-            let strike_sourced = sourced_damage_coefficient_profile(ctx, skill.id).is_some()
-                && sourced_skill_u32(ctx, skill.id, "hit_count").is_some_and(|n| n > 0);
+            let hit_count = sourced_skill_u32(ctx, skill.id, "hit_count").filter(|n| *n > 0);
+            let coeff = sourced_damage_coefficient_profile(ctx, skill.id);
+            let strike_sourced = coeff.is_some() && hit_count.is_some();
+            // Coefficient profile already consumed `hit_count` for its one
+            // strike. Impact rows are sourced only when that profile is absent.
+            let impact_sourced = coeff.is_none() && hit_count.is_some();
             let mut alternatives = unresolved_alternatives(&skill.facts);
             if strike_sourced {
                 let labels: Vec<&str> = damage_groups(&skill.facts)
@@ -154,6 +161,7 @@ pub fn unresolved_alternative_names(
                 .map(|status| format!("{}: {status} alternatives", skill.name));
             let impacts = unmodelled_impacts(&skill.facts)
                 .into_iter()
+                .filter(move |_| !impact_sourced)
                 .map(move |label| format!("{}: {label} impacts", skill.name));
             alternatives.chain(impacts)
         })
@@ -162,8 +170,9 @@ pub fn unresolved_alternative_names(
 
 /// Labels of single-hit `Damage` rows on a skill whose `Number of Impacts`
 /// fact is larger. The impacts count the whole area (Whirling Wrath: 7
-/// projectiles; the player's golem log takes about 1.75 of them per cast),
-/// not the hits one foe takes, so the row stays one hit and is named.
+/// projectiles; one foe takes about 1.75), not the hits one foe takes.
+/// With no sourced `hit_count` the row stays one hit and is named. Skill
+/// 9081 sources the single-target count instead of that gap.
 fn unmodelled_impacts(facts: &[Fact]) -> Vec<String> {
     let impacts = facts.iter().find_map(|fact| match fact {
         Fact::Number {
@@ -1058,15 +1067,41 @@ fn extract_effects_for_context(
         });
     }
 
+    // Area "Number of Impacts" is not a single-target hit count. A sourced
+    // `hit_count` with no coefficient profile lands on those one-hit rows
+    // only (Whirling Wrath 9081). The profile path above already consumed
+    // `hit_count` for its one strike (Sword of Justice). No override: the
+    // API count stays, and the gap line still names the row.
+    // ponytail: whole hits only; logged ~1.75 projectile connects round to 2.
+    // Upgrade path: f64 expected hits on StrikeDamage if a log pin needs 1.75.
+    let sourced_impact_hits = if sourced_damage.is_none() {
+        sourced_skill_u32(ctx, skill_id, "hit_count").filter(|n| *n > 0)
+    } else {
+        None
+    };
+    let impact_labels: Vec<String> = if sourced_impact_hits.is_some() {
+        unmodelled_impacts(facts)
+    } else {
+        Vec::new()
+    };
+
     for fact in facts {
         match fact {
             Fact::Damage {
+                text,
                 hit_count,
                 dmg_multiplier,
                 ..
             } if sourced_damage.is_none() => {
+                let api_hits = hit_count.unwrap_or(1);
+                let label = text.as_deref().unwrap_or("Damage");
+                let hits = if api_hits == 1 && impact_labels.iter().any(|l| l == label) {
+                    sourced_impact_hits.unwrap_or(api_hits)
+                } else {
+                    api_hits
+                };
                 effects.push(SkillEffect::StrikeDamage {
-                    hit_count: hit_count.unwrap_or(1),
+                    hit_count: hits,
                     dmg_multiplier: dmg_multiplier.unwrap_or(1.0),
                 });
             }
@@ -2012,6 +2047,9 @@ mod tests {
         assert_eq!(sourced_skill_u32(&pve, 9168, "hit_count"), Some(4));
         assert_eq!(sourced_skill_u32(&pvp, 9168, "hit_count"), Some(4));
         assert_eq!(sourced_skill_u32(&wvw, 9168, "hit_count"), Some(4));
+        assert_eq!(sourced_skill_u32(&pve, 9081, "hit_count"), Some(2));
+        assert_eq!(sourced_skill_u32(&pvp, 9081, "hit_count"), Some(2));
+        assert_eq!(sourced_skill_u32(&wvw, 9081, "hit_count"), Some(2));
         assert_eq!(
             sourced_skill_value(&pve, 9168, "damage_coefficient:above_50"),
             Some(0.8)
@@ -3179,8 +3217,11 @@ mod fact_selection_tests {
     }
 
     /// Wiki Whirling_Wrath: 7 projectiles ("Number of Impacts: 7"); the API
-    /// row is one hit, and the player's golem log takes about 1.75 per cast.
-    /// The impacts count the area, so the row stays one hit and is named.
+    /// row is one hit, and one foe takes about 1.75 per cast. With no
+    /// sourced `hit_count` the row stays one hit and is named. Skill 9081
+    /// is the sourced exception
+    /// ([`whirling_wrath_lands_sourced_projectile_hits_per_mode`]); this
+    /// pin is every other Number-of-Impacts row.
     #[test]
     fn area_impacts_are_named_not_multiplied() {
         let facts = [
@@ -3285,6 +3326,62 @@ mod fact_selection_tests {
         assert_eq!(
             unresolved_alternatives(&db.skills[&9168].facts),
             vec!["Damage".to_string()]
+        );
+    }
+
+    /// Live API facts for skill 9081 (icons dropped): spin 7 x 0.35 and one
+    /// projectile hit at 0.275, plus Number of Impacts 7.
+    const WHIRLING_WRATH: &str = r#"{"id": 9081, "name": "Whirling Wrath", "slot": "Weapon_2", "facts": [{"type": "Damage", "text": "Damage", "hit_count": 7, "dmg_multiplier": 0.35}, {"type": "Damage", "text": "Projectile Damage", "hit_count": 1, "dmg_multiplier": 0.275}, {"type": "Number", "text": "Number of Impacts", "value": 7}]}"#;
+
+    fn strike_pairs(effects: &[SkillEffect]) -> Vec<(u32, f64)> {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                SkillEffect::StrikeDamage {
+                    hit_count,
+                    dmg_multiplier,
+                } => Some((*hit_count, *dmg_multiplier)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whirling Wrath 9081 projectiles land the sourced single-target hit
+    /// count in every mode. The player's golem log takes about 1.75 of the
+    /// 7 area projectiles per cast (sprint E23); `hit_count` is a whole
+    /// strike, so the override is 2. The spin stays 7 x 0.35. The same facts
+    /// on a skill with no override stay one projectile hit. Not area 7, and
+    /// not `hit_timing.json` hits 14.
+    #[test]
+    fn whirling_wrath_lands_sourced_projectile_hits_per_mode() {
+        let db = db_with(&[WHIRLING_WRATH]);
+        for mode in [GameMode::PvE, GameMode::WvW, GameMode::PvP] {
+            let skill = bar_skill(&db, 9081, mode.clone(), &[]);
+            assert_eq!(
+                strike_pairs(&skill.effects),
+                vec![(7, 0.35), (2, 0.275)],
+                "{mode:?}"
+            );
+            let impact_gaps: Vec<String> = unresolved_alternative_names(
+                std::slice::from_ref(&skill),
+                &db,
+                &BalanceContext::new(mode.clone()),
+            )
+            .into_iter()
+            .filter(|n| n.contains("impacts"))
+            .collect();
+            assert_eq!(impact_gaps, Vec::<String>::new(), "{mode:?}");
+        }
+        let unsourced =
+            extract_effects_for_context(0, &db.skills[&9081].facts, None, &BalanceContext::pve());
+        assert_eq!(
+            strike_pairs(&unsourced),
+            vec![(7, 0.35), (1, 0.275)],
+            "a skill with no hit_count override keeps the API projectile"
+        );
+        assert_eq!(
+            unmodelled_impacts(&db.skills[&9081].facts),
+            vec!["Projectile Damage".to_string()]
         );
     }
 }
