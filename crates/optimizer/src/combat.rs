@@ -3468,6 +3468,7 @@ mod tests {
                 })
                 .collect(),
             traited_facts: vec![],
+            fact_parse_drops: 0,
             skills: vec![],
         }
     }

@@ -323,8 +323,15 @@ pub fn optimize_cancellable(
                 ctx,
             );
             let score = score_with_weights(&combat_perf, weights);
-            let (data_quality, quality_reasons) =
+            let (mut data_quality, mut quality_reasons) =
                 quality_from_modifiers(&spec.modifiers, &[], false, ctx.game_mode.label());
+            append_trait_fact_parse_drops(
+                &mut data_quality,
+                &mut quality_reasons,
+                &spec.trait_ids,
+                traits_cache,
+                ctx.game_mode.label(),
+            );
 
             all_candidates.push(BuildCandidate {
                 gear: gear.clone(),
@@ -508,8 +515,15 @@ fn optimize_pvp(
                 ctx,
             );
             let score = score_with_weights(&combat_perf, weights);
-            let (data_quality, quality_reasons) =
+            let (mut data_quality, mut quality_reasons) =
                 quality_from_modifiers(&spec.modifiers, &[], false, ctx.game_mode.label());
+            append_trait_fact_parse_drops(
+                &mut data_quality,
+                &mut quality_reasons,
+                &spec.trait_ids,
+                traits_cache,
+                ctx.game_mode.label(),
+            );
 
             all_candidates.push(BuildCandidate {
                 gear: empty_gear.clone(),
@@ -869,6 +883,124 @@ pub fn quality_from_modifiers(
         });
     }
     (quality, reasons)
+}
+
+fn push_skill_fact_drop(out: &mut Vec<(&'static str, u32, u32)>, db: &GameDb, id: u32) {
+    if let Some(skill) = db.skills.get(&id) {
+        out.push(("skill", id, skill.fact_parse_drops));
+    }
+}
+
+/// Skill and trait ids this score actually reads, with their parse-drop counts.
+fn collect_scored_fact_drops(
+    db: &GameDb,
+    validated: &ValidatedBuild,
+    profession_name: &str,
+) -> Vec<(&'static str, u32, u32)> {
+    let mut out = Vec::new();
+    if let Some((id, _)) = validated.skills.heal {
+        push_skill_fact_drop(&mut out, db, id);
+    }
+    for (id, _) in validated.skills.utilities.iter().flatten() {
+        push_skill_fact_drop(&mut out, db, *id);
+    }
+    if let Some((id, _)) = validated.skills.elite {
+        push_skill_fact_drop(&mut out, db, id);
+    }
+    for (id, _) in &validated.skills.profession {
+        push_skill_fact_drop(&mut out, db, *id);
+    }
+
+    let spec_ids: Vec<u32> = validated
+        .specializations
+        .iter()
+        .map(|s| s.spec_id)
+        .collect();
+    if validated.skills.profession.is_empty() {
+        for (id, _) in rotation::builder::profession_skills_for_build(
+            db,
+            profession_name,
+            &spec_ids,
+            &validated.weapons,
+        ) {
+            push_skill_fact_drop(&mut out, db, id);
+        }
+    }
+    for (id, _) in rotation::builder::form_bar_for_build(db, profession_name, &spec_ids) {
+        push_skill_fact_drop(&mut out, db, id);
+    }
+    if let Some(profession) = db.profession(profession_name) {
+        let mut weapon_ids = Vec::new();
+        if let Some(ref main) = validated.weapons.set1.main_hand {
+            add_weapon_skill_ids(&mut weapon_ids, profession, main, db, Hand::Main);
+        }
+        if let Some(ref off) = validated.weapons.set1.off_hand {
+            add_weapon_skill_ids(&mut weapon_ids, profession, off, db, Hand::Off);
+        }
+        if let Some(ref main) = validated.weapons.set2.main_hand {
+            add_weapon_skill_ids(&mut weapon_ids, profession, main, db, Hand::Main);
+        }
+        if let Some(ref off) = validated.weapons.set2.off_hand {
+            add_weapon_skill_ids(&mut weapon_ids, profession, off, db, Hand::Off);
+        }
+        for id in weapon_ids {
+            push_skill_fact_drop(&mut out, db, id);
+        }
+    }
+
+    let mut trait_ids: Vec<u32> = validated
+        .specializations
+        .iter()
+        .flat_map(|s| s.all_trait_ids.iter().chain(s.trait_ids.iter()).copied())
+        .collect();
+    trait_ids.sort_unstable();
+    trait_ids.dedup();
+    for id in trait_ids {
+        let Some(t) = db.traits.get(&id) else {
+            continue;
+        };
+        out.push(("trait", id, t.fact_parse_drops));
+        for ts in &t.skills {
+            out.push(("skill", ts.id, ts.fact_parse_drops));
+        }
+    }
+    out
+}
+
+pub(crate) fn apply_build_fact_parse_drops(
+    quality: &mut data::DataQuality,
+    reasons: &mut Vec<data::DataQualityReason>,
+    db: &GameDb,
+    validated: &ValidatedBuild,
+    profession_name: &str,
+    mode: &str,
+) {
+    data::quality::append_fact_parse_drops(
+        quality,
+        reasons,
+        collect_scored_fact_drops(db, validated, profession_name),
+        mode,
+    );
+}
+
+fn append_trait_fact_parse_drops(
+    quality: &mut data::DataQuality,
+    reasons: &mut Vec<data::DataQualityReason>,
+    trait_ids: &[u32],
+    traits_cache: &HashMap<u32, GW2Trait>,
+    mode: &str,
+) {
+    let mut drops = Vec::new();
+    for id in trait_ids {
+        let Some(t) = traits_cache.get(id) else {
+            continue;
+        };
+        drops.push(("trait", *id, t.fact_parse_drops));
+        for ts in &t.skills {
+            drops.push(("skill", ts.id, ts.fact_parse_drops));
+        }
+    }
+    data::quality::append_fact_parse_drops(quality, reasons, drops, mode);
 }
 
 /// Add stat values from a slot budget entry, classifying each itemstat
@@ -3222,6 +3354,14 @@ pub fn synergy_result_from_validated(
             });
         }
     }
+    apply_build_fact_parse_drops(
+        &mut data_quality,
+        &mut quality_reasons,
+        db,
+        &validated,
+        profession_name,
+        ctx.game_mode.label(),
+    );
     SynergyResult {
         validated,
         stats: full_stats,
@@ -5376,6 +5516,7 @@ mod tests {
                     target: Some("Power".into()),
                 }],
                 traited_facts: vec![],
+                fact_parse_drops: 0,
             },
         );
         // Trait 101: gives +150 Vitality (bad for PowerDPS)
@@ -5398,6 +5539,7 @@ mod tests {
                     target: Some("Vitality".into()),
                 }],
                 traited_facts: vec![],
+                fact_parse_drops: 0,
             },
         );
         // Trait 102: nothing
@@ -5415,6 +5557,7 @@ mod tests {
                 skills: vec![],
                 facts: vec![],
                 traited_facts: vec![],
+                fact_parse_drops: 0,
             },
         );
 
@@ -5823,6 +5966,7 @@ mod tests {
                 },
             ],
             traited_facts: vec![],
+            fact_parse_drops: 0,
             categories: vec![],
             attunement: None,
             cost: None,
@@ -5892,6 +6036,7 @@ mod tests {
             slot: Some("Weapon_1".into()),
             facts: vec![],
             traited_facts: vec![],
+            fact_parse_drops: 0,
             categories: vec![],
             attunement: None,
             cost: None,
@@ -5918,6 +6063,7 @@ mod tests {
             slot: Some("Weapon_1".into()),
             facts: vec![],
             traited_facts: vec![],
+            fact_parse_drops: 0,
             categories: vec![],
             attunement: None,
             cost: None,
@@ -5993,6 +6139,7 @@ mod tests {
                 slot: Some(format!("Weapon_{slot}")),
                 facts: vec![],
                 traited_facts: vec![],
+                fact_parse_drops: 0,
                 categories: vec![],
                 attunement: None,
                 cost: None,
@@ -6084,6 +6231,7 @@ mod tests {
                 slot: "Major".into(),
                 facts: Vec::new(),
                 traited_facts: Vec::new(),
+                fact_parse_drops: 0,
                 skills: Vec::new(),
             },
         );
@@ -6320,6 +6468,7 @@ mod tests {
                 percent: Some(5.0),
             }],
             traited_facts: vec![],
+            fact_parse_drops: 0,
             skills: vec![],
         };
         let traits = HashMap::from([(646, symbolic_exposure)]);
@@ -6385,5 +6534,91 @@ mod tests {
         assert_eq!(out.mode, params.mode);
         assert!(out.intent.is_none());
         assert!(out.deferred_target.is_empty());
+    }
+
+    #[test]
+    fn dropped_fact_is_provisional_on_the_scored_path() {
+        let skill: gw2_api::models::Skill = serde_json::from_str(
+            r#"{
+                "id": 880014,
+                "name": "Parse Drop Probe",
+                "slot": "Heal",
+                "facts": [
+                    {"text": "Recharge", "type": "Recharge", "value": 8},
+                    {"text": "Some effect", "icon": "i.png", "value": 5}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(skill.facts.len(), 1);
+        assert!(matches!(skill.facts[0], Fact::Recharge { .. }));
+        assert_eq!(skill.fact_parse_drops, 1);
+
+        let tr: GW2Trait = serde_json::from_str(
+            r#"{
+                "id": 880015,
+                "name": "Probe Trait",
+                "specialization": 1,
+                "tier": 1,
+                "order": 0,
+                "slot": "Major",
+                "facts": [
+                    {"type": "Number", "value": 1},
+                    {"text": "no type"}
+                ],
+                "skills": [{
+                    "id": 880016,
+                    "facts": [
+                        {"type": "Range", "value": 100},
+                        {"text": "no type"}
+                    ]
+                }]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(tr.facts.len(), 1);
+        assert_eq!(tr.fact_parse_drops, 1);
+        assert_eq!(tr.skills[0].fact_parse_drops, 1);
+
+        let mut db = GameDb::empty_for_tests();
+        db.skills.insert(skill.id, skill);
+        db.traits.insert(tr.id, tr);
+        let mut validated = ValidatedBuild::default();
+        validated.skills.heal = Some((880014, "Parse Drop Probe".into()));
+        validated.specializations.push(validation::ValidatedSpec {
+            spec_id: 1,
+            name: "Probe".into(),
+            elite: false,
+            trait_ids: vec![880015],
+            trait_names: vec!["Probe Trait".into()],
+            all_trait_ids: vec![880015],
+        });
+        let ctx = BalanceContext::new(GameMode::PvE);
+        let result = synergy_result_from_validated(validated, &db, "Guardian", &ctx, None);
+        assert_eq!(result.data_quality, data::DataQuality::Provisional);
+        let fields: Vec<&str> = result
+            .quality_reasons
+            .iter()
+            .map(|r| r.field.as_str())
+            .collect();
+        assert!(
+            fields.contains(&data::quality::FACT_DROP_FIELD),
+            "scored path must name the parse drop, not look complete: {fields:?} {:?}",
+            result.quality_reasons
+        );
+        let skill_reason = result
+            .quality_reasons
+            .iter()
+            .find(|r| r.entity == "skill 880014")
+            .expect("drop is tied to the skill id");
+        assert!(skill_reason.explanation.contains('1'));
+        assert!(result
+            .quality_reasons
+            .iter()
+            .any(|r| r.entity == "trait 880015"));
+        assert!(result
+            .quality_reasons
+            .iter()
+            .any(|r| r.entity == "skill 880016"));
     }
 }

@@ -44,6 +44,9 @@ pub fn build_rotation_skills_for_context(
 /// indices first, then skip those base facts. `i` indexes the API's raw
 /// array; `deserialize_facts` keeps every typed fact (`Range`, `NoData`
 /// included), so the indices line up (Poison Volley's `overrides: 6`).
+/// An object that fails to parse is omitted and counted on
+/// `fact_parse_drops` (the scored build is Provisional). That omission can
+/// shift later override indices.
 ///
 /// A traited Damage fact of a trait with a bare "Damage Increase" is left
 /// out: that increase reaches the skill once, as the trait's mode value,
@@ -1564,6 +1567,7 @@ mod tests {
             slot: Some(slot.to_string()),
             facts,
             traited_facts: vec![],
+            fact_parse_drops: 0,
             categories: vec![],
             attunement: None,
             cost: None,

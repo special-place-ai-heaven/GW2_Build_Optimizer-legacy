@@ -1648,6 +1648,14 @@ fn evaluate_inner(
             });
         }
     }
+    engine::apply_build_fact_parse_drops(
+        &mut quality,
+        &mut quality_reasons,
+        db,
+        validated,
+        profession_name,
+        ctx.game_mode.label(),
+    );
 
     RefereeReport {
         scenario: scenario.clone(),
@@ -3641,6 +3649,7 @@ pub(crate) mod tests {
                     },
                 ],
                 traited_facts: vec![],
+                fact_parse_drops: 0,
                 categories: vec![],
                 attunement: None,
                 cost: None,

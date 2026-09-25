@@ -947,6 +947,7 @@ mod tests {
             slot: "Major".into(),
             facts,
             traited_facts: Vec::new(),
+            fact_parse_drops: 0,
             skills: Vec::new(),
         }
     }

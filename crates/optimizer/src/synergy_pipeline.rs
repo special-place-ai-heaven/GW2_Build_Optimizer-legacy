@@ -1556,6 +1556,14 @@ fn build_synergy_result(
         data_quality = data_quality.merge(&crate::data::DataQuality::Provisional);
         quality_reasons.extend(gear_reasons);
     }
+    engine::apply_build_fact_parse_drops(
+        &mut data_quality,
+        &mut quality_reasons,
+        db,
+        &validated,
+        profession_name,
+        ctx.game_mode.label(),
+    );
     Ok(SynergyResult {
         validated,
         stats: full_stats,
@@ -1600,6 +1608,7 @@ pub(crate) mod runtime_diagnostics_tests {
                 percent: Some(pct),
             }],
             traited_facts: vec![],
+            fact_parse_drops: 0,
             skills: vec![],
         }
     }
@@ -1621,6 +1630,7 @@ pub(crate) mod runtime_diagnostics_tests {
                 target: Some("Vitality".into()),
             }],
             traited_facts: vec![],
+            fact_parse_drops: 0,
             skills: vec![],
         }
     }
@@ -1701,6 +1711,7 @@ pub(crate) mod runtime_diagnostics_tests {
             slot: Some("Utility".into()),
             facts,
             traited_facts: vec![],
+            fact_parse_drops: 0,
             categories: vec![],
             attunement: None,
             cost: None,
@@ -2465,6 +2476,7 @@ mod revenant_legend_tests {
             slot: Some(slot.into()),
             facts: vec![],
             traited_facts: vec![],
+            fact_parse_drops: 0,
             categories: vec![],
             attunement: None,
             cost: None,
@@ -2831,6 +2843,7 @@ mod leftover_wrapper_tests {
                 },
             ],
             traited_facts: vec![],
+            fact_parse_drops: 0,
             skills: vec![],
         }
     }

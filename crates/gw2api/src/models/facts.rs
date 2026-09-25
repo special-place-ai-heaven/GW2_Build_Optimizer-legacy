@@ -4,6 +4,7 @@
 
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 
 /// The `type` field in the API determines which variant this is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,30 +146,106 @@ pub struct TraitedFact {
     pub fact: Fact,
 }
 
-/// Lenient deserializer for `Vec<Fact>` — skips facts that fail to parse
-/// (e.g. missing `type` field). The GW2 API occasionally returns fact objects
-/// without a `type` discriminator.
+thread_local! {
+    static FACT_DROP_FRAMES: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Opened by skill/trait deserialize so a fact that fails to parse is counted
+/// on that owner instead of discarded with no record.
+pub(crate) struct FactDropFrame {
+    open: bool,
+}
+
+impl FactDropFrame {
+    pub(crate) fn enter() -> Self {
+        FACT_DROP_FRAMES.with(|frames| frames.borrow_mut().push(0));
+        Self { open: true }
+    }
+
+    pub(crate) fn live_drops(mut self) -> u32 {
+        self.open = false;
+        FACT_DROP_FRAMES.with(|frames| frames.borrow_mut().pop().unwrap_or(0))
+    }
+}
+
+impl Drop for FactDropFrame {
+    fn drop(&mut self) {
+        if self.open {
+            FACT_DROP_FRAMES.with(|frames| {
+                frames.borrow_mut().pop();
+            });
+        }
+    }
+}
+
+pub(crate) fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
+fn partition<T: serde::de::DeserializeOwned>(values: Vec<serde_json::Value>) -> (Vec<T>, u32) {
+    let mut kept = Vec::with_capacity(values.len());
+    let mut dropped = 0u32;
+    for value in values {
+        match serde_json::from_value(value) {
+            Ok(item) => kept.push(item),
+            Err(_) => dropped = dropped.saturating_add(1),
+        }
+    }
+    (kept, dropped)
+}
+
+/// A parse failure with no open [`FactDropFrame`] cannot be tied to a skill or
+/// trait id. Fail the value instead of returning a shorter vec that looks complete.
+fn note_or_fail<E: serde::de::Error>(dropped: u32) -> Result<(), E> {
+    if dropped == 0 {
+        return Ok(());
+    }
+    let attached = FACT_DROP_FRAMES.with(|frames| {
+        let mut frames = frames.borrow_mut();
+        match frames.last_mut() {
+            Some(top) => {
+                *top = top.saturating_add(dropped);
+                true
+            }
+            None => false,
+        }
+    });
+    if attached {
+        Ok(())
+    } else {
+        Err(E::custom(format!(
+            "{dropped} fact(s) failed to parse and no skill or trait quality surface is attached"
+        )))
+    }
+}
+
+fn deserialize_lenient<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let (kept, dropped) = partition(values);
+    note_or_fail(dropped)?;
+    Ok(kept)
+}
+
+/// Keeps facts that parse. A failure is counted on the enclosing skill or trait
+/// (`fact_parse_drops`). With no owner frame, the value fails closed.
+/// The GW2 API occasionally returns fact objects without a `type` discriminator.
 pub fn deserialize_facts<'de, D>(deserializer: D) -> Result<Vec<Fact>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let values: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
-    Ok(values
-        .into_iter()
-        .filter_map(|v| serde_json::from_value(v).ok())
-        .collect())
+    deserialize_lenient(deserializer)
 }
 
-/// Lenient deserializer for `Vec<TraitedFact>` — skips entries that fail to parse.
+/// Same contract as [`deserialize_facts`] for traited facts.
 pub fn deserialize_traited_facts<'de, D>(deserializer: D) -> Result<Vec<TraitedFact>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let values: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
-    Ok(values
-        .into_iter()
-        .filter_map(|v| serde_json::from_value(v).ok())
-        .collect())
+    deserialize_lenient(deserializer)
 }
 
 #[cfg(test)]
@@ -231,18 +308,47 @@ mod tests {
     }
 
     #[test]
-    fn test_lenient_facts_skips_missing_type() {
-        // Simulates GW2 API returning a fact without a "type" field
-        let json = r#"[
-            {"text": "Recharge", "type": "Recharge", "icon": "i.png", "value": 8},
-            {"text": "Some effect", "icon": "i.png", "value": 5},
-            {"text": "Range", "type": "Range", "icon": "i.png", "value": 300}
-        ]"#;
-        let values: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
-        let facts: Vec<Fact> = values
-            .into_iter()
-            .filter_map(|v| serde_json::from_value(v).ok())
-            .collect();
-        assert_eq!(facts.len(), 2);
+    fn typed_facts_deserialize_without_an_owner_frame() {
+        #[derive(Deserialize)]
+        struct Bare {
+            #[serde(deserialize_with = "deserialize_facts")]
+            facts: Vec<Fact>,
+        }
+        let bare: Bare = serde_json::from_str(
+            r#"{"facts":[
+                {"type":"Recharge","value":8},
+                {"type":"Range","value":300},
+                {"type":"FutureFact"}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(bare.facts.len(), 3);
+        assert!(matches!(bare.facts[2], Fact::Unknown));
+    }
+
+    /// The old `test_lenient_facts_skips_missing_type` treated a shorter vec as
+    /// success. A missing `type` with nowhere to record the drop must fail.
+    #[test]
+    fn missing_type_is_not_a_silent_skip() {
+        #[derive(Deserialize)]
+        struct Bare {
+            #[serde(default, deserialize_with = "deserialize_facts")]
+            #[allow(dead_code)]
+            facts: Vec<Fact>,
+        }
+        let err = serde_json::from_str::<Bare>(
+            r#"{"facts":[
+                {"text":"Recharge","type":"Recharge","icon":"i.png","value":8},
+                {"text":"Some effect","icon":"i.png","value":5},
+                {"text":"Range","type":"Range","icon":"i.png","value":300}
+            ]}"#,
+        )
+        .err()
+        .expect("missing type must not deserialize");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed to parse"),
+            "silent skip must not be success: {msg}"
+        );
     }
 }
