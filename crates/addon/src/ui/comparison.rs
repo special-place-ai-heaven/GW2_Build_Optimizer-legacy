@@ -413,7 +413,7 @@ pub(crate) fn inspect_text(name: &str, db: &GameDb) -> Option<String> {
 }
 
 /// State for the comparison view.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ComparisonState {
     pub suggestions: Vec<BuildSuggestion>,
     pub selected_suggestion: usize,
@@ -431,6 +431,36 @@ pub struct ComparisonState {
     /// snapshot taken at its start. The Improve pill reads this, not the live
     /// locks, which `auto_populate_locks` refills after every run.
     pub run_locked_spec: Option<String>,
+}
+
+impl ComparisonState {
+    pub(crate) fn merge_paint(&mut self, base: &Self, paint: &Self) {
+        // A clear (optimize start) shortens the vec. A worker that already
+        // replaced it changed the length the other way and wins.
+        crate::state::keep_len(
+            &mut self.suggestions,
+            base.suggestions.len(),
+            &paint.suggestions,
+        );
+        crate::state::take_ui(
+            &mut self.selected_suggestion,
+            &base.selected_suggestion,
+            &paint.selected_suggestion,
+        );
+        crate::state::merge_busy(&mut self.loading, base.loading, paint.loading);
+        crate::state::merge_message(&mut self.error, &base.error, &paint.error);
+        crate::state::take_ui(&mut self.result_pane, &base.result_pane, &paint.result_pane);
+        crate::state::take_ui(
+            &mut self.show_optimized,
+            &base.show_optimized,
+            &paint.show_optimized,
+        );
+        crate::state::keep_worker(
+            &mut self.run_locked_spec,
+            &base.run_locked_spec,
+            &paint.run_locked_spec,
+        );
+    }
 }
 
 /// A link to the site a published build came from, named after that site.

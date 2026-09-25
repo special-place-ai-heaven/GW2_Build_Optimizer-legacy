@@ -609,7 +609,7 @@ impl Default for CustomTheme {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
     pub gw2_api_key: Option<String>,
     pub cache_build_number: Option<u32>,

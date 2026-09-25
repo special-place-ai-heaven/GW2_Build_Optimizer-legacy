@@ -92,8 +92,8 @@ type WriteJob = Box<dyn FnOnce() + Send + 'static>;
 /// instead of on the render thread.
 ///
 /// Two reasons this exists. The render callback is the game's only draw pass
-/// and it runs with `STATE` held, so an `fs::write` there stalls the frame
-/// *and* every background worker queued to publish a result behind that lock.
+/// and an `fs::write` there stalls the frame. Workers publish through
+/// `STATE`, so a write inside a critical section stalls them too.
 /// And every saver in this addon publishes through one fixed `<name>.tmp` plus
 /// a rename, so two savers of the same file at the same moment would fight
 /// over that single staging path.
@@ -238,7 +238,86 @@ fn window_needs_default_size(unset: bool, force_snap: bool) -> bool {
     unset || force_snap
 }
 
+/// Window chrome that has to read ImGui geometry. Short; the layout below
+/// does not run inside this lock.
+fn sync_main_chrome(ui: &Ui, state: &mut AddonState) {
+    if window_needs_snap(ui.window_pos(), ui.window_size(), ui.io().display_size) {
+        state.force_window_pos = true;
+    }
+    if !ui.is_window_collapsed() && !ui.is_mouse_down(MouseButton::Left) {
+        let p = ui.window_pos();
+        let sz = ui.window_size();
+        let (old_p, old_sz) = state.config.window_rect();
+        if (p[0] - old_p[0]).abs() > 0.5
+            || (p[1] - old_p[1]).abs() > 0.5
+            || (sz[0] - old_sz[0]).abs() > 0.5
+            || (sz[1] - old_sz[1]).abs() > 0.5
+        {
+            state.config.set_window_rect(p, sz);
+            save_config_detached(state);
+        }
+    }
+}
+
+/// Snapshot `STATE`, paint the main window, commit. Layout runs with the
+/// mutex released so a worker can publish during the frame.
+fn paint_main_window(ui: &Ui) {
+    let Some(captured) = state::with_state(|s| {
+        sync_main_chrome(ui, s);
+        state::PaintCapture::take(s)
+    }) else {
+        return;
+    };
+    let mut frame = captured.materialize();
+    let _baseline = frame.pin_baseline();
+    paint_main_screen(ui, &mut frame.state);
+    drop(_baseline);
+    state::with_state(|s| frame.commit(s));
+}
+
+/// ImGui for setup/main. Must not call `with_state` — the caller holds no
+/// `STATE` guard, and these `render_*` paths are pinned the same way.
+fn paint_main_screen(ui: &Ui, state: &mut AddonState) {
+    gw2_core::i18n::set_language(&state.config.ui_language);
+    match state.screen.clone() {
+        Screen::Setup(step) => setup::render_setup(ui, state, step),
+        Screen::Main => main_view::render_main(ui, state),
+    }
+    // Last write wins: buttons/selectables/pills set Hand while hovered.
+    // Nexus maps that to GW2's gloved click cursor. Pin arrow after all widgets,
+    // but only while the mouse is over this overlay so the world cursor stays intact.
+    if ui.is_window_hovered_with_flags(WindowHoveredFlags::ROOT_AND_CHILD_WINDOWS)
+        || ui.is_any_item_hovered()
+    {
+        ui.set_mouse_cursor(Some(MouseCursor::Arrow));
+    }
+}
+
+fn paint_mini_window(ui: &Ui, fade: f32, leaving: bool) {
+    let Some(captured) = state::with_state(|s| state::PaintCapture::take(s)) else {
+        return;
+    };
+    let mut frame = captured.materialize();
+    let _baseline = frame.pin_baseline();
+    paint_mini_screen(ui, &mut frame.state, fade, leaving);
+    drop(_baseline);
+    state::with_state(|s| frame.commit(s));
+}
+
+fn paint_mini_screen(ui: &Ui, state: &mut AddonState, fade: f32, leaving: bool) {
+    gw2_core::i18n::set_language(&state.config.ui_language);
+    mini_radio::render_window(ui, state, fade, leaving);
+    if ui.is_window_hovered_with_flags(WindowHoveredFlags::ROOT_AND_CHILD_WINDOWS)
+        || ui.is_any_item_hovered()
+    {
+        ui.set_mouse_cursor(Some(MouseCursor::Arrow));
+    }
+}
+
 pub fn render(ui: &Ui) {
+    // This thread's `with_state` calls are the frame's own snapshot and commit.
+    // They must not look like a worker publish.
+    let _render_thread = state::RenderThreadGuard::enter();
     // Before the visibility check and outside `with_state`: a copy that lost the
     // race for the clipboard must still land if the player closed the overlay
     // right after clicking, and the retry must never run under the state lock.
@@ -326,41 +405,7 @@ pub fn render(ui: &Ui) {
             .position(pos, cond)
             .size(size, cond)
             .build(ui, || {
-                state::with_state(|s| {
-                    if window_needs_snap(ui.window_pos(), ui.window_size(), ui.io().display_size) {
-                        s.force_window_pos = true;
-                    }
-                    if !ui.is_window_collapsed() && !ui.is_mouse_down(MouseButton::Left) {
-                        let p = ui.window_pos();
-                        let sz = ui.window_size();
-                        let (old_p, old_sz) = s.config.window_rect();
-                        if (p[0] - old_p[0]).abs() > 0.5
-                            || (p[1] - old_p[1]).abs() > 0.5
-                            || (sz[0] - old_sz[0]).abs() > 0.5
-                            || (sz[1] - old_sz[1]).abs() > 0.5
-                        {
-                            s.config.set_window_rect(p, sz);
-                            save_config_detached(s);
-                        }
-                    }
-                    gw2_core::i18n::set_language(&s.config.ui_language);
-                    match &s.screen {
-                        Screen::Setup(step) => {
-                            setup::render_setup(ui, s, step.clone());
-                        }
-                        Screen::Main => {
-                            main_view::render_main(ui, s);
-                        }
-                    }
-                    // Last write wins: buttons/selectables/pills set Hand while hovered.
-                    // Nexus maps that to GW2's gloved click cursor. Pin arrow after all widgets,
-                    // but only while the mouse is over this overlay so the world cursor stays intact.
-                    if ui.is_window_hovered_with_flags(WindowHoveredFlags::ROOT_AND_CHILD_WINDOWS)
-                        || ui.is_any_item_hovered()
-                    {
-                        ui.set_mouse_cursor(Some(MouseCursor::Arrow));
-                    }
-                });
+                paint_main_window(ui);
             });
         if !opened {
             state::with_state(|s| {
@@ -379,9 +424,8 @@ pub fn render(ui: &Ui) {
     }
 }
 
-/// The mini radio window. Same shape as the main window below: this function
-/// takes STATE, and the window body gets `&mut AddonState` handed in, so
-/// nothing in `mini_radio` ever locks it.
+/// The mini radio window. The window body paints a snapshot of `AddonState`
+/// and does not hold `STATE`; nothing in `mini_radio` locks it.
 ///
 /// Visibility is decided under the lock every frame (toggle on, overlay
 /// closed, not unloading). The strip holds no state of its own beyond
@@ -485,15 +529,7 @@ fn render_mini_radio(ui: &Ui, frame: MiniFrame) {
             // Height follows width every frame; only the width is free.
             .size(size, Condition::Always)
             .build(ui, || {
-                state::with_state(|s| {
-                    gw2_core::i18n::set_language(&s.config.ui_language);
-                    mini_radio::render_window(ui, s, fade, leaving);
-                    if ui.is_window_hovered_with_flags(WindowHoveredFlags::ROOT_AND_CHILD_WINDOWS)
-                        || ui.is_any_item_hovered()
-                    {
-                        ui.set_mouse_cursor(Some(MouseCursor::Arrow));
-                    }
-                });
+                paint_mini_window(ui, fade, leaving);
             });
     }));
     if outcome.is_err() {

@@ -13,7 +13,7 @@ use crate::ui::{color_u32, fonts, icons, theme};
 use gw2_core::i18n::{t, tf};
 
 /// State for the talk-tab transcript.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ChatBarState {
     pub input: String,
     pub history: Vec<ChatMessage>,
@@ -32,7 +32,7 @@ pub struct ChatBarState {
     pub header_pose_at: Option<std::time::Instant>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub from_user: bool,
     pub text: String,

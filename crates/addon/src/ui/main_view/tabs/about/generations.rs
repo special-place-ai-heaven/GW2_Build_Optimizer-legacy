@@ -4,9 +4,10 @@
 //! build card reopens that build on its character, in the scenario it was
 //! made for, through the measuring path the Saves tab uses.
 //!
-//! The `render_*` and `draw_*` functions run on the render thread, which
-//! holds STATE for the whole frame: they never call `with_state` (the
-//! mutex is not re-entrant). Only the workers below do.
+//! The `render_*` and `draw_*` functions run on the render thread. The
+//! window body paints a snapshot and does not hold STATE across that layout
+//! (`ui/mod.rs`). They still never call `with_state` (the mutex is not
+//! re-entrant). Only the workers below do.
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -115,6 +116,7 @@ pub struct Filters {
 
 /// A record being reopened, with its own steps so the pane shows what it
 /// is doing while the build is measured.
+#[derive(Clone, PartialEq)]
 pub struct Opening {
     pub id: String,
     pub started: Instant,
@@ -134,7 +136,7 @@ impl Opening {
 }
 
 /// The Generations tab's state, on `MainState`.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct GenerationsTab {
     pub load: LoadState,
     /// A run appended a record; the next frame the tab is shown re-reads.
@@ -164,7 +166,7 @@ pub struct GenerationsTab {
 type RowsKey = (Filters, SortKey, bool, i64);
 
 /// Sorted, distinct values of the records, for the filter combos.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FilterOptions {
     names: Vec<String>,
     /// [`llm_key`]s; `""` is the runs that made no LLM request.
@@ -187,9 +189,68 @@ impl FilterOptions {
     }
 }
 
+fn records_same(a: &[Arc<GenerationRecord>], b: &[Arc<GenerationRecord>]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Arc::ptr_eq(x, y))
+}
+
+fn merge_load(live: &mut LoadState, base: &LoadState, paint: &LoadState) {
+    if paint == base {
+        return;
+    }
+    // The tab asked for a read; a worker that already finished it wins.
+    if matches!(paint, LoadState::Loading) && !matches!(live, LoadState::Loading) {
+        return;
+    }
+    if live == base || !matches!(paint, LoadState::Loading) {
+        *live = paint.clone();
+    }
+}
+
+fn merge_opening(live: &mut Option<Opening>, base: &Option<Opening>, paint: &Option<Opening>) {
+    if paint == base {
+        return;
+    }
+    if paint.is_none() {
+        *live = None;
+        return;
+    }
+    // Spawn published the open. `None` here is the worker finishing it.
+    if live.is_none() {
+        return;
+    }
+    let paint_id = paint.as_ref().map(|o| o.id.as_str());
+    let live_id = live.as_ref().map(|o| o.id.as_str());
+    if paint_id != live_id {
+        *live = paint.clone();
+    }
+}
+
 impl GenerationsTab {
     pub fn set_records(&mut self, records: Vec<Arc<GenerationRecord>>) {
         self.records = records;
+        self.options = None;
+        self.rows = None;
+    }
+
+    /// UI filters and page come from the frame snapshot. Records and the
+    /// in-flight open stay with `self` when a worker published them.
+    pub(crate) fn merge_paint(&mut self, base: &Self, paint: &Self) {
+        crate::state::take_ui(&mut self.page, &base.page, &paint.page);
+        crate::state::take_ui(&mut self.filters, &base.filters, &paint.filters);
+        crate::state::take_ui(&mut self.sort, &base.sort, &paint.sort);
+        crate::state::take_ui(&mut self.sort_asc, &base.sort_asc, &paint.sort_asc);
+        crate::state::take_ui(&mut self.expanded, &base.expanded, &paint.expanded);
+        crate::state::take_ui(&mut self.stale, &base.stale, &paint.stale);
+        if paint.load_seq != base.load_seq && self.load_seq == base.load_seq {
+            self.load_seq = paint.load_seq;
+        }
+        merge_load(&mut self.load, &base.load, &paint.load);
+        if records_same(&self.records, &base.records)
+            && !records_same(&paint.records, &base.records)
+        {
+            self.records = paint.records.clone();
+        }
+        merge_opening(&mut self.opening, &base.opening, &paint.opening);
         self.options = None;
         self.rows = None;
     }

@@ -53,7 +53,7 @@ impl GameMode {
 
 /// Granular lock constraints for the optimizer.
 /// Controls which specializations and trait choices are preserved vs. free to change.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BuildLocks {
     /// Spec locks by slot (0, 1, 2). None = optimizer decides, Some(id) = must use this spec.
     ///

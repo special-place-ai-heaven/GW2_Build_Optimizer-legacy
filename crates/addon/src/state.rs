@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -363,6 +364,10 @@ pub struct AddonState {
     pub news: crate::news::NewsState,
     /// Radio tab session state (search results, playback status, now-playing).
     pub radio: crate::radio::RadioUiState,
+    /// Bumped when a non-render thread publishes through [`with_state`] or a
+    /// keybind mutates state directly. A frame snapshot compares this to its
+    /// capture value so a worker publish during layout is not overwritten.
+    epoch: u64,
 }
 
 impl AddonState {
@@ -448,7 +453,7 @@ impl AddonState {
             });
         match spawned {
             Ok(handle) => {
-                self.workers.register(name, handle);
+                self.track_worker(name, handle);
                 true
             }
             Err(err) => {
@@ -501,6 +506,88 @@ impl AddonState {
 
         crate::ui::save_config_detached(self);
         Ok(())
+    }
+
+    /// UI state for one frame of layout. `GameDb` and other `Arc`s are
+    /// refcount bumps. The worker registry is empty: spawns during paint
+    /// register on the live state.
+    fn clone_for_paint(&self) -> Self {
+        Self {
+            window_visible: self.window_visible,
+            needs_character_reload: self.needs_character_reload,
+            config: self.config.clone(),
+            config_path: self.config_path.clone(),
+            addon_dir: self.addon_dir.clone(),
+            screen: self.screen.clone(),
+            setup: self.setup.clone(),
+            main: self.main.clone(),
+            cancel_token: self.cancel_token.clone(),
+            pick_cancel_token: self.pick_cancel_token.clone(),
+            workers: WorkerRegistry::default(),
+            force_window_pos: self.force_window_pos,
+            news: self.news.clone(),
+            radio: self.radio.clone(),
+            epoch: self.epoch,
+        }
+    }
+
+    /// Replace UI state with `painted`, keeping this state's worker handles
+    /// and publish epoch.
+    fn overwrite_from_snapshot(&mut self, mut painted: AddonState) {
+        let workers = std::mem::take(&mut self.workers);
+        let epoch = self.epoch;
+        painted.workers = workers;
+        painted.epoch = epoch;
+        *self = painted;
+    }
+
+    /// Fold a frame's UI edits onto `self` without clobbering a publish that
+    /// landed after the snapshot was taken.
+    fn merge_paint(&mut self, base: &AddonState, paint: &AddonState) {
+        take_ui(
+            &mut self.window_visible,
+            &base.window_visible,
+            &paint.window_visible,
+        );
+        take_ui(
+            &mut self.needs_character_reload,
+            &base.needs_character_reload,
+            &paint.needs_character_reload,
+        );
+        take_ui(&mut self.config, &base.config, &paint.config);
+        take_ui(&mut self.screen, &base.screen, &paint.screen);
+        take_ui(
+            &mut self.force_window_pos,
+            &base.force_window_pos,
+            &paint.force_window_pos,
+        );
+        self.setup.merge_paint(&base.setup, &paint.setup);
+        self.main.merge_paint(&base.main, &paint.main);
+        self.news.merge_paint(&base.news, &paint.news);
+        self.radio.merge_paint(&base.radio, &paint.radio);
+    }
+
+    /// Register `handle` on the live addon when this state is a paint snapshot,
+    /// and publish the snapshot first so the worker observes flags set above
+    /// the spawn. Callers that already hold `STATE` register here: the mutex
+    /// is not re-entrant.
+    fn track_worker(&self, name: &'static str, handle: JoinHandle<()>) {
+        if render_thread_active() && baseline_is_set() && !state_lock_held() {
+            let _ = with_state(|live| {
+                if live.epoch == self.epoch {
+                    live.overwrite_from_snapshot(self.clone_for_paint());
+                } else {
+                    with_baseline(|base| {
+                        if let Some(base) = base {
+                            live.merge_paint(base, self);
+                        }
+                    });
+                }
+                live.workers.register(name, handle);
+            });
+        } else {
+            self.workers.register(name, handle);
+        }
     }
 }
 
@@ -600,7 +687,7 @@ impl gw2_optimizer::llm::live::LiveSink for ChatLiveSink {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct MainState {
     pub characters: Vec<String>,
     pub characters_loading: bool,
@@ -887,6 +974,341 @@ impl MainState {
             .unwrap_or_else(|| "disk".into());
         self.benchmark_last_synced = Some(stamp);
     }
+
+    fn merge_paint(&mut self, base: &Self, paint: &Self) {
+        // ponytail: a new field stays live on conflict until it is named here.
+        // Epoch-match commit still moves the whole snapshot.
+        keep_worker(&mut self.characters, &base.characters, &paint.characters);
+        merge_busy(
+            &mut self.characters_loading,
+            base.characters_loading,
+            paint.characters_loading,
+        );
+        take_ui(
+            &mut self.characters_retry_at,
+            &base.characters_retry_at,
+            &paint.characters_retry_at,
+        );
+        take_ui(
+            &mut self.char_combo_open,
+            &base.char_combo_open,
+            &paint.char_combo_open,
+        );
+        take_ui(
+            &mut self.selected_character,
+            &base.selected_character,
+            &paint.selected_character,
+        );
+        take_ui(&mut self.game_mode, &base.game_mode, &paint.game_mode);
+        take_ui(&mut self.combat_tier, &base.combat_tier, &paint.combat_tier);
+        take_ui(
+            &mut self.selected_role,
+            &base.selected_role,
+            &paint.selected_role,
+        );
+        merge_build(
+            &mut self.current_build,
+            &base.current_build,
+            &paint.current_build,
+        );
+        // `current_stats` has no Eq. The epoch-match overwrite and the spawn
+        // publish carry UI clears; a worker publish keeps the live block.
+        merge_busy(
+            &mut self.build_loading,
+            base.build_loading,
+            paint.build_loading,
+        );
+        merge_message(&mut self.error, &base.error, &paint.error);
+        keep_len(
+            &mut self.build_tabs,
+            base.build_tabs.len(),
+            &paint.build_tabs,
+        );
+        keep_len(
+            &mut self.equipment_tabs,
+            base.equipment_tabs.len(),
+            &paint.equipment_tabs,
+        );
+        take_ui(
+            &mut self.selected_build_tab,
+            &base.selected_build_tab,
+            &paint.selected_build_tab,
+        );
+        take_ui(
+            &mut self.selected_equipment_tab,
+            &base.selected_equipment_tab,
+            &paint.selected_equipment_tab,
+        );
+        keep_worker(
+            &mut self.build_chat_code,
+            &base.build_chat_code,
+            &paint.build_chat_code,
+        );
+        take_ui(&mut self.active_tab, &base.active_tab, &paint.active_tab);
+        self.comparison
+            .merge_paint(&base.comparison, &paint.comparison);
+        merge_chat(&mut self.chat, &base.chat, &paint.chat);
+        merge_db(&mut self.game_db, &base.game_db, &paint.game_db);
+        merge_busy(
+            &mut self.game_db_loading,
+            base.game_db_loading,
+            paint.game_db_loading,
+        );
+        take_ui(
+            &mut self.game_db_retry_at,
+            &base.game_db_retry_at,
+            &paint.game_db_retry_at,
+        );
+        merge_busy(
+            &mut self.names_loading,
+            base.names_loading,
+            paint.names_loading,
+        );
+        keep_worker(&mut self.names_stage, &base.names_stage, &paint.names_stage);
+        keep_worker(&mut self.names_lang, &base.names_lang, &paint.names_lang);
+        keep_worker(
+            &mut self.game_refresh_stage,
+            &base.game_refresh_stage,
+            &paint.game_refresh_stage,
+        );
+        merge_busy(&mut self.optimizing, base.optimizing, paint.optimizing);
+        keep_worker(
+            &mut self.optimize_stage,
+            &base.optimize_stage,
+            &paint.optimize_stage,
+        );
+        keep_worker(&mut self.run_feed, &base.run_feed, &paint.run_feed);
+        take_ui(&mut self.weights, &base.weights, &paint.weights);
+        take_ui(
+            &mut self.radar_dragging,
+            &base.radar_dragging,
+            &paint.radar_dragging,
+        );
+        keep_len(
+            &mut self.saved_builds,
+            base.saved_builds.len(),
+            &paint.saved_builds,
+        );
+        take_ui(
+            &mut self.saved_builds_loaded,
+            &base.saved_builds_loaded,
+            &paint.saved_builds_loaded,
+        );
+        keep_worker(
+            &mut self.saved_builds_skipped,
+            &base.saved_builds_skipped,
+            &paint.saved_builds_skipped,
+        );
+        take_ui(
+            &mut self.save_name_input,
+            &base.save_name_input,
+            &paint.save_name_input,
+        );
+        take_ui(&mut self.save_status, &base.save_status, &paint.save_status);
+        take_ui(
+            &mut self.save_status_err,
+            &base.save_status_err,
+            &paint.save_status_err,
+        );
+        merge_busy(
+            &mut self.benchmark_running,
+            base.benchmark_running,
+            paint.benchmark_running,
+        );
+        keep_worker(
+            &mut self.benchmark_last_synced,
+            &base.benchmark_last_synced,
+            &paint.benchmark_last_synced,
+        );
+        // Counts and the live heartbeat are worker publishes. Leave `self`'s
+        // copies when this frame already diverged; nothing in the window body
+        // edits them except by starting a run, which spawn publishes itself.
+        take_ui(
+            &mut self.confirm_reset,
+            &base.confirm_reset,
+            &paint.confirm_reset,
+        );
+        take_ui(
+            &mut self.settings_key_input,
+            &base.settings_key_input,
+            &paint.settings_key_input,
+        );
+        keep_worker(
+            &mut self.settings_key_status,
+            &base.settings_key_status,
+            &paint.settings_key_status,
+        );
+        take_ui(
+            &mut self.settings_key_valid,
+            &base.settings_key_valid,
+            &paint.settings_key_valid,
+        );
+        keep_worker(
+            &mut self.settings_key_warning,
+            &base.settings_key_warning,
+            &paint.settings_key_warning,
+        );
+        merge_busy(
+            &mut self.settings_key_validating,
+            base.settings_key_validating,
+            paint.settings_key_validating,
+        );
+        take_ui(
+            &mut self.save_status_frames,
+            &base.save_status_frames,
+            &paint.save_status_frames,
+        );
+        take_ui(
+            &mut self.confirm_delete,
+            &base.confirm_delete,
+            &paint.confirm_delete,
+        );
+        take_ui(
+            &mut self.confirm_overwrite,
+            &base.confirm_overwrite,
+            &paint.confirm_overwrite,
+        );
+        take_ui(
+            &mut self.confirm_clear_cache,
+            &base.confirm_clear_cache,
+            &paint.confirm_clear_cache,
+        );
+        take_ui(&mut self.note_drafts, &base.note_drafts, &paint.note_drafts);
+        take_ui(&mut self.chat_epoch, &base.chat_epoch, &paint.chat_epoch);
+        take_ui(
+            &mut self.chat_wait_started,
+            &base.chat_wait_started,
+            &paint.chat_wait_started,
+        );
+        // `chat_live` is an Arc shared with the snapshot. Workers write through it.
+        take_ui(
+            &mut self.copy_feedback_frames,
+            &base.copy_feedback_frames,
+            &paint.copy_feedback_frames,
+        );
+        keep_len(
+            &mut self.available_models,
+            base.available_models.len(),
+            &paint.available_models,
+        );
+        keep_len(
+            &mut self.provider_picks,
+            base.provider_picks.len(),
+            &paint.provider_picks,
+        );
+        take_ui(
+            &mut self.provider_picks_key,
+            &base.provider_picks_key,
+            &paint.provider_picks_key,
+        );
+        merge_busy(
+            &mut self.picks_matching,
+            base.picks_matching,
+            paint.picks_matching,
+        );
+        keep_len(
+            &mut self.pick_notes,
+            base.pick_notes.len(),
+            &paint.pick_notes,
+        );
+        keep_worker(
+            &mut self.pick_unparsed,
+            &base.pick_unparsed,
+            &paint.pick_unparsed,
+        );
+        keep_worker(
+            &mut self.pick_no_match,
+            &base.pick_no_match,
+            &paint.pick_no_match,
+        );
+        take_ui(
+            &mut self.free_choya_rise,
+            &base.free_choya_rise,
+            &paint.free_choya_rise,
+        );
+        merge_busy(
+            &mut self.models_loading,
+            base.models_loading,
+            paint.models_loading,
+        );
+        keep_worker(
+            &mut self.models_error,
+            &base.models_error,
+            &paint.models_error,
+        );
+        keep_worker(&mut self.api_status, &base.api_status, &paint.api_status);
+        take_ui(
+            &mut self.api_status_frames,
+            &base.api_status_frames,
+            &paint.api_status_frames,
+        );
+        merge_busy(
+            &mut self.api_health_checking,
+            base.api_health_checking,
+            paint.api_health_checking,
+        );
+        keep_worker(
+            &mut self.live_build_number,
+            &base.live_build_number,
+            &paint.live_build_number,
+        );
+        take_ui(
+            &mut self.auto_refresh_done,
+            &base.auto_refresh_done,
+            &paint.auto_refresh_done,
+        );
+        keep_worker(
+            &mut self.manifest_staleness,
+            &base.manifest_staleness,
+            &paint.manifest_staleness,
+        );
+        take_ui(
+            &mut self.settings_usage_today,
+            &base.settings_usage_today,
+            &paint.settings_usage_today,
+        );
+        take_ui(
+            &mut self.settings_usage_frames,
+            &base.settings_usage_frames,
+            &paint.settings_usage_frames,
+        );
+        take_ui(
+            &mut self.settings_cache_size,
+            &base.settings_cache_size,
+            &paint.settings_cache_size,
+        );
+        take_ui(
+            &mut self.settings_graphics_size,
+            &base.settings_graphics_size,
+            &paint.settings_graphics_size,
+        );
+        take_ui(
+            &mut self.settings_cache_size_frames,
+            &base.settings_cache_size_frames,
+            &paint.settings_cache_size_frames,
+        );
+        take_ui(&mut self.tab_alert, &base.tab_alert, &paint.tab_alert);
+        self.feedback.merge_paint(&base.feedback, &paint.feedback);
+        self.generations
+            .merge_paint(&base.generations, &paint.generations);
+        merge_message(
+            &mut self.provider_issue,
+            &base.provider_issue,
+            &paint.provider_issue,
+        );
+        take_ui(
+            &mut self.settings_model_search,
+            &base.settings_model_search,
+            &paint.settings_model_search,
+        );
+        take_ui(&mut self.build_locks, &base.build_locks, &paint.build_locks);
+        take_ui(&mut self.locks_hover, &base.locks_hover, &paint.locks_hover);
+        take_ui(
+            &mut self.theme_edit_slot,
+            &base.theme_edit_slot,
+            &paint.theme_edit_slot,
+        );
+    }
 }
 
 /// GW2 API health status, checked periodically via `/v2/build`.
@@ -926,7 +1348,7 @@ pub enum SetupStep {
     DataDownload,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct SetupState {
     // GW2 key input
     pub gw2_key_input: String,
@@ -948,7 +1370,7 @@ pub enum KeyStatus {
     Invalid(String), // error message
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DownloadState {
     pub current_step: usize,
     pub total_steps: usize,
@@ -1117,6 +1539,7 @@ pub fn init(addon_dir: PathBuf) {
         force_window_pos: false,
         news: crate::news::NewsState::default(),
         radio: crate::radio::RadioUiState::default(),
+        epoch: 0,
     });
 }
 
@@ -1131,6 +1554,7 @@ pub fn toggle_window() {
         if state.window_visible {
             state.needs_character_reload = true;
         }
+        state.epoch = state.epoch.wrapping_add(1);
         (state.config.clone(), state.config_path.clone())
     };
     if let Err(e) = snapshot.0.save(&snapshot.1) {
@@ -1148,6 +1572,7 @@ pub fn toggle_mini_radio() {
         };
         let mini = &mut state.config.radio.mini_radio;
         mini.enabled = !mini.enabled;
+        state.epoch = state.epoch.wrapping_add(1);
         (state.config.clone(), state.config_path.clone())
     };
     if let Err(e) = snapshot.0.save(&snapshot.1) {
@@ -1164,6 +1589,7 @@ pub fn toggle_mini_radio_anchor() {
     };
     let on = !state.config.radio.mini_radio.anchored;
     crate::ui::mini_radio::set_anchored(state, on);
+    state.epoch = state.epoch.wrapping_add(1);
 }
 
 pub fn persist_window() {
@@ -1173,6 +1599,7 @@ pub fn persist_window() {
             return;
         };
         state.config.window_visible = state.window_visible;
+        state.epoch = state.epoch.wrapping_add(1);
         (state.config.clone(), state.config_path.clone())
     };
     if let Err(e) = snapshot.0.save(&snapshot.1) {
@@ -1232,12 +1659,366 @@ pub fn clear() {
     *guard = None;
 }
 
+// Frame snapshot
+//
+// ImGui layout must not hold `STATE`. The render thread clones the UI state
+// (`PaintCapture`), drops the guard, paints into the clone, then commits.
+// Workers call `with_state` during that gap. The publish epoch tells commit
+// whether to move the clone over the live state or fold only the UI edits.
+
+thread_local! {
+    static RENDER_THREAD: Cell<bool> = const { Cell::new(false) };
+    static PAINT_BASELINE: Cell<*const AddonState> = const { Cell::new(std::ptr::null()) };
+    static STATE_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+fn render_thread_active() -> bool {
+    RENDER_THREAD.with(|c| c.get())
+}
+
+fn state_lock_held() -> bool {
+    STATE_DEPTH.with(|c| c.get() > 0)
+}
+
+/// Counts `with_state` frames on this thread so `track_worker` does not
+/// re-lock `STATE` from inside one.
+struct StateHold;
+
+impl StateHold {
+    fn enter() -> Self {
+        STATE_DEPTH.with(|c| c.set(c.get().saturating_add(1)));
+        Self
+    }
+}
+
+impl Drop for StateHold {
+    fn drop(&mut self) {
+        STATE_DEPTH.with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
+fn baseline_is_set() -> bool {
+    PAINT_BASELINE.with(|c| !c.get().is_null())
+}
+
+fn with_baseline<R>(f: impl FnOnce(Option<&AddonState>) -> R) -> R {
+    PAINT_BASELINE.with(|c| {
+        let ptr = c.get();
+        // SAFETY: `BaselinePin` stores the address of `PaintFrame::baseline`
+        // on this thread and clears it on drop, before that field moves.
+        // Only this thread reads it, and only while the pin is live.
+        let baseline = if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &*ptr })
+        };
+        f(baseline)
+    })
+}
+
+/// Marks the calling thread as the overlay render thread for the guard's life.
+///
+/// `with_state` on this thread does not bump the publish epoch: those calls
+/// are the frame's own capture, spawn publish, and commit.
+pub(crate) struct RenderThreadGuard;
+
+impl RenderThreadGuard {
+    pub(crate) fn enter() -> Self {
+        RENDER_THREAD.with(|c| c.set(true));
+        Self
+    }
+}
+
+impl Drop for RenderThreadGuard {
+    fn drop(&mut self) {
+        RENDER_THREAD.with(|c| c.set(false));
+    }
+}
+
+/// Pins `PaintFrame::baseline` for [`AddonState::track_worker`] during layout.
+pub(crate) struct BaselinePin;
+
+impl BaselinePin {
+    fn install(baseline: &AddonState) -> Self {
+        PAINT_BASELINE.with(|c| c.set(baseline as *const AddonState));
+        Self
+    }
+}
+
+impl Drop for BaselinePin {
+    fn drop(&mut self) {
+        PAINT_BASELINE.with(|c| c.set(std::ptr::null()));
+    }
+}
+
+/// One clone of the live UI state, taken under `STATE`.
+pub(crate) struct PaintCapture {
+    epoch: u64,
+    baseline: AddonState,
+}
+
+impl PaintCapture {
+    pub(crate) fn take(live: &AddonState) -> Self {
+        Self {
+            epoch: live.epoch,
+            baseline: live.clone_for_paint(),
+        }
+    }
+
+    /// Second clone, outside the lock: the window body mutates `state`.
+    pub(crate) fn materialize(self) -> PaintFrame {
+        let state = self.baseline.clone_for_paint();
+        PaintFrame {
+            epoch: self.epoch,
+            baseline: self.baseline,
+            state,
+        }
+    }
+}
+
+/// Snapshot plus the working copy the window body paints into.
+pub(crate) struct PaintFrame {
+    epoch: u64,
+    baseline: AddonState,
+    pub(crate) state: AddonState,
+}
+
+impl PaintFrame {
+    pub(crate) fn pin_baseline(&self) -> BaselinePin {
+        BaselinePin::install(&self.baseline)
+    }
+
+    pub(crate) fn commit(self, live: &mut AddonState) {
+        let PaintFrame {
+            epoch,
+            baseline,
+            state,
+        } = self;
+        if live.epoch == epoch {
+            live.overwrite_from_snapshot(state);
+        } else {
+            live.merge_paint(&baseline, &state);
+        }
+    }
+}
+
+pub(crate) fn take_ui<T: Clone + PartialEq>(live: &mut T, base: &T, paint: &T) {
+    if paint != base {
+        *live = paint.clone();
+    }
+}
+
+pub(crate) fn keep_worker<T: Clone + PartialEq>(live: &mut T, base: &T, paint: &T) {
+    if live == base && paint != base {
+        *live = paint.clone();
+    }
+}
+
+/// UI set a flag, or a worker cleared it. A finished worker (`live` already
+/// false while `paint` is still busy) keeps that clear — spawn published the
+/// busy flag, so `live == base` is not "untouched". UI clearing (Stop) wins.
+pub(crate) fn merge_busy(live: &mut bool, base: bool, paint: bool) {
+    if paint == base {
+        return;
+    }
+    if !paint || *live {
+        *live = paint;
+    }
+}
+
+pub(crate) fn merge_busy_opt<T: Clone + PartialEq>(
+    live: &mut Option<T>,
+    base: &Option<T>,
+    paint: &Option<T>,
+) {
+    if paint == base {
+        return;
+    }
+    if paint.is_none() {
+        *live = None;
+        return;
+    }
+    if live.is_none() {
+        return;
+    }
+    *live = paint.clone();
+}
+
+pub(crate) fn merge_message(
+    live: &mut Option<String>,
+    base: &Option<String>,
+    paint: &Option<String>,
+) {
+    if paint == base {
+        return;
+    }
+    if live == base {
+        *live = paint.clone();
+        return;
+    }
+    if paint.is_none() && live.is_some() {
+        return;
+    }
+    *live = paint.clone();
+}
+
+/// Copy `paint` when it changed length and `live` has not.
+pub(crate) fn keep_len<T: Clone>(live: &mut Vec<T>, base_len: usize, paint: &[T]) {
+    if live.len() == base_len && paint.len() != base_len {
+        *live = paint.to_vec();
+    }
+}
+
+fn merge_db(
+    live: &mut Option<Arc<gw2_optimizer::gamedb::GameDb>>,
+    base: &Option<Arc<gw2_optimizer::gamedb::GameDb>>,
+    paint: &Option<Arc<gw2_optimizer::gamedb::GameDb>>,
+) {
+    let same = |a: &Option<Arc<gw2_optimizer::gamedb::GameDb>>,
+                b: &Option<Arc<gw2_optimizer::gamedb::GameDb>>| {
+        match (a, b) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    };
+    if same(live, base) && !same(paint, base) {
+        *live = paint.clone();
+    }
+}
+
+fn build_sig(build: &ResolvedBuild) -> (&str, &str) {
+    (&build.character_name, &build.profession)
+}
+
+fn merge_build(
+    live: &mut Option<ResolvedBuild>,
+    base: &Option<ResolvedBuild>,
+    paint: &Option<ResolvedBuild>,
+) {
+    let live_sig = live.as_ref().map(build_sig);
+    let base_sig = base.as_ref().map(build_sig);
+    if live_sig != base_sig {
+        return;
+    }
+    let paint_sig = paint.as_ref().map(build_sig);
+    if paint_sig != base_sig {
+        *live = paint.clone();
+    }
+}
+
+fn merge_chat(live: &mut ChatBarState, base: &ChatBarState, paint: &ChatBarState) {
+    take_ui(&mut live.input, &base.input, &paint.input);
+    take_ui(&mut live.copied_code, &base.copied_code, &paint.copied_code);
+    take_ui(
+        &mut live.copied_frames,
+        &base.copied_frames,
+        &paint.copied_frames,
+    );
+    take_ui(
+        &mut live.scroll_to_end,
+        &base.scroll_to_end,
+        &paint.scroll_to_end,
+    );
+    take_ui(&mut live.dirty, &base.dirty, &paint.dirty);
+    take_ui(&mut live.last_typed, &base.last_typed, &paint.last_typed);
+    take_ui(&mut live.header_pose, &base.header_pose, &paint.header_pose);
+    take_ui(
+        &mut live.header_pose_at,
+        &base.header_pose_at,
+        &paint.header_pose_at,
+    );
+    let names_same = |a: &Option<Arc<std::collections::HashSet<String>>>,
+                      b: &Option<Arc<std::collections::HashSet<String>>>| {
+        match (a, b) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    };
+    if names_same(&live.names, &base.names) && !names_same(&paint.names, &base.names) {
+        live.names = paint.names.clone();
+    }
+    merge_busy(&mut live.waiting, base.waiting, paint.waiting);
+    if paint.history != base.history {
+        if live.history == base.history || paint.history.starts_with(&live.history) {
+            live.history = paint.history.clone();
+        } else if live.history.starts_with(&base.history)
+            && paint.history.starts_with(&base.history)
+        {
+            for msg in paint.history.iter().skip(base.history.len()) {
+                if !live.history.contains(msg) {
+                    live.history.push(msg.clone());
+                }
+            }
+        }
+    }
+}
+
+impl SetupState {
+    fn merge_paint(&mut self, base: &Self, paint: &Self) {
+        take_ui(
+            &mut self.gw2_key_input,
+            &base.gw2_key_input,
+            &paint.gw2_key_input,
+        );
+        take_ui(
+            &mut self.llm_key_input,
+            &base.llm_key_input,
+            &paint.llm_key_input,
+        );
+        merge_key(
+            &mut self.gw2_key_status,
+            &base.gw2_key_status,
+            &paint.gw2_key_status,
+        );
+        merge_key(
+            &mut self.llm_key_status,
+            &base.llm_key_status,
+            &paint.llm_key_status,
+        );
+        keep_worker(
+            &mut self.gw2_key_scopes,
+            &base.gw2_key_scopes,
+            &paint.gw2_key_scopes,
+        );
+        keep_worker(
+            &mut self.download_progress,
+            &base.download_progress,
+            &paint.download_progress,
+        );
+    }
+}
+
+fn merge_key(live: &mut KeyStatus, base: &KeyStatus, paint: &KeyStatus) {
+    if paint == base {
+        return;
+    }
+    if live == base {
+        *live = paint.clone();
+        return;
+    }
+    if *paint == KeyStatus::Validating && *live != KeyStatus::Validating {
+        return;
+    }
+    *live = paint.clone();
+}
+
 /// Access state for reading/writing in UI code.
+///
+/// A call from any thread other than the render thread bumps [`AddonState`]'s
+/// publish epoch so an in-flight frame snapshot does not commit over that write.
 pub fn with_state<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&mut AddonState) -> R,
 {
-    lock_state().as_mut().map(f)
+    let _held = StateHold::enter();
+    let mut guard = lock_state();
+    let state = guard.as_mut()?;
+    if !render_thread_active() {
+        state.epoch = state.epoch.wrapping_add(1);
+    }
+    Some(f(state))
 }
 
 // Every test that touches the global STATE (`init`, `clear`, `with_state`), here or in
@@ -1599,6 +2380,144 @@ mod tests {
         init(dir);
         let result = with_state(|s| s.window_visible);
         assert_eq!(result, Some(true));
+        reset_state();
+    }
+
+    /// Layout holds a snapshot, not the mutex: a worker's `with_state` returns
+    /// while the snapshot is still alive, and commit keeps both the publish
+    /// and the UI edit.
+    #[test]
+    fn paint_snapshot_lets_a_worker_publish_during_layout() {
+        let _serial = state_test_guard();
+        let _render = RenderThreadGuard::enter();
+        reset_state();
+        let dir = std::env::temp_dir().join(format!(
+            "gw2_state_test_{}_paint_snapshot",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        init(dir);
+
+        let captured = with_state(|s| PaintCapture::take(s)).expect("state");
+        let mut frame = captured.materialize();
+        let _pin = frame.pin_baseline();
+        frame.state.main.active_tab = MainTab::Settings;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let wrote = with_state(|s| {
+                s.main.error = Some("from-worker".into());
+            });
+            tx.send(wrote).unwrap();
+        });
+        let wrote = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("worker blocked on STATE for the whole snapshot");
+        assert_eq!(wrote, Some(()));
+
+        drop(_pin);
+        with_state(|s| frame.commit(s)).expect("commit");
+
+        let (tab, err) = with_state(|s| (s.main.active_tab.clone(), s.main.error.clone())).unwrap();
+        assert_eq!(tab, MainTab::Settings);
+        assert_eq!(err.as_deref(), Some("from-worker"));
+        reset_state();
+    }
+
+    /// Spawn publishes the busy flag, a fast worker clears it, then commit
+    /// must keep the clear and the click's other edits.
+    #[test]
+    fn paint_commit_keeps_a_fast_worker_clear() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let _serial = state_test_guard();
+        let _render = RenderThreadGuard::enter();
+        reset_state();
+        let dir =
+            std::env::temp_dir().join(format!("gw2_state_test_{}_paint_clear", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        init(dir);
+
+        let captured = with_state(|s| PaintCapture::take(s)).expect("state");
+        let mut frame = captured.materialize();
+        let _pin = frame.pin_baseline();
+        frame.state.main.active_tab = MainTab::Settings;
+        frame.state.main.optimizing = true;
+
+        let go = std::sync::Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let w_go = go.clone();
+        assert!(frame.state.spawn_worker("fast-clear", move |_token| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !w_go.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            with_state(|s| s.main.optimizing = false);
+            tx.send(()).unwrap();
+        }));
+        assert_eq!(
+            with_state(|s| s.main.optimizing),
+            Some(true),
+            "spawn must publish the busy flag onto live state"
+        );
+        go.store(true, Ordering::SeqCst);
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("worker blocked");
+
+        drop(_pin);
+        with_state(|s| frame.commit(s)).expect("commit");
+        let (tab, optimizing) =
+            with_state(|s| (s.main.active_tab.clone(), s.main.optimizing)).unwrap();
+        assert_eq!(tab, MainTab::Settings);
+        assert!(
+            !optimizing,
+            "a finished worker must not be restarted by commit"
+        );
+        let _ = join_workers(Duration::from_secs(2));
+        reset_state();
+    }
+
+    /// No worker publish: the snapshot replaces live state, including a tab click.
+    #[test]
+    fn paint_commit_overwrites_when_nothing_published() {
+        let _serial = state_test_guard();
+        let _render = RenderThreadGuard::enter();
+        reset_state();
+        let dir =
+            std::env::temp_dir().join(format!("gw2_state_test_{}_paint_quiet", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        init(dir);
+
+        let captured = with_state(|s| PaintCapture::take(s)).expect("state");
+        let mut frame = captured.materialize();
+        frame.state.main.active_tab = MainTab::Radio;
+        with_state(|s| frame.commit(s)).expect("commit");
+        assert_eq!(
+            with_state(|s| s.main.active_tab.clone()),
+            Some(MainTab::Radio)
+        );
+        reset_state();
+    }
+
+    /// Chrome and tests spawn while `with_state` is held. A paint baseline on
+    /// the render thread must not make that re-enter the mutex.
+    #[test]
+    fn spawn_while_state_is_held_does_not_deadlock() {
+        let _serial = state_test_guard();
+        let _render = RenderThreadGuard::enter();
+        reset_state();
+        let dir =
+            std::env::temp_dir().join(format!("gw2_state_test_{}_paint_held", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        init(dir);
+
+        let captured = with_state(|s| PaintCapture::take(s)).expect("state");
+        let frame = captured.materialize();
+        let _pin = frame.pin_baseline();
+        let spawned = with_state(|s| s.spawn_worker("held-lock", |_token| {})).expect("state");
+        assert!(spawned);
+        drop(_pin);
+        let _ = join_workers(Duration::from_secs(2));
         reset_state();
     }
 
