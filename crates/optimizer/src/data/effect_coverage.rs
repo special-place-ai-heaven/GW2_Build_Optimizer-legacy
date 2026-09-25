@@ -1,4 +1,13 @@
-//! Gate 1's instrument: how much of the game has an effect record.
+//! Gate 1's instrument: how much of the game has an effect record the
+//! named engine can run.
+//!
+//! Verdicts are engine-true. **Executable** means a record
+//! `wvw_timeline::unexecutable_reason` leaves runnable at load: the engine
+//! has state for it and a consumer for its payload. Schema shape alone is
+//! not a run. A `ProcEffect` with no inner payload is a multi-impact field
+//! (impacts over an interval). The flow sim and the timeline have no
+//! consumer for that, so the record is **Abstaining** and the reason names
+//! the missing impacts/interval consumer.
 //!
 //! `docs/sprints/008-data-driven-simulator.md` Gate 1 is a table of counts,
 //! and a gate passes when the number is met. This module computes that table
@@ -9,10 +18,11 @@
 //! Every source of every class falls in exactly one bucket, so each row sums
 //! to its population:
 //!
-//! - **executable**: at least one record the timeline actually runs.
-//! - **abstaining**: it has a payload record, but the timeline has no state
-//!   for it and says so on the coverage line (a pet's on-crit, an
-//!   unemitted trigger, a positional or distance gate, an unmodelled pool).
+//! - **executable**: at least one record the named engine actually runs.
+//! - **abstaining**: it has a payload record, but the engine has no state
+//!   or no consumer for it and says so (a pet's on-crit, an unemitted
+//!   trigger, a positional or distance gate, an unmodelled pool, a
+//!   `ProcEffect` that needs an impacts/interval consumer).
 //!   Same verdict `wvw_timeline::unexecutable_reason` reaches at load, so
 //!   this column cannot drift from the simulator.
 //! - **coverage**: only coverage blocks — classified, never executed.
@@ -378,6 +388,7 @@ impl CoverageTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::normalized_effects::SourceType;
 
     #[test]
     fn profession_row_buckets_sum_to_totals() {
@@ -402,5 +413,60 @@ mod tests {
             row.major_executable + row.major_abstaining + row.major_coverage + row.major_none,
             row.major_total
         );
+    }
+
+    /// E28: Rushing Justice / Flowing Resolve / Crashing Courage flames
+    /// (`skill:62668/62603/62648:0`) are PvE `ProcEffect` records whose
+    /// value is coefficient × impacts. Neither engine plays that field, so
+    /// the tally must not call them Executable.
+    #[test]
+    fn rushing_justice_flames_abstain_without_impacts_interval_consumer() {
+        const FLAMES: [(&str, u32); 3] = [
+            ("skill:62668:0", 62668),
+            ("skill:62603:0", 62603),
+            ("skill:62648:0", 62648),
+        ];
+        let data = crate::data::normalized_effects::effects();
+        let details = verdicts_detailed();
+        let counts = verdicts();
+        let tag = format!("{:?}", SourceType::Skill);
+        for (effect_id, id) in FLAMES {
+            let effect = data
+                .effects_for_mode("PvE")
+                .iter()
+                .find(|e| e.effect_id == effect_id)
+                .unwrap_or_else(|| panic!("{effect_id} missing"));
+            let reason = crate::rotation::wvw_timeline::unexecutable_reason(effect)
+                .unwrap_or_else(|| panic!("{effect_id} claimed executable"));
+            assert!(
+                reason.contains("impacts") && reason.contains("interval"),
+                "{effect_id} reason {reason:?} does not name the missing consumer"
+            );
+            let (verdict, detail) = details
+                .get(&(tag.clone(), id))
+                .cloned()
+                .unwrap_or_else(|| panic!("{effect_id} has no verdict"));
+            assert_eq!(verdict, SourceCoverage::Abstaining, "{effect_id}");
+            assert_eq!(detail.as_deref(), Some(reason.as_str()));
+            let (executable, abstaining, coverage) = tally(&[id], SourceType::Skill, &counts);
+            assert_eq!(
+                (executable, abstaining, coverage),
+                (0, 1, 0),
+                "{effect_id} tallied Executable"
+            );
+        }
+        // A coefficient ProcEffect the timeline does run stays Executable.
+        let fire = data
+            .effects_for_mode("PvE")
+            .iter()
+            .find(|e| e.effect_id == "sigil:24548:0")
+            .expect("sigil of fire");
+        assert!(fire.inner_category.is_some());
+        assert_eq!(
+            crate::rotation::wvw_timeline::unexecutable_reason(fire),
+            None
+        );
+        let (executable, _, _) = tally(&[24548], SourceType::Sigil, &counts);
+        assert_eq!(executable, 1);
     }
 }

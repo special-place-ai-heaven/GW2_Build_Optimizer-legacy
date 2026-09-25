@@ -5013,7 +5013,13 @@ fn resource_kind_by_name(name: &str) -> Option<ResourceKind> {
 /// coverage line names the missing piece rather than going quiet.
 ///
 /// Doctrine rule 6: a gate the timeline has no state for abstains and says
-/// which mechanic it is waiting on. It never passes silently.
+/// which mechanic it is waiting on. A payload with no consumer does the
+/// same. It never passes silently.
+///
+/// Engine-true: a bare `ProcEffect` (no inner category) is a multi-impact
+/// field. The flow sim and this timeline have no impacts/interval consumer
+/// for it, so the record is not Executable. A coefficient proc that names
+/// its inner category still runs.
 pub(crate) fn unexecutable_reason(effect: &NormalizedEffect) -> Option<String> {
     if !matches!(effect.actor, Actor::Player | Actor::Any) {
         return Some(format!("event not yet emitted: {:?} actor", effect.actor));
@@ -5053,7 +5059,7 @@ pub(crate) fn unexecutable_reason(effect: &NormalizedEffect) -> Option<String> {
             return missing;
         }
     }
-    match &effect.scale {
+    if let Some(reason) = match &effect.scale {
         Some(Scale::PerDistance { .. }) => Some("scale not yet modelled: foe distance".to_string()),
         Some(Scale::PerSelfResourceStack { resource, .. })
             if resource_kind_by_name(resource).is_none() =>
@@ -5064,7 +5070,17 @@ pub(crate) fn unexecutable_reason(effect: &NormalizedEffect) -> Option<String> {
             Some(format!("boon not yet modelled: {boon}"))
         }
         _ => None,
+    } {
+        return Some(reason);
     }
+    // ponytail: bare ProcEffect is the Willbender Flames shape (coefficient
+    // × impacts over a duration). The schema has no impacts/interval field,
+    // and neither the flow sim nor this timeline consumes that payload.
+    // Upgrade path: schedule the impacts, then delete this abstain.
+    if effect.category == EffectCategory::ProcEffect && effect.inner_category.is_none() {
+        return Some("consumer not yet modelled: ProcEffect impacts/interval".to_string());
+    }
+    None
 }
 
 /// Two triggers are the same event. `OnBoonGained`'s optional boon narrows
