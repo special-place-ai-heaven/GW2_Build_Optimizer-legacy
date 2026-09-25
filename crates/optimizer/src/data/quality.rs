@@ -115,6 +115,25 @@ pub struct CoverageEntry {
     pub name: String,
     pub class: ReasonClass,
     pub detail: Option<String>,
+    /// Inventory identity with [`Self::source_id`]. Tag matches
+    /// `wvw_timeline::note_unmodeled_proc`: 0 trait, 1 skill, 2 rune,
+    /// 3 sigil, 4 relic. `0`/`0` on free-form timeline notes.
+    pub source_type: u8,
+    pub source_id: u32,
+}
+
+/// Dedup coverage inventory by `(source_type, source_id)`, not display name.
+/// Two NeedsMechanic/NoRecord rows that share a name (Zephyr's Speed 221 vs
+/// 968) both survive. Restores name order for the coverage line.
+pub fn dedup_inventory(entries: &mut Vec<CoverageEntry>) {
+    entries.sort_by_key(|e| (e.source_type, e.source_id));
+    entries.dedup_by_key(|e| (e.source_type, e.source_id));
+    entries.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then(a.source_type.cmp(&b.source_type))
+            .then(a.source_id.cmp(&b.source_id))
+    });
 }
 
 impl CoverageEntry {
@@ -143,6 +162,8 @@ impl CoverageEntry {
             name: name.to_string(),
             class,
             detail,
+            source_type: 0,
+            source_id: 0,
         }
     }
 }
@@ -250,6 +271,8 @@ pub fn heuristic_entry(name: &str, kind: &str) -> CoverageEntry {
         name: name.into(),
         class: ReasonClass::UnresolvedValue,
         detail: Some(format!("heuristic {kind}")),
+        source_type: 0,
+        source_id: 0,
     }
 }
 
@@ -290,6 +313,8 @@ mod coverage_tests {
             name: "Flesh of the Master".into(),
             class: ReasonClass::NeedsMechanic("minions".into()),
             detail: None,
+            source_type: 0,
+            source_id: 0,
         };
         assert_eq!(entry.rendered(), "Flesh of the Master (needs: minions)");
 
@@ -299,6 +324,30 @@ mod coverage_tests {
         let note = CoverageEntry::from_runtime_note("Scholar (unresolved value)");
         assert_eq!(note.class, ReasonClass::UnresolvedValue);
         assert_eq!(note.detail, None);
+    }
+
+    #[test]
+    fn inventory_dedup_keeps_same_name_different_ids() {
+        let row = |id, class| CoverageEntry {
+            name: "Zephyr's Speed".into(),
+            class,
+            detail: None,
+            source_type: 0,
+            source_id: id,
+        };
+        let mut coverage = vec![
+            row(221, ReasonClass::PassiveNoEffect),
+            row(968, ReasonClass::NeedsMechanic("pet swap".into())),
+            row(221, ReasonClass::PassiveNoEffect),
+        ];
+        dedup_inventory(&mut coverage);
+        assert_eq!(
+            coverage.iter().map(|e| e.source_id).collect::<Vec<_>>(),
+            vec![221, 968],
+            "name collision must not drop a distinct trait id"
+        );
+        assert_eq!(coverage[0].name, "Zephyr's Speed");
+        assert_eq!(coverage[1].name, "Zephyr's Speed");
     }
 
     #[test]
